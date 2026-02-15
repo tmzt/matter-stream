@@ -127,6 +127,7 @@ impl MatterStream {
             Some(Draw {
                 position,
                 color,
+                size: [0.0, 0.0, 0.0], // Default size for now
                 used_fast_path: true,
                 transform_bytes: Vec3Bank::register_bytes(),
             })
@@ -135,6 +136,7 @@ impl MatterStream {
             Some(Draw {
                 position,
                 color,
+                size: [0.0, 0.0, 0.0], // Default size for now
                 used_fast_path: false,
                 transform_bytes: Mat4Bank::register_bytes(),
             })

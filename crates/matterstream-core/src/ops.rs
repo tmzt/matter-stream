@@ -70,6 +70,7 @@ pub enum Op {
 pub struct Draw {
     pub position: [f32; 3],
     pub color: [f32; 4],
+    pub size: [f32; 3], // Add this line
     pub used_fast_path: bool,
     pub transform_bytes: usize,
 }

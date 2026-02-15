@@ -10,6 +10,7 @@ matterstream-core = { workspace = true }
 winit = { workspace = true }
 softbuffer = { workspace = true }
 anyhow = "1.0"
+matterstream-processor = { path = "../matterstream-processor" }
 
 [dev-dependencies]
 matterstream-compiler = { workspace = true }
