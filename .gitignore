@@ -1,0 +1,5 @@
+
+*.ttf
+
+/target
+Cargo.lock
