@@ -2,6 +2,7 @@ pub use matterstream_compiler::{Compiler, CompilerError};
 pub use matterstream_core::{CompiledOps, Op, OpsHeader, Primitive};
 pub use matterstream_loader::{Loader, LoaderError};
 pub use matterstream_renderer::{Renderer, RendererError};
+pub use matterstream_processor::{Processor, ProcessorError};
 
 pub use matterstream_parser::{Parsed, Parser};
 

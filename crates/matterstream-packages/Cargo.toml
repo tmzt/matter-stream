@@ -7,3 +7,4 @@ license = "Apache-2.0"
 
 [dependencies]
 matterstream-core = { workspace = true }
+dashmap = "5.5"

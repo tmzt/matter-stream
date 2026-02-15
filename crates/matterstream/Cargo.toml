@@ -9,4 +9,5 @@ matterstream-compiler = { path = "../matterstream-compiler" }
 matterstream-loader = { path = "../matterstream-loader" }
 matterstream-renderer = { path = "../matterstream-renderer" }
 matterstream-parser = { path = "../matterstream-parser" }
+matterstream-processor = { path = "../matterstream-processor" }
 

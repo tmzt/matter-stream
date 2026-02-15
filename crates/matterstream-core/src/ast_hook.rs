@@ -20,6 +20,7 @@ pub trait AnyMtsmHook: 'static + Send + Sync {
     fn as_any_hook_mut(&mut self) -> &mut dyn Any;
 }
 
+#[derive(Debug)]
 pub struct TsxElementContext {
     pub attributes: TsxAttributes,
     pub children: Option<TsxFragment>,
@@ -27,6 +28,10 @@ pub struct TsxElementContext {
 
 pub trait MtsmTsxFunctionalComponent: 'static + Send + Sync {
     fn render(&self, context: TsxElementContext) -> TsxFragment;
+}
+
+pub trait MtsmExecFunctionalComponent: 'static + Send + Sync {
+    fn execute(&self, context: TsxElementContext) -> TsxFragment; // For now, returns TsxFragment
 }
 
 /*
@@ -90,6 +95,7 @@ pub enum MtsmVariant {
     Tsx(TsxElement),
     TsxFragment(TsxFragment),
     TsxFunctionalComponent(Box<dyn MtsmTsxFunctionalComponent>),
+    TsxExecFunctionalComponent(Box<dyn MtsmExecFunctionalComponent>),
     Binding(Box<dyn AnyMtsmBinding>), // Updated to use AnyMtsmBinding
     SecureSourceSymbol(MtsmSecureSourceSymbol),
 }
