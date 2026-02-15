@@ -8,14 +8,14 @@ pub type MtsmTimestamp = u64;
 /// Binder entry tracks constants, late-bound identifiers, and special variants.
 #[derive(Debug, Clone)]
 pub enum BinderEntry {
-    Constant(TsTypeValue),
-    LateBound(Option<TsTypeDef>),
-    Special, // Placeholder: special entries are registered but payloads live in MtsmObject
+    Constant(TsTypeValue, Option<crate::ast_tsx::SourceLoc>),
+    LateBound(Option<TsTypeDef>, Option<crate::ast_tsx::SourceLoc>),
+    Special(Option<crate::ast_tsx::SourceLoc>), // Placeholder: special entries are registered but payloads live in MtsmObject
 }
 
 /// Thread-safe Binder for tracking top-level identifiers discovered while parsing.
 pub struct Binder {
-    pub map: DashMap<String, BinderEntry>,
+    pub map: DashMap<smol_str::SmolStr, BinderEntry>,
 }
 
 impl Binder {
@@ -24,32 +24,36 @@ impl Binder {
     }
 
     pub fn contains(&self, name: &str) -> bool {
-        self.map.contains_key(name)
+        let key = smol_str::SmolStr::new(name);
+        self.map.contains_key(&key)
     }
 
-    pub fn insert_constant(&self, name: &str, val: TsTypeValue) -> Result<(), String> {
-        if self.map.contains_key(name) {
+    pub fn insert_constant(&self, name: &str, val: TsTypeValue, loc: Option<crate::ast_tsx::SourceLoc>) -> Result<(), String> {
+        let key = smol_str::SmolStr::new(name);
+        if self.map.contains_key(&key) {
             Err(format!("Identifier '{}' already defined (shadowing not allowed)", name))
         } else {
-            self.map.insert(name.to_string(), BinderEntry::Constant(val));
+            self.map.insert(key, BinderEntry::Constant(val, loc));
             Ok(())
         }
     }
 
-    pub fn insert_latebound(&self, name: &str, ttype: Option<TsTypeDef>) -> Result<(), String> {
-        if self.map.contains_key(name) {
+    pub fn insert_latebound(&self, name: &str, ttype: Option<TsTypeDef>, loc: Option<crate::ast_tsx::SourceLoc>) -> Result<(), String> {
+        let key = smol_str::SmolStr::new(name);
+        if self.map.contains_key(&key) {
             Err(format!("Identifier '{}' already defined (shadowing not allowed)", name))
         } else {
-            self.map.insert(name.to_string(), BinderEntry::LateBound(ttype));
+            self.map.insert(key, BinderEntry::LateBound(ttype, loc));
             Ok(())
         }
     }
 
-    pub fn insert_special(&self, name: &str) -> Result<(), String> {
-        if self.map.contains_key(name) {
+    pub fn insert_special(&self, name: &str, loc: Option<crate::ast_tsx::SourceLoc>) -> Result<(), String> {
+        let key = smol_str::SmolStr::new(name);
+        if self.map.contains_key(&key) {
             Err(format!("Identifier '{}' already defined (shadowing not allowed)", name))
         } else {
-            self.map.insert(name.to_string(), BinderEntry::Special);
+            self.map.insert(key, BinderEntry::Special(loc));
             Ok(())
         }
     }

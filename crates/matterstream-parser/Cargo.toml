@@ -12,3 +12,4 @@ oxc_allocator = { workspace = true }
 oxc_ast = { workspace = true }
 oxc_span = { workspace = true }
 dashmap = "5.5"
+smol_str = { workspace = true }

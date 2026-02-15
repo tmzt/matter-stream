@@ -7,7 +7,7 @@
 //! MatterStream-specific types (`TsxFragment`, `MtsmObject`, etc.).
 
 use dashmap::DashMap;
-use matterstream_core::{MtsmObject, MtsmVariant, TsxFragment, MtsmTsxFunctionalComponent, TsxElementContext, TsxAttributes, TsxElement, TsxKind};
+use matterstream_core::{MtsmObject, MtsmVariant, TsxFragment, MtsmTsxFunctionalComponent, TsxElementContext, TsxAttributes, TsxElement, TsxKind, TsTypeValue};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{Program, JSXElement as OxcJSXElement, JSXFragment as OxcJSXFragment, JSXAttribute as OxcJSXAttribute, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXExpression, IdentifierReference, Statement, ModuleDeclaration, ImportDeclaration, ImportDeclarationSpecifier, JSXChild, Expression, ExpressionStatement, JSXElementName};
 use oxc_span::SourceType;
@@ -67,7 +67,7 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
                                     let local = imp_spec.local.name.to_string();
                                     self.imports.insert(local.clone(), import_decl.source.value.to_string());
                                     // Register as late-bound identifier in binder (imports are resolved later)
-                                    let _ = self.binder.insert_latebound(&local, Some(matterstream_core::TsTypeDef::Any));
+                                    let _ = self.binder.insert_latebound(&local, Some(matterstream_core::TsTypeDef::Any), None);
                                 }
                                 _ => {} // Ignore other specifier types
                             }
@@ -157,25 +157,28 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
     // However, keeping it for conceptual clarity if needed elsewhere.
     fn transform_jsx_attributes(&mut self, oxc_jsx_attributes: &[JSXAttributeItem<'a>]) -> Result<TsxAttributes, String> {
         use matterstream_core::TsTypeValue;
-        let attributes_map: DashMap<String, TsTypeValue> = DashMap::new();
+use smol_str::SmolStr;
+        let attributes_map: DashMap<SmolStr, TsTypeValue> = DashMap::new();
         for item in oxc_jsx_attributes {
             if let JSXAttributeItem::Attribute(attr) = item {
                 if let JSXAttributeName::Identifier(name) = &attr.name {
                     let key = name.name.to_string();
                     let value = if let Some(attr_value) = &attr.value {
                         match attr_value {
-                            JSXAttributeValue::StringLiteral(lit) => TsTypeValue::String(lit.value.to_string()),
+                            JSXAttributeValue::StringLiteral(lit) => TsTypeValue::String(lit.value.to_string().into()),
                             JSXAttributeValue::ExpressionContainer(expr_container) => {
                                 match &expr_container.expression {
-                                    JSXExpression::StringLiteral(lit) => TsTypeValue::String(lit.value.to_string()),
+                                    JSXExpression::StringLiteral(lit) => TsTypeValue::String(lit.value.to_string().into()),
                                     JSXExpression::NumericLiteral(lit) => TsTypeValue::Number(lit.value as f64),
                                     JSXExpression::Identifier(ident) => {
                                         let name = ident.name.to_string();
+                                        // Attempt to record source location if available (not all Identifier types expose spans uniformly)
+                                        let loc = None; // Placeholder until span extraction is implemented
                                         // Register identifier in binder as late-bound if not already present
                                         if !self.binder.contains(&name) {
-                                            let _ = self.binder.insert_latebound(&name, None);
+                                            let _ = self.binder.insert_latebound(&name, None, loc.clone());
                                         }
-                                        TsTypeValue::Identifier(name)
+                                        TsTypeValue::Identifier(SmolStr::new(name))
                                     }
                                     _ => {
                                         eprintln!("Warning: Unhandled JSX expression type for attribute '{}'", key);
@@ -191,7 +194,7 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
                     } else {
                         TsTypeValue::Boolean(true) // Boolean attribute (e.g., <Component isDisabled />)
                     };
-                    attributes_map.insert(key, value);
+                    attributes_map.insert(SmolStr::new(key), value);
                 }
             }
         }

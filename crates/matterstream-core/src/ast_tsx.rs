@@ -1,4 +1,7 @@
 use dashmap::DashMap;
+use smol_str::SmolStr;
+
+use crate::ast_hook::MtsmSourceSymbol;
 
 #[derive(Debug)]
 pub enum TsxKind {
@@ -14,15 +17,23 @@ pub enum TsTypeDef {
     String,
     Boolean,
     Any,
+    NestedObject(DashMap<SmolStr, TsTypeDef>),
+}
+
+/// Location in source for an identifier or token.
+#[derive(Debug, Clone)]
+pub struct SourceLoc {
+    pub offset: usize,
+    pub len: usize,
 }
 
 /// A typed value representation for TSX attributes produced by the parser.
 #[derive(Debug, Clone)]
 pub enum TsTypeValue {
     Number(f64),
-    String(String),
+    String(SmolStr),
     Boolean(bool),
-    Identifier(String),
+    Identifier(SmolStr),
     Null,
     Undefined,
 }
@@ -30,7 +41,7 @@ pub enum TsTypeValue {
 /// Helper that binds a typed value to a slot or parameter name.
 #[derive(Debug, Clone)]
 pub struct TypeValueBinder {
-    pub name: String,
+    pub name: SmolStr,
     pub ttype: TsTypeDef,
     pub value: TsTypeValue,
 }
@@ -45,7 +56,7 @@ pub struct TsxElement {
 
 #[derive(Debug)]
 pub struct TsxAttributes {
-    pub attributes: DashMap<String, TsTypeValue>,
+    pub attributes: DashMap<SmolStr, TsTypeValue>,
 }
 
 #[derive(Debug)]

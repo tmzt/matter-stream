@@ -13,6 +13,7 @@ softbuffer = "0.4.8"
 rusttype = "0.9.3"
 image = "0.25.9"
 smol = "2"
+smol_str = "0.1"
 async-io = "2.6.0"
 tempfile = "3"
 matterstream-core = { path = "crates/matterstream-core" }
