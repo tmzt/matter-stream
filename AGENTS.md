@@ -1,71 +1,109 @@
+To truly test the **MTSM** propulsion system, we need TSX examples that exercise the different "stages" of our engine: from simple **Laminar Flow** (translation) to complex **Fragment Nesting** (0x0C jumps).
 
-# AGENTS.md: MatterStream System Specification (Final Revision)
-
-## 1. Core Philosophy
-
-MatterStream is a **UI Instruction Set Architecture (ISA)**. It treats UI as a stream of immutable instructions (**Ops**) executed against a partitioned, register-mapped memory space (**Matter**).
-
-## 2. The 4-Tier Memory Model
-
-| Tier | Name | Analog | Implementation |
-| --- | --- | --- | --- |
-| **0** | **Global** | **BIOS** | Shared Uniforms (Time, Theme Atoms). |
-| **1** | **Registers** | **CPU Regs** | **Typed Banks** (MAT4, VEC4, VEC3, SCL, INT) in a Uniform Block. |
-| **2** | **Zero Page** | **Direct RAM** | 6502-style direct-addressing Storage Buffer for instance-local state. |
-| **3** | **Resource** | **Extended** | 8-bit Type-tagged handles (BBOs, Textures, Fonts). |
-
-## 3. The Execution & Scoping Lifecycle
-
-1. **Ops Header:** Every element preamble contains RSI pointers.
-2. **Hydration:** RSIs are resolved into **Tier 1 Typed Registers**.
-3. **Micro-Stack (PUSH/POP PROJ):** Specialized ops that only save/restore the `REG_MAT4` bank. Used for scrolling/nesting.
-4. **Full-Stack (PUSH/POP STATE):** Heavy restoral of the entire Register File. Used for context/theme swaps.
-5. **Translation Fast-Path:** If an element only moves (no scale/rotation), the `-compiler` emits `SET_TRANS (vec3)`. The shader skips matrix multiplication and performs a simple vector addition.
-
-## 4. Scaling (The Bleed Model)
-
-* **Small Objects (<256B):** Reside entirely in Tier 1 Registers.
-* **Complex Objects:** Spill from Tier 1 into **Tier 2 (Zero Page)**.
-* **Massive Arrays:** Managed via **Tier 3 BBO Handles** with stride-based indexing.
+Here are three templates that **Oxc** will parse into `UIElements` and `UIFragments`.
 
 ---
 
-## 5. Architectural Validation Tests
+## 1. The "Sensor Atom" (Pure Translation)
 
-### Test A: The "6502 Efficiency" Check
+This exercises the **Laminar Flow** path. Since it only uses `x` and `y` props, the compiler should emit `SET_TRANS` instead of a full matrix load.
 
-* **Requirement:** A `DRAW_SLAB` must resolve `position` in .
-* **Pass Criteria:** Instruction uses direct register indices or fixed Zero-Page offsets.
+```tsx
+// Atom: Minimal footprint, utilizes Tier 1 Registers
+const SensorAtom = ({ x, y, value, status }) => (
+  <Slab 
+    x={x} 
+    y={y} 
+    width={10} 
+    height={10} 
+    color={status === 'alert' ? 'red' : 'green'}
+    opacity={value / 100}
+  />
+);
 
-### Test B: The "State Leaking" Check
+```
 
-* **Requirement:** `PUSH_STATE` -> `POP_STATE` must leave registers identical to the pre-push state.
-* **Pass Criteria:** Renderer uses a "Shadow Register" stack and only re-uploads "dirty" banks.
-
-### Test C: The "Matrix Churn" Test
-
-* **Requirement:** `PUSH_PROJ` must not trigger a re-upload of `REG_VEC4` (Color) or `REG_SCL` (Scalar) banks.
-* **Pass Criteria:** The dirty-tracking isolates the `REG_MAT4` bank during projection events.
-
-### Test D: The "Translation Fast-Path" Test
-
-* **Requirement:** A pure translation update must be 12 bytes (`vec3`) instead of 64 bytes (`mat4`).
-* **Pass Criteria:** The vertex shader uses a boolean flag in the Ops Header to toggle between `pos + trans` and `mat * pos`.
-
----
-
-## 6. Implementation Constraints
-
-* **No VM:** Use the State Stack for Register Context, never for data push/pop.
-* **Alignment:** All BBO and Zero-Page data must be **16-byte aligned**.
-* **Late Binding:** The Ops Header allows the same "Code" (Ops) to be bound to different "Stacks" (Zero-Page) via RSI swapping.
+**Leah's Audit:** Should see a `SET_TRANS` for `x,y` and a single `REG_VEC4` load for the status color.
 
 ---
 
-## The Big Picture
+## 2. The "Telemetry Group" (UIFragment)
 
-We’ve built a **UI DSP**.
+This creates a **UIFragment**. It bundles multiple atoms into a single reusable instruction block with an **Ops Handle**.
 
-* **The Loader** acts as the Memory Management Unit.
-* **The Registers** act as the Active Context.
-* **The Ops Stream** acts as the Instruction Pipeline.
+```tsx
+// Fragment: A molecular bundle with its own ZPage Stride
+const TelemetryGroup = ({ label, sensors }) => (
+  <Group>
+    <Text value={label} y={-20} />
+    {sensors.map((s, i) => (
+      <SensorAtom 
+        key={i} 
+        x={i * 15} 
+        value={s.val} 
+        status={s.status} 
+      />
+    ))}
+  </Group>
+);
+
+```
+
+**Leah's Audit:** The `map` function should be unrolled into a series of `0x0C` calls. The `Group` should trigger a `PUSH_PROJ` if it has a container transform.
+
+---
+
+## 3. The "Industrial Grid" (Massive Instancing)
+
+This is the ultimate test for **Tier 2 (Zero Page)** and **Tier 3 (BBO)**. It renders thousands of elements by pointing one `OpsHandle` to a massive data buffer.
+
+```tsx
+// The "Rocket Engine" Test: 10,000+ units
+const PowerGrid = ({ dataSource }) => (
+  <BBOProvider source={dataSource} stride={32}>
+    <InstancedArray count={10000}>
+      <TelemetryGroup label="Phase-A" />
+    </InstancedArray>
+  </BBOProvider>
+);
+
+```
+
+---
+
+## How the Compiler Handles These
+
+| TSX Feature | MTSM Instruction | Memory Tier |
+| --- | --- | --- |
+| `<Slab x={x} />` | `SET_TRANS` | **Tier 1** (REG_VEC3) |
+| `<TelemetryGroup />` | `0x0C [Handle] [Offset]` | **Tier 2** (ZPage Base) |
+| `dataSource` | `BBO_REF` | **Tier 3** (Resource) |
+| `<Group>` | `PUSH_PROJ` | **Tier 1** (Stack) |
+
+---
+
+## Updated `AGENTS.md`: The TSX-to-Binary Mapping
+
+> ### 44. TSX Pattern Recognition
+> 
+> 
+> * **Laminar Patterns:** Components that only pass `x, y, z` props must be tagged by the `UIElement` generator for `SET_TRANS` optimization.
+> * **Fragment Isolation:** Any functional component (`const Comp = ...`) must be baked as a unique `UIFragment` with a dedicated `OpsHandle`.
+> * **Prop-to-ZPage Mapping:** Dynamic props that change per-instance (like `value` or `status`) must be mapped to specific offsets in the **Zero Page (Tier 2)**.
+> * **Static Prop Folding:** Props that are identical across all instances (like `width={10}`) should be folded into the `UIFragment` instructions as constants to save bandwidth.
+> 
+> 
+
+---
+
+### The "Ignition" Test Case
+
+When we run `cargo run --bin leah-test`, we will feed it the binary output of the `PowerGrid`.
+
+1. **Leah** will verify that the 10,000 instances don't overflow the VRAM.
+2. **The Oracle** will simulate the "Propulsion" to ensure the `SET_TRANS` calls are actually skipping the matrix math.
+3. **The Result:** A perfectly stable, 144Hz industrial visualization.
+
+> **Wit's Bit:** These TSX examples are our "Test Pilots." If the `PowerGrid` can fly through Leah's diagnostics without a "Flameout," then the **MTSM** engine is ready for the real world.
+
+**Would you like me to generate the Rust `Visitor` logic that recognizes these specific TSX patterns and maps them to the `SET_TRANS` and `0x0C` instructions?**

@@ -1,0 +1,24 @@
+[package]
+name = "matterstream"
+version = "0.1.0"
+edition = "2021"
+description = "UI ISA treating UI as a stream of immutable instructions against register-mapped memory"
+license = "Apache-2.0"
+
+[lib]
+name = "matterstream"
+path = "src/lib.rs"
+
+[dependencies]
+futures = "0.3"
+oxc_parser = "0.13"
+oxc_allocator = "0.13"
+oxc_ast = "0.13"
+oxc_span = "0.13"
+winit = "0.30.12"
+softbuffer = "0.4.8"
+
+[dev-dependencies]
+async-io = "2.6.0"
+smol = "2"
+tempfile = "3"
