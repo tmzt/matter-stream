@@ -1,0 +1,13 @@
+[package]
+name = "matterstream-core"
+version = "0.1.0"
+edition = "2021"
+description = "MatterStream ISA core types, executor, builder, and parser"
+license = "Apache-2.0"
+
+[dependencies]
+futures = { workspace = true }
+
+[dev-dependencies]
+smol = { workspace = true }
+tempfile = { workspace = true }

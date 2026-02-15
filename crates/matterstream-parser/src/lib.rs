@@ -1,17 +1,18 @@
 use oxc_allocator::Allocator;
-use oxc_parser::Parser;
+use oxc_parser::Parser as OxcParser;
 use oxc_span::SourceType;
 use oxc_ast::{visit::{self, Visit}, ast::*};
 
-use crate::{Op, Primitive};
+use matterstream_core::{Parsed}
 
-pub struct Compiler;
+struct Parser;
 
-impl Compiler {
-    pub fn compile(source_text: &str) -> Result<Vec<Op>, String> {
+impl Parser {
+    pub fn compile(source_text: &str, filename: Option<String>) -> Result<Parsed, String> {
         let allocator = Allocator::default();
-        let source_type = SourceType::from_path("example.tsx").unwrap();
-        let ret = Parser::new(&allocator, source_text, source_type).parse();
+        let filename = filename.unwrap_or_else(|| "unknown.tsx".to_string());
+        let source_type = SourceType::from_path(&filename).unwrap();
+        let ret = OxcParser::new(&allocator, source_text, source_type).parse();
 
         if !ret.errors.is_empty() {
             let error_messages: Vec<String> = ret.errors
@@ -24,7 +25,9 @@ impl Compiler {
         let mut visitor = MatterStreamVisitor::new();
         visitor.visit_program(&ret.program);
 
-        Ok(visitor.ops)
+        let header = OpsHeader::new(vec![], false);
+
+        Ok(CompiledOps::new(header, visitor.ops))
     }
 }
 
@@ -98,11 +101,10 @@ impl<'a> Visit<'a> for MatterStreamVisitor {
                         }
                     }
                 }
-                
+
                 if let Some(color) = color_val {
                     self.ops.push(Op::SetColor(color));
                 } else {
-                    // Default to white if no valid color is provided
                     self.ops.push(Op::SetColor([1.0, 1.0, 1.0, 1.0]));
                 }
                 self.ops.push(Op::SetTrans([x_val, y_val, 0.0]));

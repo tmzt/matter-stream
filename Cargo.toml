@@ -1,15 +1,8 @@
-[package]
-name = "matterstream"
-version = "0.1.0"
-edition = "2021"
-description = "UI ISA treating UI as a stream of immutable instructions against register-mapped memory"
-license = "Apache-2.0"
+[workspace]
+members = ["crates/*"]
+resolver = "2"
 
-[lib]
-name = "matterstream"
-path = "src/lib.rs"
-
-[dependencies]
+[workspace.dependencies]
 futures = "0.3"
 oxc_parser = "0.13"
 oxc_allocator = "0.13"
@@ -17,8 +10,14 @@ oxc_ast = "0.13"
 oxc_span = "0.13"
 winit = "0.30.12"
 softbuffer = "0.4.8"
-
-[dev-dependencies]
-async-io = "2.6.0"
+rusttype = "0.9.3"
+image = "0.25.9"
 smol = "2"
+async-io = "2.6.0"
 tempfile = "3"
+matterstream-core = { path = "crates/matterstream-core" }
+matterstream-compiler = { path = "crates/matterstream-compiler" }
+matterstream-renderer = { path = "crates/matterstream-renderer" }
+matterstream-loader = { path = "crates/matterstream-loader" }
+matterstream-packages = { path = "crates/matterstream-packages" }
+matterstream = { path = "crates/matterstream" }
