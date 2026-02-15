@@ -150,33 +150,33 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
     // as TsxAttributes is built directly within transform_jsx_element context.
     // However, keeping it for conceptual clarity if needed elsewhere.
     fn transform_jsx_attributes(&self, oxc_jsx_attributes: &[JSXAttributeItem<'a>]) -> Result<TsxAttributes, String> {
-        let mut attributes_map = DashMap::new();
+        use matterstream_core::TsTypeValue;
+        let attributes_map: DashMap<String, TsTypeValue> = DashMap::new();
         for item in oxc_jsx_attributes {
             if let JSXAttributeItem::Attribute(attr) = item {
                 if let JSXAttributeName::Identifier(name) = &attr.name {
                     let key = name.name.to_string();
                     let value = if let Some(attr_value) = &attr.value {
                         match attr_value {
-                            JSXAttributeValue::StringLiteral(lit) => lit.value.to_string(),
+                            JSXAttributeValue::StringLiteral(lit) => TsTypeValue::String(lit.value.to_string()),
                             JSXAttributeValue::ExpressionContainer(expr_container) => {
-                                if let JSXExpression::StringLiteral(lit) = &expr_container.expression {
-                                    lit.value.to_string()
-                                } else if let JSXExpression::NumericLiteral(lit) = &expr_container.expression {
-                                    lit.value.to_string()
-                                } else if let JSXExpression::Identifier(ident) = &expr_container.expression {
-                                    ident.name.to_string() // Placeholder for binding
-                                } else {
-                                    eprintln!("Warning: Unhandled JSX expression type for attribute '{}'", key);
-                                    "unhandled_expression".to_string()
+                                match &expr_container.expression {
+                                    JSXExpression::StringLiteral(lit) => TsTypeValue::String(lit.value.to_string()),
+                                    JSXExpression::NumericLiteral(lit) => TsTypeValue::Number(lit.value as f64),
+                                    JSXExpression::Identifier(ident) => TsTypeValue::Identifier(ident.name.to_string()), // Late-bound identifier (state or binding)
+                                    _ => {
+                                        eprintln!("Warning: Unhandled JSX expression type for attribute '{}'", key);
+                                        TsTypeValue::Undefined
+                                    }
                                 }
                             },
                             _ => {
                                 eprintln!("Warning: Unhandled JSX attribute value type for attribute '{}'", key);
-                                "unhandled_value_type".to_string()
+                                TsTypeValue::Undefined
                             }
                         }
                     } else {
-                        "true".to_string() // Boolean attribute (e.g., <Component isDisabled />)
+                        TsTypeValue::Boolean(true) // Boolean attribute (e.g., <Component isDisabled />)
                     };
                     attributes_map.insert(key, value);
                 }

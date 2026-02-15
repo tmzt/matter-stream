@@ -29,4 +29,4 @@ pub use tier1::{IntBank, Mat4Bank, ScalarBank, Vec3Bank, Vec4Bank};
 pub use tier2::ZeroPage;
 pub use tier3::{ResourceHandle, ResourceTable};
 pub use ast_hook::{MtsmObject, MtsmVariant, AnyMtsmBinding, AnyMtsmHook, MtsmBinding, MtsmHook, MtsmActionGetter, MtsmActionSetter, MtsmSlotGetter, MtsmSlotSetter, MtsmPrimitive, TsShaderTransmissible, MtsmTsxFunctionalComponent, TsxElementContext, MtsmExecFunctionalComponent};
-pub use ast_tsx::{TsxElement, TsxAttributes, TsxFragment, TsxKind};
+pub use ast_tsx::{TsxElement, TsxAttributes, TsxFragment, TsxKind, TsTypeValue, TsTypeDef, TypeValueBinder};
