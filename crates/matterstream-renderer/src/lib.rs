@@ -1,6 +1,10 @@
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use softbuffer::Buffer;
 use matterstream_core::Draw;
+use anyhow::{Result, anyhow};
+
+pub type RendererResult<T> = Result<T>;
+pub type RendererError = anyhow::Error;
 
 pub struct Renderer;
 
@@ -10,7 +14,7 @@ impl Renderer {
         draws: &[Draw],
         width: u32,
         height: u32,
-    ) {
+    ) -> RendererResult<()> {
         buffer.fill(0xFF181818);
 
         for draw in draws {
@@ -36,5 +40,6 @@ impl Renderer {
                 }
             }
         }
+        Ok(())
     }
 }

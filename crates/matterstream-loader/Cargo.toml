@@ -9,3 +9,4 @@ license = "Apache-2.0"
 matterstream-core = { workspace = true }
 rusttype = { workspace = true }
 image = { workspace = true }
+anyhow = "1.0"

@@ -1,4 +1,33 @@
+use dashmap::DashMap;
+use crate::ast_tsx::{TsxElement, TsxAttributes, TsxFragment};
+use std::any::Any;
+
 pub type MtsmSlotId = u64;
+pub type MtsmTimestamp = u64;
+
+/// Marker trait for types that can be transmitted from TypeScript source to shader.
+pub trait TsShaderTransmissible: 'static + Send + Sync {}
+
+/// A non-generic trait that all MtsmBinding<T> must implement.
+pub trait AnyMtsmBinding: 'static + Send + Sync {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+/// A non-generic trait that all MtsmHook<T> must implement.
+pub trait AnyMtsmHook: 'static + Send + Sync {
+    fn as_any_hook(&self) -> &dyn Any;
+    fn as_any_hook_mut(&mut self) -> &mut dyn Any;
+}
+
+pub struct TsxElementContext {
+    pub attributes: TsxAttributes,
+    pub children: Option<TsxFragment>,
+}
+
+pub trait MtsmTsxFunctionalComponent: 'static + Send + Sync {
+    fn render(&self, context: TsxElementContext) -> TsxFragment;
+}
 
 /*
  * For reference only
@@ -18,36 +47,36 @@ pub union MtsmSlotIdUnion {
 
 */
 
-pub struct MtsmBoundSlotValue<T> {
+pub struct MtsmBoundSlotValue<T: TsShaderTransmissible> {
     pub slot_id: MtsmSlotId,
     pub value: T,
 }
 
-pub struct MtsmBoundSlotValueUpdate<T> {
+pub struct MtsmBoundSlotValueUpdate<T: TsShaderTransmissible> {
     pub slot_id: MtsmSlotId,
     pub update_ts: MtsmTimestamp,
     pub new_value: T,
 }
 
-pub trait MtsmActionGetter {
-    fn get(&self) -> MtsmVariant;
+pub trait MtsmActionGetter<T: TsShaderTransmissible> {
+    fn get(&self) -> T;
 }
 
-pub trait MtsmSlotGetter {
+pub trait MtsmSlotGetter<T: TsShaderTransmissible> {
     fn getter(&self) -> MtsmBoundSlotValue<T>;
 }
 
-pub trait MtsmSlotSetter {
+pub trait MtsmSlotSetter<T: TsShaderTransmissible> {
     fn setter(&self) -> MtsmBoundSlotValueUpdate<T>;
 }
 
-pub trait MtsmActionSetter {
-    fn set(&self, value: MtsmVariant);
+pub trait MtsmActionSetter<T: TsShaderTransmissible> {
+    fn set(&self, value: T);
 }
 
-pub trait MtsmHook {
-    fn getter(&self) -> Option<MtsmActionGetter>;
-    fn setter(&self) -> Option<MtsmActionSetter>;
+pub trait MtsmHook<T: TsShaderTransmissible>: AnyMtsmHook {
+    fn getter(&self) -> Option<Box<dyn MtsmActionGetter<T>>>;
+    fn setter(&self) -> Option<Box<dyn MtsmActionSetter<T>>>;
 }
 
 pub struct MtsmObject {
@@ -60,13 +89,33 @@ pub enum MtsmVariant {
     Array(Vec<MtsmVariant>),
     Tsx(TsxElement),
     TsxFragment(TsxFragment),
-    Binding(MtsmBinding),
+    TsxFunctionalComponent(Box<dyn MtsmTsxFunctionalComponent>),
+    Binding(Box<dyn AnyMtsmBinding>), // Updated to use AnyMtsmBinding
     SecureSourceSymbol(MtsmSecureSourceSymbol),
 }
 
-pub enum MtsmBinding {
-    Hook(MtsmHook<any>),
+pub enum MtsmPrimitive {
+    Number(f64),
+    String(String),
+    Boolean(bool),
+    Null,
+    Undefined,
 }
+
+pub enum MtsmBinding<T: TsShaderTransmissible> {
+    Hook(Box<dyn MtsmHook<T>>),
+}
+
+impl<T: TsShaderTransmissible> AnyMtsmBinding for MtsmBinding<T> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+
 
 pub type MtsmSourceSymbol = String;
 
@@ -84,15 +133,16 @@ struct MtsmUseStateBindingPair {
 
 struct MtsmUseStateActionBindingPair;
 
-impl MtsmHook for MtsmUseStateActionBindingPair {
-    fn getter(&self) -> Option<MtsmActionGetter> {
-        None
-    }
+// Commented out as MtsmHook is now generic and requires a concrete T
+// impl MtsmHook for MtsmUseStateActionBindingPair {
+//     fn getter(&self) -> Option<MtsmActionGetter> {
+//         None
+//     }
 
-    fn setter(&self) -> Option<MtsmActionSetter> {
-        None
-    }
-}
+//     fn setter(&self) -> Option<MtsmActionSetter> {
+//         None
+//     }
+// }
 
 struct MtsmUseStateHook {
     pub id: u32,

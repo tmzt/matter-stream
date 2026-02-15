@@ -1,3 +1,11 @@
+use dashmap::DashMap;
+
+pub enum TsxKind {
+    Div,
+    Span,
+    Custom(String),
+}
+
 pub struct TsxElement {
     pub id: u32,
     pub kind: TsxKind,

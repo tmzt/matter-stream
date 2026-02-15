@@ -2,13 +2,17 @@ use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use oxc_ast::{visit::{self, Visit}, ast::*};
+use anyhow::{Result, anyhow}; // Add this
 
 use matterstream_core::{Op, Primitive, OpsHeader, CompiledOps};
+
+pub type CompilerResult<T> = Result<T>;
+pub type CompilerError = anyhow::Error;
 
 pub struct Compiler;
 
 impl Compiler {
-    pub fn compile(source_text: &str) -> Result<CompiledOps, String> {
+    pub fn compile(source_text: &str) -> CompilerResult<CompiledOps> {
         let allocator = Allocator::default();
         let source_type = SourceType::from_path("example.tsx").unwrap();
         let ret = Parser::new(&allocator, source_text, source_type).parse();
@@ -18,7 +22,7 @@ impl Compiler {
                 .into_iter()
                 .map(|e| format!("{:?}", e))
                 .collect();
-            return Err(error_messages.join("\n"));
+            return Err(anyhow!(error_messages.join("\n")));
         }
 
         let mut visitor = MatterStreamVisitor::new();

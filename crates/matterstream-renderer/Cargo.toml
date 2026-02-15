@@ -9,6 +9,7 @@ license = "Apache-2.0"
 matterstream-core = { workspace = true }
 winit = { workspace = true }
 softbuffer = { workspace = true }
+anyhow = "1.0"
 
 [dev-dependencies]
 matterstream-compiler = { workspace = true }
