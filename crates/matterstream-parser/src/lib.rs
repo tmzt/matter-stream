@@ -34,6 +34,8 @@ pub struct MatterStreamToParsedVisitor<'a> {
     mtsm_data: MtsmObject,
     /// Store import declarations for later resolution.
     imports: HashMap<String, String>, // Local name -> Module specifier
+    /// Binder to track identifier bindings discovered while parsing.
+    binder: matterstream_core::Binder,
 }
 
 impl<'a> MatterStreamToParsedVisitor<'a> {
@@ -44,6 +46,7 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
             next_id: 0,
             mtsm_data: MtsmObject { data: DashMap::new() },
             imports: HashMap::new(),
+            binder: matterstream_core::Binder::new(),
         }
     }
 
@@ -61,7 +64,10 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
                             match specifier {
                                 ImportDeclarationSpecifier::ImportSpecifier(imp_spec) => {
                                     // Example: `import { Slab } from '@mtsm/ui/core';`
-                                    self.imports.insert(imp_spec.local.name.to_string(), import_decl.source.value.to_string());
+                                    let local = imp_spec.local.name.to_string();
+                                    self.imports.insert(local.clone(), import_decl.source.value.to_string());
+                                    // Register as late-bound identifier in binder (imports are resolved later)
+                                    let _ = self.binder.insert_latebound(&local, Some(matterstream_core::TsTypeDef::Any));
                                 }
                                 _ => {} // Ignore other specifier types
                             }
@@ -149,7 +155,7 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
     // This method is not directly used for TsxAttributes in MatterStreamToParsedVisitor,
     // as TsxAttributes is built directly within transform_jsx_element context.
     // However, keeping it for conceptual clarity if needed elsewhere.
-    fn transform_jsx_attributes(&self, oxc_jsx_attributes: &[JSXAttributeItem<'a>]) -> Result<TsxAttributes, String> {
+    fn transform_jsx_attributes(&mut self, oxc_jsx_attributes: &[JSXAttributeItem<'a>]) -> Result<TsxAttributes, String> {
         use matterstream_core::TsTypeValue;
         let attributes_map: DashMap<String, TsTypeValue> = DashMap::new();
         for item in oxc_jsx_attributes {
@@ -163,7 +169,14 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
                                 match &expr_container.expression {
                                     JSXExpression::StringLiteral(lit) => TsTypeValue::String(lit.value.to_string()),
                                     JSXExpression::NumericLiteral(lit) => TsTypeValue::Number(lit.value as f64),
-                                    JSXExpression::Identifier(ident) => TsTypeValue::Identifier(ident.name.to_string()), // Late-bound identifier (state or binding)
+                                    JSXExpression::Identifier(ident) => {
+                                        let name = ident.name.to_string();
+                                        // Register identifier in binder as late-bound if not already present
+                                        if !self.binder.contains(&name) {
+                                            let _ = self.binder.insert_latebound(&name, None);
+                                        }
+                                        TsTypeValue::Identifier(name)
+                                    }
                                     _ => {
                                         eprintln!("Warning: Unhandled JSX expression type for attribute '{}'", key);
                                         TsTypeValue::Undefined

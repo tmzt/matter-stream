@@ -1,9 +1,60 @@
+use crate::ast_tsx::{TsxAttributes, TsxElement, TsxFragment, TsTypeValue, TsTypeDef};
 use dashmap::DashMap;
-use crate::ast_tsx::{TsxElement, TsxAttributes, TsxFragment};
 use std::any::Any;
 
 pub type MtsmSlotId = u64;
 pub type MtsmTimestamp = u64;
+
+/// Binder entry tracks constants, late-bound identifiers, and special variants.
+#[derive(Debug, Clone)]
+pub enum BinderEntry {
+    Constant(TsTypeValue),
+    LateBound(Option<TsTypeDef>),
+    Special, // Placeholder: special entries are registered but payloads live in MtsmObject
+}
+
+/// Thread-safe Binder for tracking top-level identifiers discovered while parsing.
+pub struct Binder {
+    pub map: DashMap<String, BinderEntry>,
+}
+
+impl Binder {
+    pub fn new() -> Self {
+        Binder { map: DashMap::new() }
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.map.contains_key(name)
+    }
+
+    pub fn insert_constant(&self, name: &str, val: TsTypeValue) -> Result<(), String> {
+        if self.map.contains_key(name) {
+            Err(format!("Identifier '{}' already defined (shadowing not allowed)", name))
+        } else {
+            self.map.insert(name.to_string(), BinderEntry::Constant(val));
+            Ok(())
+        }
+    }
+
+    pub fn insert_latebound(&self, name: &str, ttype: Option<TsTypeDef>) -> Result<(), String> {
+        if self.map.contains_key(name) {
+            Err(format!("Identifier '{}' already defined (shadowing not allowed)", name))
+        } else {
+            self.map.insert(name.to_string(), BinderEntry::LateBound(ttype));
+            Ok(())
+        }
+    }
+
+    pub fn insert_special(&self, name: &str) -> Result<(), String> {
+        if self.map.contains_key(name) {
+            Err(format!("Identifier '{}' already defined (shadowing not allowed)", name))
+        } else {
+            self.map.insert(name.to_string(), BinderEntry::Special);
+            Ok(())
+        }
+    }
+}
+
 
 /// Marker trait for types that can be transmitted from TypeScript source to shader.
 pub trait TsShaderTransmissible: 'static + Send + Sync {}
@@ -122,20 +173,22 @@ impl<T: TsShaderTransmissible> AnyMtsmBinding for MtsmBinding<T> {
     }
 }
 
+// Identifier in TS source code
+pub type MtsmSourceIdentifier = String;
 
-
+// Equivalet to ECMA Symbol object
 pub type MtsmSourceSymbol = String;
 
-// Represents a Symbol() such as a capability
+// Represents a Capability()
 pub struct MtsmSecureSourceSymbol {
-    pub sym: MtsmSourceSymbol,
+    pub sym: MtsmSourceIdentifier,
     pub package_id: u64,
     pub key: u64,
 }
 
 struct MtsmUseStateBindingPair {
-    pub getter: MtsmSourceSymbol,
-    pub setter: MtsmSourceSymbol,
+    pub getter: MtsmSourceIdentifier,
+    pub setter: MtsmSourceIdentifier,
 }
 
 struct MtsmUseStateActionBindingPair;
