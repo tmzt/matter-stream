@@ -84,6 +84,7 @@ pub trait MtsmHook<T: TsShaderTransmissible>: AnyMtsmHook {
     fn setter(&self) -> Option<Box<dyn MtsmActionSetter<T>>>;
 }
 
+#[derive(Default)]
 pub struct MtsmObject {
     pub data: DashMap<String, MtsmVariant>,
 }

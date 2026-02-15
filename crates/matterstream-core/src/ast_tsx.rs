@@ -11,6 +11,7 @@ pub enum TsxKind {
 pub struct TsxElement {
     pub id: u32,
     pub kind: TsxKind,
+    pub attributes: TsxAttributes,
     pub children: Option<TsxFragment>,
 }
 
