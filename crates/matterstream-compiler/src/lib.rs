@@ -91,14 +91,26 @@ impl<'a> Visit<'a> for MatterStreamVisitor {
                                     }
                                 }
                             } else if name.name == "color" {
-                                if let Some(JSXAttributeValue::StringLiteral(str_literal)) = &attr.value {
-                                    if let Some(parsed_color) = Self::parse_rgba_hex(&str_literal.value) {
-                                        color_val = Some(parsed_color);
+                                let color_string_option = if let Some(JSXAttributeValue::StringLiteral(str_literal)) = &attr.value {
+                                    Some(&str_literal.value)
+                                } else if let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value {
+                                    if let JSXExpression::StringLiteral(str_literal) = &container.expression {
+                                        Some(&str_literal.value)
                                     } else {
-                                        eprintln!("Warning: 'color' attribute has invalid hex format '{}'. Defaulting to white.", str_literal.value);
+                                        None
                                     }
                                 } else {
-                                    eprintln!("Warning: 'color' attribute is not a string literal. Defaulting to white.");
+                                    None
+                                };
+
+                                if let Some(color_str) = color_string_option {
+                                    if let Some(parsed_color) = Self::parse_rgba_hex(color_str) {
+                                        color_val = Some(parsed_color);
+                                    } else {
+                                        eprintln!("Warning: 'color' attribute has invalid hex format '{}'. Defaulting to white.", color_str);
+                                    }
+                                } else {
+                                    eprintln!("Warning: 'color' attribute is not a valid string literal or expression container. Defaulting to white.");
                                 }
                             }
                         }
