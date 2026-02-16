@@ -5,7 +5,7 @@ use smol_str::SmolStr;
 
 #[test]
 fn test_parser_returns_dummy_parsed_object() {
-    let input = r#"<div />;"#;
+    let input = r##"<div />;"##;
     let parsed = Parser::parse(input).expect("Parser should not fail for dummy implementation");
 
     // Verify the root_fragment contains at least one element
@@ -34,7 +34,7 @@ fn test_parser_returns_dummy_parsed_object() {
 
 #[test]
 fn test_parser_parses_attributes_and_values() {
-    let input = r#"<div title="hello" count={42} visible />;"#;
+    let input = r##"<div title="hello" count={42} visible />;"##;
     let parsed = Parser::parse(input).expect("Parser should parse attributes");
     let first = &parsed.root_fragment.elements[0];
 
@@ -65,7 +65,7 @@ fn test_parser_parses_attributes_and_values() {
 
 #[test]
 fn test_parser_parses_identifier_attribute_and_children() {
-    let input = r#"<div ref={myRef}><span /></div>;"#;
+    let input = r##"<div ref={myRef}><span /></div>;"##;
     let parsed = Parser::parse(input).expect("Parser should parse identifier attribute and children");
     let first = &parsed.root_fragment.elements[0];
 
@@ -88,8 +88,8 @@ fn test_parser_parses_identifier_attribute_and_children() {
 
 #[test]
 fn test_parser_handles_imports_and_custom_components() {
-    let input = r#"import { Slab } from '@mtsm/ui/core';
-<Slab />;"#;
+    let input = r##"import { Slab } from '@mtsm/ui/core';
+<Slab />;"##;
     let parsed = Parser::parse(input).expect("Parser should parse import and custom component");
     let first = &parsed.root_fragment.elements[0];
 
