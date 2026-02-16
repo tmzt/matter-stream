@@ -7,7 +7,8 @@
 //! MatterStream-specific types (`TsxFragment`, `MtsmObject`, etc.).
 
 use dashmap::DashMap;
-use matterstream_core::{MtsmObject, MtsmVariant, TsxFragment, MtsmTsxFunctionalComponent, TsxElementContext, TsxAttributes, TsxElement, TsxKind, TsTypeValue};
+use matterstream_core::{MtsmObject, MtsmVariant, TsxFragment, MtsmTsxFunctionalComponent, TsxElementContext, TsxAttributes, TsxElement, TsxKind, TsTypeValue, TsTypeDef, SourceLoc};
+use smol_str::SmolStr;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{Program, JSXElement as OxcJSXElement, JSXFragment as OxcJSXFragment, JSXAttribute as OxcJSXAttribute, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXExpression, IdentifierReference, Statement, ModuleDeclaration, ImportDeclaration, ImportDeclarationSpecifier, JSXChild, Expression, ExpressionStatement, JSXElementName};
 use oxc_span::SourceType;
@@ -25,6 +26,8 @@ pub struct RawParsed<'a> {
 }
 
 /// A visitor that transforms an Oxc AST into MatterStream's `Tsx*` and `Mtsm*` types.
+use std::sync::Arc;
+
 pub struct MatterStreamToParsedVisitor<'a> {
     /// The allocator for Oxc AST nodes.
     allocator: &'a Allocator,
@@ -35,18 +38,18 @@ pub struct MatterStreamToParsedVisitor<'a> {
     /// Store import declarations for later resolution.
     imports: HashMap<String, String>, // Local name -> Module specifier
     /// Binder to track identifier bindings discovered while parsing.
-    binder: matterstream_core::Binder,
+    binder: Arc<matterstream_core::Binder>,
 }
 
 impl<'a> MatterStreamToParsedVisitor<'a> {
     /// Creates a new `MatterStreamToParsedVisitor`.
-    pub fn new(allocator: &'a Allocator) -> Self {
+    pub fn new(allocator: &'a Allocator, binder: Arc<matterstream_core::Binder>) -> Self {
         Self {
             allocator,
             next_id: 0,
             mtsm_data: MtsmObject { data: DashMap::new() },
             imports: HashMap::new(),
-            binder: matterstream_core::Binder::new(),
+            binder,
         }
     }
 
@@ -65,9 +68,18 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
                                 ImportDeclarationSpecifier::ImportSpecifier(imp_spec) => {
                                     // Example: `import { Slab } from '@mtsm/ui/core';`
                                     let local = imp_spec.local.name.to_string();
+                                    // try extract span from imp_spec.local if available
+                                    let loc = {
+                                        let span = imp_spec.local.span;
+                                        if span.start != span.end {
+                                            Some(matterstream_core::SourceLoc { offset: span.start as usize, len: (span.end - span.start) as usize })
+                                        } else {
+                                            None
+                                        }
+                                    };
                                     self.imports.insert(local.clone(), import_decl.source.value.to_string());
                                     // Register as late-bound identifier in binder (imports are resolved later)
-                                    let _ = self.binder.insert_latebound(&local, Some(matterstream_core::TsTypeDef::Any), None);
+                                    let _ = self.binder.insert_latebound(&local, Some(matterstream_core::TsTypeDef::Any), loc);
                                 }
                                 _ => {} // Ignore other specifier types
                             }
@@ -99,21 +111,28 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
 
         let kind = if let JSXElementName::Identifier(ident) = &oxc_jsx_element.opening_element.name { // Fixed: JSXElementName
             // Check if it's an imported component
-            if let Some(module_specifier) = self.imports.get(&ident.name.to_string()) {
-                // Here, we would store information about the imported component for later processing.
-                // For now, let's treat it as a custom component for the TsxKind
-                dbg!("Found imported component: {} from {}", &ident.name, module_specifier);
-                TsxKind::Custom(ident.name.to_string())
+            let name = ident.name.to_string();
+            // Only allow custom components that are imported or previously bound in the binder
+            if let Some(handle) = self.binder.get_handle(&name) {
+                TsxKind::Custom(handle)
+            } else if self.imports.contains_key(&name) {
+                // imports should have been registered into binder earlier; try to insert latebound if missing
+                let _ = self.binder.insert_latebound(&name, Some(matterstream_core::TsTypeDef::Any), None);
+                if let Some(h2) = self.binder.get_handle(&name) {
+                    TsxKind::Custom(h2)
+                } else {
+                    return Err(format!("Failed to bind imported custom JSX tag '{}'", name));
+                }
             } else {
-                match ident.name.as_str() {
+                match name.as_str() {
                     "div" => TsxKind::Div,
                     "span" => TsxKind::Span,
-                    _ => TsxKind::Custom(ident.name.to_string()),
+                    other => return Err(format!("Unknown custom JSX tag '{}': must be imported or defined locally", other)),
                 }
             }
         } else {
             // Handle other JSX element names (e.g., MemberExpression, JSXNamespacedName) if needed
-            TsxKind::Custom("Unknown".to_string()) // Placeholder
+            TsxKind::Custom(self.binder.insert_anonymous()) // Placeholder
         };
 
         // Extract attributes
@@ -173,12 +192,26 @@ use smol_str::SmolStr;
                                     JSXExpression::Identifier(ident) => {
                                         let name = ident.name.to_string();
                                         // Attempt to record source location if available (not all Identifier types expose spans uniformly)
-                                        let loc = None; // Placeholder until span extraction is implemented
+                                        let span = ident.span;
+                                        let loc = if span.start != span.end {
+                                            Some(matterstream_core::SourceLoc { offset: span.start as usize, len: (span.end - span.start) as usize })
+                                        } else {
+                                            None
+                                        };
                                         // Register identifier in binder as late-bound if not already present
                                         if !self.binder.contains(&name) {
                                             let _ = self.binder.insert_latebound(&name, None, loc.clone());
                                         }
-                                        TsTypeValue::Identifier(SmolStr::new(name))
+                                        // Lookup handle for identifier and, if present, return as a bind handle; otherwise insert latebound and return handle
+                                        if let Some(handle) = self.binder.get_handle(&name) {
+                                            TsTypeValue::Identifier(handle)
+                                        } else {
+                                            // try to insert latebound and return handle
+                                            match self.binder.insert_latebound(&name, None, loc.clone()) {
+                                                Ok(h) => TsTypeValue::Identifier(h),
+                                                Err(_e) => TsTypeValue::Undefined,
+                                            }
+                                        }
                                     }
                                     _ => {
                                         eprintln!("Warning: Unhandled JSX expression type for attribute '{}'", key);
@@ -252,7 +285,11 @@ impl Parser {
             program: ret.program,
         };
 
-        let mut visitor = MatterStreamToParsedVisitor::new(raw_parsed.allocator);
-        visitor.transform_program(&raw_parsed.program)
+        let binder = std::sync::Arc::new(matterstream_core::Binder::new());
+        let mut visitor = MatterStreamToParsedVisitor::new(raw_parsed.allocator, binder.clone());
+        let mut parsed = visitor.transform_program(&raw_parsed.program)?;
+        // attach binder into mtsm_data for downstream consumers
+        parsed.mtsm_data.data.insert("__binder".to_string(), matterstream_core::MtsmVariant::SecureSourceSymbol(matterstream_core::MtsmSecureSourceSymbol { sym: "__binder".to_string(), package_id: 0, key: 0 }));
+        Ok(parsed)
     }
 }

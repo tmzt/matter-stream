@@ -1,13 +1,13 @@
 use dashmap::DashMap;
 use smol_str::SmolStr;
 
-use crate::ast_hook::MtsmSourceSymbol;
+use crate::ast_hook::{MtsmSourceSymbol, MtsmBindHandle};
 
 #[derive(Debug)]
 pub enum TsxKind {
     Div,
     Span,
-    Custom(String),
+    Custom(MtsmBindHandle),
 }
 
 /// Simple type definitions for TSX attribute typing.
@@ -33,7 +33,7 @@ pub enum TsTypeValue {
     Number(f64),
     String(SmolStr),
     Boolean(bool),
-    Identifier(SmolStr),
+    Identifier(MtsmBindHandle),
     Null,
     Undefined,
 }

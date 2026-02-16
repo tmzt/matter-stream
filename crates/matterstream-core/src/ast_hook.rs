@@ -1,26 +1,32 @@
 use crate::ast_tsx::{TsxAttributes, TsxElement, TsxFragment, TsTypeValue, TsTypeDef};
 use dashmap::DashMap;
 use std::any::Any;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub type MtsmSlotId = u64;
 pub type MtsmTimestamp = u64;
 
+/// Simple wrapper handle for bindings (wraps a slot id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MtsmBindHandle(pub MtsmSlotId);
+
 /// Binder entry tracks constants, late-bound identifiers, and special variants.
 #[derive(Debug, Clone)]
 pub enum BinderEntry {
-    Constant(TsTypeValue, Option<crate::ast_tsx::SourceLoc>),
-    LateBound(Option<TsTypeDef>, Option<crate::ast_tsx::SourceLoc>),
-    Special(Option<crate::ast_tsx::SourceLoc>), // Placeholder: special entries are registered but payloads live in MtsmObject
+    Constant(TsTypeValue, Option<crate::ast_tsx::SourceLoc>, MtsmBindHandle),
+    LateBound(Option<TsTypeDef>, Option<crate::ast_tsx::SourceLoc>, MtsmBindHandle),
+    Special(Option<crate::ast_tsx::SourceLoc>, MtsmBindHandle), // Placeholder: special entries are registered but payloads live in MtsmObject
 }
 
 /// Thread-safe Binder for tracking top-level identifiers discovered while parsing.
 pub struct Binder {
     pub map: DashMap<smol_str::SmolStr, BinderEntry>,
+    next_slot: AtomicU64,
 }
 
 impl Binder {
     pub fn new() -> Self {
-        Binder { map: DashMap::new() }
+        Binder { map: DashMap::new(), next_slot: AtomicU64::new(1) }
     }
 
     pub fn contains(&self, name: &str) -> bool {
@@ -28,33 +34,65 @@ impl Binder {
         self.map.contains_key(&key)
     }
 
-    pub fn insert_constant(&self, name: &str, val: TsTypeValue, loc: Option<crate::ast_tsx::SourceLoc>) -> Result<(), String> {
+    fn alloc_handle(&self) -> MtsmBindHandle {
+        let id = self.next_slot.fetch_add(1, Ordering::SeqCst);
+        MtsmBindHandle(id)
+    }
+
+    pub fn insert_constant(&self, name: &str, val: TsTypeValue, loc: Option<crate::ast_tsx::SourceLoc>) -> Result<MtsmBindHandle, String> {
         let key = smol_str::SmolStr::new(name);
         if self.map.contains_key(&key) {
             Err(format!("Identifier '{}' already defined (shadowing not allowed)", name))
         } else {
-            self.map.insert(key, BinderEntry::Constant(val, loc));
-            Ok(())
+            let handle = self.alloc_handle();
+            self.map.insert(key, BinderEntry::Constant(val, loc, handle));
+            Ok(handle)
         }
     }
 
-    pub fn insert_latebound(&self, name: &str, ttype: Option<TsTypeDef>, loc: Option<crate::ast_tsx::SourceLoc>) -> Result<(), String> {
+    pub fn insert_latebound(&self, name: &str, ttype: Option<TsTypeDef>, loc: Option<crate::ast_tsx::SourceLoc>) -> Result<MtsmBindHandle, String> {
         let key = smol_str::SmolStr::new(name);
         if self.map.contains_key(&key) {
             Err(format!("Identifier '{}' already defined (shadowing not allowed)", name))
         } else {
-            self.map.insert(key, BinderEntry::LateBound(ttype, loc));
-            Ok(())
+            let handle = self.alloc_handle();
+            self.map.insert(key, BinderEntry::LateBound(ttype, loc, handle));
+            Ok(handle)
         }
     }
 
-    pub fn insert_special(&self, name: &str, loc: Option<crate::ast_tsx::SourceLoc>) -> Result<(), String> {
+    pub fn insert_special(&self, name: &str, loc: Option<crate::ast_tsx::SourceLoc>) -> Result<MtsmBindHandle, String> {
         let key = smol_str::SmolStr::new(name);
         if self.map.contains_key(&key) {
             Err(format!("Identifier '{}' already defined (shadowing not allowed)", name))
         } else {
-            self.map.insert(key, BinderEntry::Special(loc));
-            Ok(())
+            let handle = self.alloc_handle();
+            self.map.insert(key, BinderEntry::Special(loc, handle));
+            Ok(handle)
+        }
+    }
+
+    pub fn insert_anonymous(&self) -> MtsmBindHandle {
+        // create an anonymous name and insert mapping
+        let id = self.next_slot.fetch_add(1, Ordering::SeqCst);
+        let anon_name = format!("__anon_{}", id);
+        let key = smol_str::SmolStr::new(anon_name);
+        let handle = MtsmBindHandle(id);
+        // anonymous latebound with no type/loc
+        self.map.insert(key, BinderEntry::LateBound(None, None, handle));
+        handle
+    }
+
+    pub fn get_handle(&self, name: &str) -> Option<MtsmBindHandle> {
+        let key = smol_str::SmolStr::new(name);
+        if let Some(entry) = self.map.get(&key) {
+            match &*entry {
+                BinderEntry::Constant(_, _, h) => Some(*h),
+                BinderEntry::LateBound(_, _, h) => Some(*h),
+                BinderEntry::Special(_, h) => Some(*h),
+            }
+        } else {
+            None
         }
     }
 }

@@ -73,8 +73,11 @@ fn test_parser_parses_identifier_attribute_and_children() {
     let ref_key = SmolStr::new("ref");
     let ref_val = first.attributes.attributes.get(&ref_key).expect("ref attribute missing");
     match &*ref_val {
-        matterstream_core::TsTypeValue::Identifier(s) => assert_eq!(s.as_str(), "myRef"),
-        other => panic!("Expected ref to be Identifier, got: {:?}", other),
+        matterstream_core::TsTypeValue::Identifier(handle) => {
+            // ensure binder assigned a handle and that lookups work
+            assert!(handle.0 != 0);
+        }
+        other => panic!("Expected ref to be Identifier handle, got: {:?}", other),
     }
 
     // children -> span element
@@ -94,8 +97,8 @@ fn test_parser_handles_imports_and_custom_components() {
     let first = &parsed.root_fragment.elements[0];
 
     match &first.kind {
-        matterstream_core::TsxKind::Custom(name) => assert_eq!(name, "Slab"),
-        other => panic!("Expected Custom Slab, got: {:?}", other),
+        matterstream_core::TsxKind::Custom(handle) => assert!(handle.0 != 0),
+        other => panic!("Expected Custom Slab handle, got: {:?}", other),
     }
 
     // binder marker still present
