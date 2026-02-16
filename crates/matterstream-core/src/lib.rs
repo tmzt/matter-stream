@@ -28,5 +28,5 @@ pub use tier0::GlobalUniforms;
 pub use tier1::{IntBank, Mat4Bank, ScalarBank, Vec3Bank, Vec4Bank};
 pub use tier2::ZeroPage;
 pub use tier3::{ResourceHandle, ResourceTable};
-pub use ast_hook::{MtsmObject, MtsmVariant, AnyMtsmBinding, AnyMtsmHook, MtsmBinding, MtsmHook, MtsmActionGetter, MtsmActionSetter, MtsmSlotGetter, MtsmSlotSetter, MtsmPrimitive, TsShaderTransmissible, MtsmTsxFunctionalComponent, TsxElementContext, MtsmExecFunctionalComponent, Binder, BinderEntry};
-pub use ast_tsx::{TsxElement, TsxAttributes, TsxFragment, TsxKind, TsTypeValue, TsTypeDef, TypeValueBinder};
+pub use ast_hook::{MtsmObject, MtsmVariant, AnyMtsmBinding, AnyMtsmHook, MtsmBinding, MtsmHook, MtsmActionGetter, MtsmActionSetter, MtsmSlotGetter, MtsmSlotSetter, MtsmPrimitive, TsShaderTransmissible, MtsmTsxFunctionalComponent, TsxElementContext, MtsmExecFunctionalComponent, Binder, BinderEntry, MtsmSecureSourceSymbol, MtsmBindHandle, MtsmPackageHandle, MtsmPackageRegistry};
+pub use ast_tsx::{TsxElement, TsxAttributes, TsxFragment, TsxKind, TsTypeValue, TsTypeDef, TypeValueBinder, SourceLoc};

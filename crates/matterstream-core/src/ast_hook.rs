@@ -6,9 +6,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub type MtsmSlotId = u64;
 pub type MtsmTimestamp = u64;
 
+/// Package handle type (namespace resolver id + serial)
+pub type MtsmPackageHandle = u64;
+
 /// Simple wrapper handle for bindings (wraps a slot id).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MtsmBindHandle(pub MtsmSlotId);
+
+/// Trait for package registries. Implemented by concrete registries in other crates.
+pub trait MtsmPackageRegistry: Send + Sync {
+    fn get_namespace_handle(&self, namespace: &str) -> Option<MtsmPackageHandle>;
+    fn resolve_full_import_path(&self, import_path: &str) -> Option<Box<dyn crate::ast_hook::MtsmExecFunctionalComponent>>;
+}
 
 /// Binder entry tracks constants, late-bound identifiers, and special variants.
 #[derive(Debug, Clone)]
