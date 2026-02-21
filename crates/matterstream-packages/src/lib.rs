@@ -41,6 +41,21 @@ impl PackageRegistry {
     }
 }
 
+// Implement core's MtsmPackageRegistry trait for this PackageRegistry
+impl matterstream_core::MtsmPackageRegistry for PackageRegistry {
+    fn get_namespace_handle(&self, namespace: &str) -> Option<matterstream_core::MtsmPackageHandle> {
+        // Simple deterministic handle: hash the namespace string to u64
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        namespace.hash(&mut hasher);
+        Some(hasher.finish())
+    }
+
+    fn resolve_full_import_path(&self, import_path: &str) -> Option<Box<dyn matterstream_core::MtsmExecFunctionalComponent>> {
+        self.resolve_full_import_path(import_path)
+    }
+}
 pub struct SlabPrimitive;
 
 impl MtsmExecFunctionalComponent for SlabPrimitive {

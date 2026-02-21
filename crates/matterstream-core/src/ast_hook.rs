@@ -1,6 +1,7 @@
 use crate::ast_tsx::{TsxAttributes, TsxElement, TsxFragment, TsTypeValue, TsTypeDef};
 use dashmap::DashMap;
 use std::any::Any;
+use std::sync::{Arc};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub type MtsmSlotId = u64;
@@ -20,11 +21,11 @@ pub trait MtsmPackageRegistry: Send + Sync {
 }
 
 /// Binder entry tracks constants, late-bound identifiers, and special variants.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum BinderEntry {
-    Constant(TsTypeValue, Option<crate::ast_tsx::SourceLoc>, MtsmBindHandle),
-    LateBound(Option<TsTypeDef>, Option<crate::ast_tsx::SourceLoc>, MtsmBindHandle),
-    Special(Option<crate::ast_tsx::SourceLoc>, MtsmBindHandle), // Placeholder: special entries are registered but payloads live in MtsmObject
+    Constant(TsTypeValue, Option<crate::ast_tsx::SourceLoc>, MtsmBindHandle, Option<Arc<dyn Any + Send + Sync>>),
+    LateBound(Option<TsTypeDef>, Option<crate::ast_tsx::SourceLoc>, MtsmBindHandle, Option<Arc<dyn Any + Send + Sync>>),
+    Special(Option<crate::ast_tsx::SourceLoc>, MtsmBindHandle, Option<Arc<dyn Any + Send + Sync>>), // Placeholder: special entries are registered but payloads live in MtsmObject
 }
 
 /// Thread-safe Binder for tracking top-level identifiers discovered while parsing.
@@ -54,7 +55,7 @@ impl Binder {
             Err(format!("Identifier '{}' already defined (shadowing not allowed)", name))
         } else {
             let handle = self.alloc_handle();
-            self.map.insert(key, BinderEntry::Constant(val, loc, handle));
+            self.map.insert(key, BinderEntry::Constant(val, loc, handle, None));
             Ok(handle)
         }
     }
@@ -65,7 +66,7 @@ impl Binder {
             Err(format!("Identifier '{}' already defined (shadowing not allowed)", name))
         } else {
             let handle = self.alloc_handle();
-            self.map.insert(key, BinderEntry::LateBound(ttype, loc, handle));
+            self.map.insert(key, BinderEntry::LateBound(ttype, loc, handle, None));
             Ok(handle)
         }
     }
@@ -76,7 +77,7 @@ impl Binder {
             Err(format!("Identifier '{}' already defined (shadowing not allowed)", name))
         } else {
             let handle = self.alloc_handle();
-            self.map.insert(key, BinderEntry::Special(loc, handle));
+            self.map.insert(key, BinderEntry::Special(loc, handle, None));
             Ok(handle)
         }
     }
@@ -88,7 +89,7 @@ impl Binder {
         let key = smol_str::SmolStr::new(anon_name);
         let handle = MtsmBindHandle(id);
         // anonymous latebound with no type/loc
-        self.map.insert(key, BinderEntry::LateBound(None, None, handle));
+        self.map.insert(key, BinderEntry::LateBound(None, None, handle, None));
         handle
     }
 
@@ -96,13 +97,41 @@ impl Binder {
         let key = smol_str::SmolStr::new(name);
         if let Some(entry) = self.map.get(&key) {
             match &*entry {
-                BinderEntry::Constant(_, _, h) => Some(*h),
-                BinderEntry::LateBound(_, _, h) => Some(*h),
-                BinderEntry::Special(_, h) => Some(*h),
+                BinderEntry::Constant(_, _, h, _) => Some(*h),
+                BinderEntry::LateBound(_, _, h, _) => Some(*h),
+                BinderEntry::Special(_, h, _) => Some(*h),
             }
         } else {
             None
         }
+    }
+
+    /// Resolve a handle to the underlying Any payload stored in the binder entry, if any.
+    pub fn resolve_handle(&self, handle: MtsmBindHandle) -> Option<Arc<dyn Any + Send + Sync>> {
+        // iterate through map to find matching handle
+        for kv in self.map.iter() {
+            match &*kv.value() {
+                BinderEntry::Constant(_, _, h, Some(boxed)) if *h == handle => return Some(boxed.clone()),
+                BinderEntry::LateBound(_, _, h, Some(boxed)) if *h == handle => return Some(boxed.clone()),
+                BinderEntry::Special(_, h, Some(boxed)) if *h == handle => return Some(boxed.clone()),
+                _ => (),
+            }
+        }
+        None
+    }
+
+    /// Attach a concrete payload to a previously created handle. Returns Err if not found.
+    pub fn attach_payload(&self, handle: MtsmBindHandle, payload: Arc<dyn Any + Send + Sync>) -> Result<(), String> {
+        for mut kv in self.map.iter_mut() {
+            let mut_replace = kv.value_mut();
+            match mut_replace {
+                BinderEntry::Constant(_, _, h, ref mut maybe) if *h == handle => { *maybe = Some(payload.clone()); return Ok(()); }
+                BinderEntry::LateBound(_, _, h, ref mut maybe) if *h == handle => { *maybe = Some(payload.clone()); return Ok(()); }
+                BinderEntry::Special(_, h, ref mut maybe) if *h == handle => { *maybe = Some(payload.clone()); return Ok(()); }
+                _ => (),
+            }
+        }
+        Err(format!("Handle {:?} not found in binder", handle))
     }
 }
 
@@ -134,6 +163,10 @@ pub trait MtsmTsxFunctionalComponent: 'static + Send + Sync {
 
 pub trait MtsmExecFunctionalComponent: 'static + Send + Sync {
     fn execute(&self, context: TsxElementContext) -> TsxFragment; // For now, returns TsxFragment
+    /// Optional transform matrix (e.g., SET_TRANS) to apply when executing this component.
+    fn transform(&self, _context: &TsxElementContext) -> Option<[f32; 3]> { None }
+    /// Optional projection or push of projection state when entering component.
+    fn projection(&self, _context: &TsxElementContext) -> Option<()> { None }
 }
 
 /*
