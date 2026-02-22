@@ -141,3 +141,131 @@ fn test_compile_invalid_tsx_syntax() {
     let err = result.unwrap_err();
     assert!(err.to_string().contains("Expected `}`"));
 }
+
+#[test]
+fn test_compile_hbox_layout() -> CompilerResult<()> {
+    let tsx_source = r##"
+        <>
+          <HBox x={0} y={0.3} gap={0.25}>
+            <Slab color="#E74C3CFF" />
+            <Slab color="#2ECC71FF" />
+            <Slab color="#3498DBFF" />
+          </HBox>
+        </>
+    "##;
+    let compiled_ops = Compiler::compile(tsx_source)?;
+
+    // HBox emits: PushState, then per-child (SetColor, SetTrans, Draw), then PopState
+    // 1 PushState + 3*(SetColor + SetTrans + Draw) + 1 PopState = 11 ops
+    assert_eq!(compiled_ops.ops.len(), 11, "ops: {:?}", compiled_ops.ops);
+
+    // First op: PushState
+    assert!(matches!(compiled_ops.ops[0], Op::PushState));
+
+    // Child 0: color, trans at (0 + 0*(0.2+0.25), 0.3) = (0.0, 0.3)
+    if let Op::SetTrans(trans) = compiled_ops.ops[2] {
+        assert!((trans[0] - 0.0).abs() < 0.01, "child 0 x: {}", trans[0]);
+        assert!((trans[1] - 0.3).abs() < 0.01, "child 0 y: {}", trans[1]);
+    } else { panic!("Expected SetTrans, got {:?}", compiled_ops.ops[2]); }
+
+    // Child 1: trans at (0 + 1*(0.2+0.25), 0.3) = (0.45, 0.3)
+    if let Op::SetTrans(trans) = compiled_ops.ops[5] {
+        assert!((trans[0] - 0.45).abs() < 0.01, "child 1 x: {}", trans[0]);
+        assert!((trans[1] - 0.3).abs() < 0.01, "child 1 y: {}", trans[1]);
+    } else { panic!("Expected SetTrans, got {:?}", compiled_ops.ops[5]); }
+
+    // Child 2: trans at (0 + 2*(0.2+0.25), 0.3) = (0.9, 0.3)
+    if let Op::SetTrans(trans) = compiled_ops.ops[8] {
+        assert!((trans[0] - 0.9).abs() < 0.01, "child 2 x: {}", trans[0]);
+        assert!((trans[1] - 0.3).abs() < 0.01, "child 2 y: {}", trans[1]);
+    } else { panic!("Expected SetTrans, got {:?}", compiled_ops.ops[8]); }
+
+    // Last op: PopState
+    assert!(matches!(compiled_ops.ops[10], Op::PopState));
+
+    Ok(())
+}
+
+#[test]
+fn test_compile_vbox_layout() -> CompilerResult<()> {
+    let tsx_source = r##"
+        <>
+          <VBox x={-0.5} y={0.4}>
+            <Slab color="#F1C40FFF" />
+            <Slab color="#9B59B6FF" />
+          </VBox>
+        </>
+    "##;
+    let compiled_ops = Compiler::compile(tsx_source)?;
+
+    // VBox: PushState + 2*(SetColor + SetTrans + Draw) + PopState = 8 ops
+    assert_eq!(compiled_ops.ops.len(), 8, "ops: {:?}", compiled_ops.ops);
+
+    assert!(matches!(compiled_ops.ops[0], Op::PushState));
+
+    // Child 0: trans at (-0.5, 0.4 - 0*(0.15+0.1)) = (-0.5, 0.4)
+    if let Op::SetTrans(trans) = compiled_ops.ops[2] {
+        assert!((trans[0] - (-0.5)).abs() < 0.01, "child 0 x: {}", trans[0]);
+        assert!((trans[1] - 0.4).abs() < 0.01, "child 0 y: {}", trans[1]);
+    } else { panic!("Expected SetTrans, got {:?}", compiled_ops.ops[2]); }
+
+    // Child 1: trans at (-0.5, 0.4 - 1*(0.15+0.1)) = (-0.5, 0.15)
+    if let Op::SetTrans(trans) = compiled_ops.ops[5] {
+        assert!((trans[0] - (-0.5)).abs() < 0.01, "child 1 x: {}", trans[0]);
+        assert!((trans[1] - 0.15).abs() < 0.01, "child 1 y: {}", trans[1]);
+    } else { panic!("Expected SetTrans, got {:?}", compiled_ops.ops[5]); }
+
+    assert!(matches!(compiled_ops.ops[7], Op::PopState));
+
+    Ok(())
+}
+
+#[test]
+fn test_compile_login_form() -> CompilerResult<()> {
+    let tsx_source = r##"
+        <>
+          <Text x={0.0} y={0.7} color="#FFFFFFCC" label="Sign In" />
+          <VBox x={0.0} y={0.25} gap={0.05}>
+            <Text color="#AAAAAAFF" label="Username" />
+            <Slab width={0.5} height={0.06} color="#333333FF" />
+            <Text color="#AAAAAAFF" label="Password" />
+            <Slab width={0.5} height={0.06} color="#333333FF" />
+          </VBox>
+          <Slab x={0.0} y={-0.55} width={0.3} height={0.07} color="#1A73E8FF" label="Login" />
+        </>
+    "##;
+    let compiled_ops = Compiler::compile(tsx_source)?;
+
+    // Title (SetColor, SetLabel, SetTrans, Draw) = 4
+    // VBox: PushState + 4 children + PopState
+    //   Text child: SetColor, SetLabel, SetTrans, Draw = 4 each
+    //   Slab child: SetColor, SetLabel(none), SetSize, SetTrans, Draw = 4 each (no label)
+    //   Actually Text children: SetColor + SetLabel + SetTrans + Draw = 4
+    //   Slab children: SetColor + SetSize + SetTrans + Draw = 4
+    // Login button: SetColor, SetLabel, SetSize, SetTrans, Draw = 5
+    // Total: 4 + 1 + 4*4 + 1 + 5 = 27
+    assert!(compiled_ops.ops.len() > 20, "Expected many ops, got {}: {:?}", compiled_ops.ops.len(), compiled_ops.ops);
+
+    // First op should be SetColor for the title
+    assert!(matches!(compiled_ops.ops[0], Op::SetColor(_)));
+
+    Ok(())
+}
+
+#[test]
+fn test_compile_width_height() -> CompilerResult<()> {
+    let tsx_source = r##"
+        <Slab x={0} y={0} width={0.5} height={0.3} color="#FFFFFFFF" />
+    "##;
+    let compiled_ops = Compiler::compile(tsx_source)?;
+
+    // SetColor, SetSize, SetTrans, Draw = 4 ops
+    assert_eq!(compiled_ops.ops.len(), 4, "ops: {:?}", compiled_ops.ops);
+
+    if let Op::SetSize(size) = compiled_ops.ops[1] {
+        assert!((size[0] - 0.5).abs() < 0.01);
+        assert!((size[1] - 0.3).abs() < 0.01);
+    } else { panic!("Expected SetSize, got {:?}", compiled_ops.ops[1]); }
+
+    Ok(())
+}

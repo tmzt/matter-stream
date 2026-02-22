@@ -17,6 +17,10 @@ smol = "2"
 smol_str = "0.1"
 async-io = "2.6.0"
 tempfile = "3"
+wgpu = "25"
+glyphon = "0.9"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
 matterstream-core = { path = "crates/matterstream-core" }
 matterstream-compiler = { path = "crates/matterstream-compiler" }
 matterstream-renderer = { path = "crates/matterstream-renderer" }

@@ -130,6 +130,8 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
                     "span" => TsxKind::Span,
                     "Slab" => TsxKind::Slab,
                     "Text" => TsxKind::Text,
+                    "HBox" => TsxKind::HBox,
+                    "VBox" => TsxKind::VBox,
                     other => return Err(format!("Unknown custom JSX tag '{}': must be imported or defined locally", other)),
                 }
             }

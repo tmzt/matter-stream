@@ -9,6 +9,8 @@ pub enum TsxKind {
     Span,
     Slab,
     Text,
+    HBox,
+    VBox,
     Custom(MtsmBindHandle),
 }
 
