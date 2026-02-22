@@ -11,5 +11,6 @@ oxc_parser = { workspace = true }
 oxc_allocator = { workspace = true }
 oxc_ast = { workspace = true }
 oxc_span = { workspace = true }
+oxc_syntax = { workspace = true }
 dashmap = "5.5"
 smol_str = { workspace = true }

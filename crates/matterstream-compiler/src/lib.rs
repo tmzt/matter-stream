@@ -9,6 +9,7 @@ use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use oxc_ast::{visit::{self, Visit}, ast::*};
+use oxc_syntax::operator::UnaryOperator;
 use anyhow::{Result, anyhow};
 
 use matterstream_core::{Op, Primitive, OpsHeader, CompiledOps};
@@ -131,15 +132,17 @@ impl<'a> Visit<'a> for MatterStreamVisitor {
     fn visit_jsx_element(&mut self, element: &JSXElement<'a>) {
         if let JSXElementName::Identifier(ident) = &element.opening_element.name {
             // Determine if this identifier refers to a bound functional component
+            let is_builtin = ident.name == "Slab" || ident.name == "Text";
             let is_component = if let Some(binder) = &self.binder {
-                binder.get_handle(&ident.name).is_some() || ident.name == "Slab"
+                binder.get_handle(&ident.name).is_some() || is_builtin
             } else {
-                ident.name == "Slab"
+                is_builtin
             };
             if is_component {
                 let mut x_val = 0.0;
                 let mut y_val = 0.0;
                 let mut color_val: Option<[f32; 4]> = None;
+                let mut label_val: Option<String> = None;
 
                 for attribute in &element.opening_element.attributes {
                     if let JSXAttributeItem::Attribute(attr) = attribute {
@@ -148,16 +151,32 @@ impl<'a> Visit<'a> for MatterStreamVisitor {
                                 if let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value {
                                     if let JSXExpression::NumericLiteral(num_literal) = &container.expression {
                                         x_val = num_literal.value as f32;
-                                    } else if let JSXExpression::Identifier(ident) = &container.expression {
-                                        eprintln!("Warning: 'x' attribute is an identifier '{}'. Defaulting to 0.0", ident.name);
+                                    } else if let JSXExpression::UnaryExpression(unary) = &container.expression {
+                                        if unary.operator == UnaryOperator::UnaryNegation {
+                                            if let Expression::NumericLiteral(lit) = &unary.argument {
+                                                x_val = -(lit.value as f32);
+                                            }
+                                        }
                                     }
                                 }
                             } else if name.name == "y" {
                                 if let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value {
                                     if let JSXExpression::NumericLiteral(num_literal) = &container.expression {
                                         y_val = num_literal.value as f32;
-                                    } else if let JSXExpression::Identifier(ident) = &container.expression {
-                                        eprintln!("Warning: 'y' attribute is an identifier '{}'. Defaulting to 0.0", ident.name);
+                                    } else if let JSXExpression::UnaryExpression(unary) = &container.expression {
+                                        if unary.operator == UnaryOperator::UnaryNegation {
+                                            if let Expression::NumericLiteral(lit) = &unary.argument {
+                                                y_val = -(lit.value as f32);
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if name.name == "label" {
+                                if let Some(JSXAttributeValue::StringLiteral(str_literal)) = &attr.value {
+                                    label_val = Some(str_literal.value.to_string());
+                                } else if let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value {
+                                    if let JSXExpression::StringLiteral(str_literal) = &container.expression {
+                                        label_val = Some(str_literal.value.to_string());
                                     }
                                 }
                             } else if name.name == "color" {
@@ -192,8 +211,15 @@ impl<'a> Visit<'a> for MatterStreamVisitor {
                 } else {
                     self.ops.push(Op::SetColor([1.0, 1.0, 1.0, 1.0]));
                 }
+                let primitive = match ident.name.as_str() {
+                    "Text" => Primitive::Text,
+                    _ => Primitive::Slab,
+                };
+                if let Some(label) = label_val {
+                    self.ops.push(Op::SetLabel(label));
+                }
                 self.ops.push(Op::SetTrans([x_val, y_val, 0.0]));
-                self.ops.push(Op::Draw { primitive: Primitive::Slab, position_rsi: 0 });
+                self.ops.push(Op::Draw { primitive, position_rsi: 0 });
             }
         }
 

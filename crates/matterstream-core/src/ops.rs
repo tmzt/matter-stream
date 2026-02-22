@@ -36,6 +36,7 @@ impl OpsHeader {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Primitive {
     Slab,
+    Text,
 }
 
 /// An individual instruction in the MatterStream ISA.
@@ -49,6 +50,8 @@ pub enum Op {
     SetMatrix([f32; 16]),
     /// Set color (vec4).
     SetColor([f32; 4]),
+    /// Set size (vec2) — width and height in NDC units.
+    SetSize([f32; 2]),
     /// Push projection stack (saves Mat4 bank only).
     PushProj,
     /// Pop projection stack (restores Mat4 bank only).
@@ -61,6 +64,8 @@ pub enum Op {
     BindZeroPage { offset: u8, len: u8 },
     /// Bind a resource handle.
     BindResource(ResourceHandle),
+    /// Set label text for the next draw call.
+    SetLabel(String),
     /// Push raw bytes to the stream.
     Push(Vec<u8>),
 }
@@ -68,9 +73,11 @@ pub enum Op {
 /// Result of executing a Draw op.
 #[derive(Debug, Clone)]
 pub struct Draw {
+    pub primitive: Primitive,
     pub position: [f32; 3],
     pub color: [f32; 4],
-    pub size: [f32; 3], // Add this line
+    pub size: [f32; 2],
+    pub label: Option<String>,
     pub used_fast_path: bool,
     pub transform_bytes: usize,
 }

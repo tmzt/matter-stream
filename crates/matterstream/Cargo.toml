@@ -10,4 +10,8 @@ matterstream-loader = { path = "../matterstream-loader" }
 matterstream-renderer = { path = "../matterstream-renderer" }
 matterstream-parser = { path = "../matterstream-parser" }
 matterstream-processor = { path = "../matterstream-processor" }
+matterstream-packages = { path = "../matterstream-packages" }
+smol.workspace = true
+winit.workspace = true
+softbuffer.workspace = true
 

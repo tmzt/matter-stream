@@ -7,6 +7,8 @@ use crate::ast_hook::{MtsmSourceSymbol, MtsmBindHandle};
 pub enum TsxKind {
     Div,
     Span,
+    Slab,
+    Text,
     Custom(MtsmBindHandle),
 }
 

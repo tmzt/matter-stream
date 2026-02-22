@@ -1,13 +1,15 @@
 <>
   {/* Title */}
-  <Slab x={0.0} y={0.6} color="#CCCCCCFF" /> {/* Gray title bar */}
+  <Text x={0.0} y={0.75} color="#FFFFFFCC" label="Sign In" />
 
-  {/* Username input */}
-  <Slab x={0.0} y={0.2} color="#444444FF" /> {/* Dark gray input field */}
+  {/* Username label + input */}
+  <Text x={-0.25} y={0.35} color="#AAAAAAFF" label="Username" />
+  <Slab x={0.0} y={0.2} color="#333333FF" />
 
-  {/* Password input */}
-  <Slab x={0.0} y={-0.2} color="#444444FF" /> {/* Dark gray input field */}
+  {/* Password label + input */}
+  <Text x={-0.25} y={-0.05} color="#AAAAAAFF" label="Password" />
+  <Slab x={0.0} y={-0.2} color="#333333FF" />
 
   {/* Login button */}
-  <Slab x={0.0} y={-0.6} color="#007BFFFF" /> {/* Blue button */}
+  <Slab x={0.0} y={-0.6} color="#1A73E8FF" label="Login" />
 </>

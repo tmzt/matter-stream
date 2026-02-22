@@ -11,6 +11,7 @@ use matterstream_core::{MtsmObject, MtsmVariant, TsxFragment, MtsmTsxFunctionalC
 use smol_str::SmolStr;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{Program, JSXElement as OxcJSXElement, JSXFragment as OxcJSXFragment, JSXAttribute as OxcJSXAttribute, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXExpression, IdentifierReference, Statement, ModuleDeclaration, ImportDeclaration, ImportDeclarationSpecifier, JSXChild, Expression, ExpressionStatement, JSXElementName};
+use oxc_syntax::operator::UnaryOperator;
 use oxc_span::SourceType;
 use oxc_parser::Parser as OxcParser; // Alias to avoid conflict with our Parser
 use std::collections::HashMap; // For imports
@@ -127,6 +128,8 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
                 match name.as_str() {
                     "div" => TsxKind::Div,
                     "span" => TsxKind::Span,
+                    "Slab" => TsxKind::Slab,
+                    "Text" => TsxKind::Text,
                     other => return Err(format!("Unknown custom JSX tag '{}': must be imported or defined locally", other)),
                 }
             }
@@ -144,7 +147,8 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
             match child {
                 oxc_ast::ast::JSXChild::Element(elem) => children_elements.push(self.transform_jsx_element(elem)?),
                 oxc_ast::ast::JSXChild::Fragment(frag) => children_elements.extend(self.transform_jsx_fragment(frag)?.elements),
-                // Handle other JSXChild types (e.g., ExpressionContainer, Text) if needed
+                oxc_ast::ast::JSXChild::Text(_) => {} // Whitespace between elements — skip
+                oxc_ast::ast::JSXChild::ExpressionContainer(_) => {} // JSX comments / expressions — skip
                 _ => eprintln!("Warning: Unhandled JSXChild type in TsxElement transformation: {:?}", child),
             }
         }
@@ -165,6 +169,8 @@ impl<'a> MatterStreamToParsedVisitor<'a> {
             match child {
                 oxc_ast::ast::JSXChild::Element(elem) => elements.push(self.transform_jsx_element(elem)?),
                 oxc_ast::ast::JSXChild::Fragment(frag) => elements.extend(self.transform_jsx_fragment(frag)?.elements),
+                oxc_ast::ast::JSXChild::Text(_) => {} // Whitespace between elements — skip
+                oxc_ast::ast::JSXChild::ExpressionContainer(_) => {} // JSX comments / expressions — skip
                 _ => eprintln!("Warning: Unhandled JSXChild type in TsxFragment transformation: {:?}", child),
             }
         }
@@ -189,6 +195,15 @@ use smol_str::SmolStr;
                                 match &expr_container.expression {
                                     JSXExpression::StringLiteral(lit) => TsTypeValue::String(lit.value.to_string().into()),
                                     JSXExpression::NumericLiteral(lit) => TsTypeValue::Number(lit.value as f64),
+                                    JSXExpression::UnaryExpression(unary)
+                                        if unary.operator == UnaryOperator::UnaryNegation =>
+                                    {
+                                        if let Expression::NumericLiteral(lit) = &unary.argument {
+                                            TsTypeValue::Number(-lit.value)
+                                        } else {
+                                            TsTypeValue::Undefined
+                                        }
+                                    }
                                     JSXExpression::Identifier(ident) => {
                                         let name = ident.name.to_string();
                                         // Attempt to record source location if available (not all Identifier types expose spans uniformly)
