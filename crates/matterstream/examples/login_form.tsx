@@ -11,5 +11,7 @@
   </VBox>
 
   {/* Login button */}
-  <Slab x={0.0} y={-0.55} width={0.3} height={0.07} color="#1A73E8FF" label="Login" />
+  <Slab x={0.0} y={-0.55} padding={10} color="#1A73E8FF">
+    <Text label="Login" color="#FFFFFFFF" />
+  </Slab>
 </>

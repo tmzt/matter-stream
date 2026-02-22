@@ -231,23 +231,23 @@ fn test_compile_login_form() -> CompilerResult<()> {
             <Text color="#AAAAAAFF" label="Password" />
             <Slab width={0.5} height={0.06} color="#333333FF" />
           </VBox>
-          <Slab x={0.0} y={-0.55} width={0.3} height={0.07} color="#1A73E8FF" label="Login" />
+          <Slab x={0.0} y={-0.55} padding={10} color="#1A73E8FF">
+            <Text label="Login" color="#FFFFFFFF" />
+          </Slab>
         </>
     "##;
     let compiled_ops = Compiler::compile(tsx_source)?;
 
-    // Title (SetColor, SetLabel, SetTrans, Draw) = 4
+    // Title: SetLabel, SetColor, SetTrans, Draw = 4
     // VBox: PushState + 4 children + PopState
-    //   Text child: SetColor, SetLabel, SetTrans, Draw = 4 each
-    //   Slab child: SetColor, SetLabel(none), SetSize, SetTrans, Draw = 4 each (no label)
-    //   Actually Text children: SetColor + SetLabel + SetTrans + Draw = 4
-    //   Slab children: SetColor + SetSize + SetTrans + Draw = 4
-    // Login button: SetColor, SetLabel, SetSize, SetTrans, Draw = 5
-    // Total: 4 + 1 + 4*4 + 1 + 5 = 27
+    //   Text children: SetLabel + SetColor + SetTrans + Draw = 4 each (x2)
+    //   Slab children: SetColor + SetSize + SetTrans + Draw = 4 each (x2)
+    // Login button (nested text): SetTextColor + SetLabel + SetPadding + SetColor + SetTrans + Draw = 6
+    // Total: 4 + 1 + 4*4 + 1 + 6 = 28
     assert!(compiled_ops.ops.len() > 20, "Expected many ops, got {}: {:?}", compiled_ops.ops.len(), compiled_ops.ops);
 
-    // First op should be SetColor for the title
-    assert!(matches!(compiled_ops.ops[0], Op::SetColor(_)));
+    // First op should be SetLabel for the title text
+    assert!(matches!(compiled_ops.ops[0], Op::SetLabel(_)));
 
     Ok(())
 }
@@ -266,6 +266,74 @@ fn test_compile_width_height() -> CompilerResult<()> {
         assert!((size[0] - 0.5).abs() < 0.01);
         assert!((size[1] - 0.3).abs() < 0.01);
     } else { panic!("Expected SetSize, got {:?}", compiled_ops.ops[1]); }
+
+    Ok(())
+}
+
+#[test]
+fn test_compile_nested_text_in_slab() -> CompilerResult<()> {
+    let tsx_source = r##"
+        <Slab padding={8} color="#0000FFFF">
+          <Text label="Hi" color="#FF0000FF" />
+        </Slab>
+    "##;
+    let compiled_ops = Compiler::compile(tsx_source)?;
+
+    // Expected ops: SetTextColor, SetLabel, SetPadding, SetColor, SetTrans, Draw = 6
+    assert_eq!(compiled_ops.ops.len(), 6, "ops: {:?}", compiled_ops.ops);
+
+    // SetTextColor from nested Text's color
+    if let Op::SetTextColor(tc) = compiled_ops.ops[0] {
+        assert_eq!(tc, [1.0, 0.0, 0.0, 1.0]); // #FF0000FF
+    } else { panic!("Expected SetTextColor, got {:?}", compiled_ops.ops[0]); }
+
+    // SetLabel from nested Text's label
+    if let Op::SetLabel(ref label) = compiled_ops.ops[1] {
+        assert_eq!(label, "Hi");
+    } else { panic!("Expected SetLabel, got {:?}", compiled_ops.ops[1]); }
+
+    // SetPadding from Slab's padding={8}
+    if let Op::SetPadding(p) = compiled_ops.ops[2] {
+        assert_eq!(p, [8.0, 8.0, 8.0, 8.0]);
+    } else { panic!("Expected SetPadding, got {:?}", compiled_ops.ops[2]); }
+
+    // SetColor from Slab's color
+    if let Op::SetColor(c) = compiled_ops.ops[3] {
+        assert_eq!(c, [0.0, 0.0, 1.0, 1.0]); // #0000FFFF
+    } else { panic!("Expected SetColor, got {:?}", compiled_ops.ops[3]); }
+
+    // SetTrans
+    assert!(matches!(compiled_ops.ops[4], Op::SetTrans(_)));
+
+    // Draw Slab
+    if let Op::Draw { primitive, .. } = &compiled_ops.ops[5] {
+        assert_eq!(*primitive, Primitive::Slab);
+    } else { panic!("Expected Draw, got {:?}", compiled_ops.ops[5]); }
+
+    Ok(())
+}
+
+#[test]
+fn test_compile_slab_without_label() -> CompilerResult<()> {
+    let tsx_source = r##"
+        <Slab color="#FFFFFFFF" label="X" />
+    "##;
+    let compiled_ops = Compiler::compile(tsx_source)?;
+
+    // label attribute on Slab is now ignored — no SetLabel should be emitted
+    // Expected ops: SetColor, SetTrans, Draw = 3
+    assert_eq!(compiled_ops.ops.len(), 3, "ops: {:?}", compiled_ops.ops);
+
+    assert!(matches!(compiled_ops.ops[0], Op::SetColor(_)));
+    assert!(matches!(compiled_ops.ops[1], Op::SetTrans(_)));
+    if let Op::Draw { primitive, .. } = &compiled_ops.ops[2] {
+        assert_eq!(*primitive, Primitive::Slab);
+    } else { panic!("Expected Draw, got {:?}", compiled_ops.ops[2]); }
+
+    // Verify no SetLabel was emitted
+    for op in &compiled_ops.ops {
+        assert!(!matches!(op, Op::SetLabel(_)), "Slab should not emit SetLabel from its own label attr");
+    }
 
     Ok(())
 }

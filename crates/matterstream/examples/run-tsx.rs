@@ -278,6 +278,7 @@ fn main() {
     let mut viewport = Viewport::new(&device, &glyphon_cache);
 
     // ── Execute & render loop ────────────────────────────────────
+    let scale_factor = window.scale_factor() as f32;
     let mut stream = MatterStream::new();
     let header = OpsHeader::new(vec![RsiPointer::new(1, BankId::Vec3 as u8, 0)], false);
 
@@ -310,16 +311,66 @@ fn main() {
                         let _ = stream.execute(&header, &compiled.ops).await;
                     });
 
-                    // ── Build slab instances ─────────────────────
+                    // ── Pass 1: Measure text for auto-sizing ─────
+                    let font_size = (height as f32 * 0.035).max(14.0);
+                    let metrics = Metrics::new(font_size, font_size * 1.2);
+
+                    // Measure text dimensions for each draw with a label
+                    let mut text_measurements: Vec<Option<(f32, f32)>> = Vec::new();
+                    for draw in &stream.draws {
+                        if let Some(label) = &draw.label {
+                            let mut buffer = TextBuffer::new(&mut font_system, metrics);
+                            buffer.set_size(
+                                &mut font_system,
+                                Some(width as f32),
+                                Some(font_size * 2.0),
+                            );
+                            buffer.set_text(
+                                &mut font_system,
+                                label,
+                                &Attrs::new().family(Family::SansSerif),
+                                Shaping::Advanced,
+                            );
+                            buffer.shape_until_scroll(&mut font_system, false);
+
+                            let text_w: f32 =
+                                buffer.layout_runs().map(|run| run.line_w).sum();
+                            let line_h = font_size * 1.2;
+                            text_measurements.push(Some((text_w, line_h)));
+                        } else {
+                            text_measurements.push(None);
+                        }
+                    }
+
+                    // ── Pass 2: Build slab instances ────────────
                     let mut slab_instances: Vec<SlabInstance> = Vec::new();
 
-                    for draw in &stream.draws {
+                    for (i, draw) in stream.draws.iter().enumerate() {
                         let is_text_only = draw.primitive == Primitive::Text
                             && draw.size[0] == 0.0
                             && draw.size[1] == 0.0;
 
                         if !is_text_only {
-                            let size = if draw.size[0] > 0.0 || draw.size[1] > 0.0 {
+                            let has_padding = draw.padding.iter().any(|p| *p > 0.0);
+                            let has_explicit_size = draw.size[0] > 0.0 || draw.size[1] > 0.0;
+
+                            let size = if !has_explicit_size && has_padding {
+                                // Auto-size from text metrics + padding
+                                // Padding is in logical pixels; scale to physical
+                                if let Some(Some((text_w, text_h))) = text_measurements.get(i) {
+                                    let pad_t = draw.padding[0] * scale_factor;
+                                    let pad_r = draw.padding[1] * scale_factor;
+                                    let pad_b = draw.padding[2] * scale_factor;
+                                    let pad_l = draw.padding[3] * scale_factor;
+                                    let slab_w_px = text_w + pad_r + pad_l;
+                                    let slab_h_px = text_h + pad_t + pad_b;
+                                    let w_ndc = slab_w_px / (width as f32 / 2.0);
+                                    let h_ndc = slab_h_px / (height as f32 / 2.0);
+                                    [w_ndc, h_ndc]
+                                } else {
+                                    [0.6, 0.1]
+                                }
+                            } else if has_explicit_size {
                                 [draw.size[0], draw.size[1]]
                             } else {
                                 [0.6, 0.1] // Default slab size
@@ -333,9 +384,6 @@ fn main() {
                     }
 
                     // ── Build text areas ─────────────────────────
-                    let font_size = (height as f32 * 0.035).max(14.0);
-                    let metrics = Metrics::new(font_size, font_size * 1.2);
-
                     let mut text_buffers: Vec<TextBuffer> = Vec::new();
                     let mut text_meta: Vec<(f32, f32, TextColor)> = Vec::new();
 
@@ -367,11 +415,20 @@ fn main() {
                             let left = px - text_w / 2.0;
                             let top = py - font_size / 2.0;
 
+                            // Use text_color if present (nested Text in Slab),
+                            // otherwise use draw.color for standalone Text primitives
                             let is_text_only = draw.primitive == Primitive::Text
                                 && draw.size[0] == 0.0
                                 && draw.size[1] == 0.0;
 
-                            let color = if is_text_only {
+                            let color = if let Some(tc) = draw.text_color {
+                                TextColor::rgba(
+                                    (tc[0] * 255.0) as u8,
+                                    (tc[1] * 255.0) as u8,
+                                    (tc[2] * 255.0) as u8,
+                                    (tc[3] * 255.0) as u8,
+                                )
+                            } else if is_text_only {
                                 TextColor::rgba(
                                     (draw.color[0] * 255.0) as u8,
                                     (draw.color[1] * 255.0) as u8,

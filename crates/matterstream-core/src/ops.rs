@@ -66,6 +66,10 @@ pub enum Op {
     BindResource(ResourceHandle),
     /// Set label text for the next draw call.
     SetLabel(String),
+    /// Set pixel padding [top, right, bottom, left] for the next draw call.
+    SetPadding([f32; 4]),
+    /// Set text color (RGBA) for nested text within a slab.
+    SetTextColor([f32; 4]),
     /// Push raw bytes to the stream.
     Push(Vec<u8>),
 }
@@ -78,6 +82,8 @@ pub struct Draw {
     pub color: [f32; 4],
     pub size: [f32; 2],
     pub label: Option<String>,
+    pub padding: [f32; 4],
+    pub text_color: Option<[f32; 4]>,
     pub used_fast_path: bool,
     pub transform_bytes: usize,
 }
