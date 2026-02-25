@@ -21,5 +21,6 @@ matterstream-core = { path = "crates/matterstream-core" }
 matterstream-compiler = { path = "crates/matterstream-compiler" }
 matterstream-renderer = { path = "crates/matterstream-renderer" }
 matterstream-loader = { path = "crates/matterstream-loader" }
+font-atlas-gen = { path = "crates/font-atlas-gen" }
 matterstream-packages = { path = "crates/matterstream-packages" }
 matterstream = { path = "crates/matterstream" }

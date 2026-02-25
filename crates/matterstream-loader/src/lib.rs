@@ -1,6 +1,10 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
-mod fonts;
+pub mod fonts;
+pub use fonts::FontAtlasBin;
+
+#[cfg(feature = "ttf")]
+pub use fonts::{FontAtlas, GlyphInfo};
 
 pub type LoaderResult<T> = Result<T>;
 pub type LoaderError = anyhow::Error;
