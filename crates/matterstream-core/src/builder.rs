@@ -47,6 +47,18 @@ impl StreamBuilder {
         self
     }
 
+    /// Adds a `SetPadding` op.
+    pub fn set_padding(mut self, padding: [f32; 4]) -> Self {
+        self.ops.push(Op::SetPadding(padding));
+        self
+    }
+
+    /// Adds a `SetTextColor` op.
+    pub fn set_text_color(mut self, color: [f32; 4]) -> Self {
+        self.ops.push(Op::SetTextColor(color));
+        self
+    }
+
     /// Adds a `SetMatrix` op.
     pub fn set_matrix(mut self, matrix: [f32; 16]) -> Self {
         self.ops.push(Op::SetMatrix(matrix));

@@ -27,6 +27,10 @@ pub struct MatterStream {
     pub stream: Vec<u8>,
     /// Pending label for the next draw call (consumed on draw).
     pending_label: Option<String>,
+    /// Pending padding for the next draw call (consumed on draw).
+    pending_padding: [f32; 4],
+    /// Pending text color for the next draw call (consumed on draw).
+    pending_text_color: Option<[f32; 4]>,
 }
 
 impl MatterStream {
@@ -41,6 +45,8 @@ impl MatterStream {
             draws: Vec::new(),
             stream: Vec::new(),
             pending_label: None,
+            pending_padding: [0.0; 4],
+            pending_text_color: None,
         }
     }
 
@@ -102,6 +108,12 @@ impl MatterStream {
                 Op::SetLabel(text) => {
                     self.pending_label = Some(text.clone());
                 }
+                Op::SetPadding(p) => {
+                    self.pending_padding = *p;
+                }
+                Op::SetTextColor(c) => {
+                    self.pending_text_color = Some(*c);
+                }
                 Op::BindZeroPage { .. } | Op::BindResource(_) => {
                     // Binding ops update execution context
                 }
@@ -119,7 +131,7 @@ impl MatterStream {
     }
 
     /// Execute a draw, resolving position via direct register index.
-    fn execute_draw(&self, header: &OpsHeader, primitive: &Primitive, position_rsi: usize, label: Option<String>) -> Option<Draw> {
+    fn execute_draw(&mut self, header: &OpsHeader, primitive: &Primitive, position_rsi: usize, label: Option<String>) -> Option<Draw> {
         // Resolve position from the RSI pointer — O(1) direct register access (Test A)
         let rsi = header.rsi_pointers.get(position_rsi)?;
 
@@ -133,9 +145,13 @@ impl MatterStream {
 
         let color = *self.registers.vec4.read(0);
 
-        // Read size from Vec3 bank register 1 (set by Op::SetSize)
+        // Read size from Vec3 bank register 1 (set by Op::SetSize), then reset
         let size_reg = self.registers.vec3.read(1);
         let size = [size_reg[0], size_reg[1]];
+        self.registers.vec3.write(1, [0.0, 0.0, 0.0]);
+
+        let padding = std::mem::replace(&mut self.pending_padding, [0.0; 4]);
+        let text_color = self.pending_text_color.take();
 
         // Translation fast-path check (Test D)
         if header.translation_only {
@@ -146,6 +162,8 @@ impl MatterStream {
                 color,
                 size,
                 label,
+                padding,
+                text_color,
                 used_fast_path: true,
                 transform_bytes: Vec3Bank::register_bytes(),
             })
@@ -157,6 +175,8 @@ impl MatterStream {
                 color,
                 size,
                 label,
+                padding,
+                text_color,
                 used_fast_path: false,
                 transform_bytes: Mat4Bank::register_bytes(),
             })

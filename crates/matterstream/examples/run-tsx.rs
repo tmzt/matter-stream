@@ -1,216 +1,82 @@
-//! Example: Load a .tsx file, compile it, and render in a native window.
+//! Example: Load a .tsx file, compile it, and render in a native window with GPU.
 //!
 //! Run with:
 //!   cargo run -p matterstream --example run-tsx -- crates/matterstream/examples/example.tsx
+//!   cargo run -p matterstream --example run-tsx -- crates/matterstream/examples/login_form.tsx
 //!   cargo run -p matterstream --example run-tsx -- --timeout 5 crates/matterstream/examples/login_form.tsx
 
 use std::env;
 use std::fs;
-use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use matterstream::{Compiler, Draw, MatterStream, OpsHeader, Primitive, Parser, RsiPointer, BankId};
-use softbuffer::{Context, Surface};
+use matterstream::{Compiler, MatterStream, OpsHeader, Parser, Primitive, RsiPointer, BankId};
+use wgpu::util::DeviceExt;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::Window;
 
+use glyphon::{
+    Attrs, Buffer as TextBuffer, Cache, Color as TextColor, Family, FontSystem, Metrics,
+    Resolution, Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+};
+
 // ---------------------------------------------------------------------------
-// Minimal 5x7 bitmap font for ASCII 32..127
-// Each glyph is 5 columns x 7 rows, packed as [u8; 5] (one byte per column,
-// bit 0 = top row). Only printable ASCII is covered.
+// GPU data types
 // ---------------------------------------------------------------------------
 
-const GLYPH_W: i32 = 5;
-const GLYPH_H: i32 = 7;
-const GLYPH_SPACING: i32 = 1;
-
-fn glyph_bitmap(ch: char) -> [u8; 5] {
-    match ch {
-        ' ' => [0x00, 0x00, 0x00, 0x00, 0x00],
-        '!' => [0x00, 0x00, 0x5F, 0x00, 0x00],
-        '"' => [0x00, 0x07, 0x00, 0x07, 0x00],
-        '#' => [0x14, 0x7F, 0x14, 0x7F, 0x14],
-        '$' => [0x24, 0x2A, 0x7F, 0x2A, 0x12],
-        '%' => [0x23, 0x13, 0x08, 0x64, 0x62],
-        '&' => [0x36, 0x49, 0x55, 0x22, 0x50],
-        '\'' => [0x00, 0x05, 0x03, 0x00, 0x00],
-        '(' => [0x00, 0x1C, 0x22, 0x41, 0x00],
-        ')' => [0x00, 0x41, 0x22, 0x1C, 0x00],
-        '*' => [0x14, 0x08, 0x3E, 0x08, 0x14],
-        '+' => [0x08, 0x08, 0x3E, 0x08, 0x08],
-        ',' => [0x00, 0x50, 0x30, 0x00, 0x00],
-        '-' => [0x08, 0x08, 0x08, 0x08, 0x08],
-        '.' => [0x00, 0x60, 0x60, 0x00, 0x00],
-        '/' => [0x20, 0x10, 0x08, 0x04, 0x02],
-        '0' => [0x3E, 0x51, 0x49, 0x45, 0x3E],
-        '1' => [0x00, 0x42, 0x7F, 0x40, 0x00],
-        '2' => [0x42, 0x61, 0x51, 0x49, 0x46],
-        '3' => [0x21, 0x41, 0x45, 0x4B, 0x31],
-        '4' => [0x18, 0x14, 0x12, 0x7F, 0x10],
-        '5' => [0x27, 0x45, 0x45, 0x45, 0x39],
-        '6' => [0x3C, 0x4A, 0x49, 0x49, 0x30],
-        '7' => [0x01, 0x71, 0x09, 0x05, 0x03],
-        '8' => [0x36, 0x49, 0x49, 0x49, 0x36],
-        '9' => [0x06, 0x49, 0x49, 0x29, 0x1E],
-        ':' => [0x00, 0x36, 0x36, 0x00, 0x00],
-        ';' => [0x00, 0x56, 0x36, 0x00, 0x00],
-        '<' => [0x08, 0x14, 0x22, 0x41, 0x00],
-        '=' => [0x14, 0x14, 0x14, 0x14, 0x14],
-        '>' => [0x00, 0x41, 0x22, 0x14, 0x08],
-        '?' => [0x02, 0x01, 0x51, 0x09, 0x06],
-        '@' => [0x32, 0x49, 0x79, 0x41, 0x3E],
-        'A' => [0x7E, 0x11, 0x11, 0x11, 0x7E],
-        'B' => [0x7F, 0x49, 0x49, 0x49, 0x36],
-        'C' => [0x3E, 0x41, 0x41, 0x41, 0x22],
-        'D' => [0x7F, 0x41, 0x41, 0x22, 0x1C],
-        'E' => [0x7F, 0x49, 0x49, 0x49, 0x41],
-        'F' => [0x7F, 0x09, 0x09, 0x09, 0x01],
-        'G' => [0x3E, 0x41, 0x49, 0x49, 0x7A],
-        'H' => [0x7F, 0x08, 0x08, 0x08, 0x7F],
-        'I' => [0x00, 0x41, 0x7F, 0x41, 0x00],
-        'J' => [0x20, 0x40, 0x41, 0x3F, 0x01],
-        'K' => [0x7F, 0x08, 0x14, 0x22, 0x41],
-        'L' => [0x7F, 0x40, 0x40, 0x40, 0x40],
-        'M' => [0x7F, 0x02, 0x0C, 0x02, 0x7F],
-        'N' => [0x7F, 0x04, 0x08, 0x10, 0x7F],
-        'O' => [0x3E, 0x41, 0x41, 0x41, 0x3E],
-        'P' => [0x7F, 0x09, 0x09, 0x09, 0x06],
-        'Q' => [0x3E, 0x41, 0x51, 0x21, 0x5E],
-        'R' => [0x7F, 0x09, 0x19, 0x29, 0x46],
-        'S' => [0x46, 0x49, 0x49, 0x49, 0x31],
-        'T' => [0x01, 0x01, 0x7F, 0x01, 0x01],
-        'U' => [0x3F, 0x40, 0x40, 0x40, 0x3F],
-        'V' => [0x1F, 0x20, 0x40, 0x20, 0x1F],
-        'W' => [0x3F, 0x40, 0x38, 0x40, 0x3F],
-        'X' => [0x63, 0x14, 0x08, 0x14, 0x63],
-        'Y' => [0x07, 0x08, 0x70, 0x08, 0x07],
-        'Z' => [0x61, 0x51, 0x49, 0x45, 0x43],
-        'a' => [0x20, 0x54, 0x54, 0x54, 0x78],
-        'b' => [0x7F, 0x48, 0x44, 0x44, 0x38],
-        'c' => [0x38, 0x44, 0x44, 0x44, 0x20],
-        'd' => [0x38, 0x44, 0x44, 0x48, 0x7F],
-        'e' => [0x38, 0x54, 0x54, 0x54, 0x18],
-        'f' => [0x08, 0x7E, 0x09, 0x01, 0x02],
-        'g' => [0x0C, 0x52, 0x52, 0x52, 0x3E],
-        'h' => [0x7F, 0x08, 0x04, 0x04, 0x78],
-        'i' => [0x00, 0x44, 0x7D, 0x40, 0x00],
-        'j' => [0x20, 0x40, 0x44, 0x3D, 0x00],
-        'k' => [0x7F, 0x10, 0x28, 0x44, 0x00],
-        'l' => [0x00, 0x41, 0x7F, 0x40, 0x00],
-        'm' => [0x7C, 0x04, 0x18, 0x04, 0x78],
-        'n' => [0x7C, 0x08, 0x04, 0x04, 0x78],
-        'o' => [0x38, 0x44, 0x44, 0x44, 0x38],
-        'p' => [0x7C, 0x14, 0x14, 0x14, 0x08],
-        'q' => [0x08, 0x14, 0x14, 0x18, 0x7C],
-        'r' => [0x7C, 0x08, 0x04, 0x04, 0x08],
-        's' => [0x48, 0x54, 0x54, 0x54, 0x20],
-        't' => [0x04, 0x3F, 0x44, 0x40, 0x20],
-        'u' => [0x3C, 0x40, 0x40, 0x20, 0x7C],
-        'v' => [0x1C, 0x20, 0x40, 0x20, 0x1C],
-        'w' => [0x3C, 0x40, 0x30, 0x40, 0x3C],
-        'x' => [0x44, 0x28, 0x10, 0x28, 0x44],
-        'y' => [0x0C, 0x50, 0x50, 0x50, 0x3C],
-        'z' => [0x44, 0x64, 0x54, 0x4C, 0x44],
-        _ => [0x00, 0x00, 0x00, 0x00, 0x00],
-    }
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 2],
 }
 
-/// Draw a text string into the buffer at pixel position (px, py), scaled by `scale`.
-fn draw_text(
-    buffer: &mut [u32],
-    width: u32,
-    height: u32,
-    text: &str,
-    px: i32,
-    py: i32,
-    scale: i32,
-    color: u32,
-) {
-    let char_w = (GLYPH_W + GLYPH_SPACING) * scale;
-    let total_w = text.len() as i32 * char_w - GLYPH_SPACING * scale;
-    // Center the text block on (px, py)
-    let start_x = px - total_w / 2;
-    let start_y = py - (GLYPH_H * scale) / 2;
-
-    for (ci, ch) in text.chars().enumerate() {
-        let bitmap = glyph_bitmap(ch);
-        let ox = start_x + ci as i32 * char_w;
-        for col in 0..GLYPH_W {
-            let bits = bitmap[col as usize];
-            for row in 0..GLYPH_H {
-                if bits & (1 << row) != 0 {
-                    // Draw a scale x scale block for each pixel
-                    for sy in 0..scale {
-                        for sx in 0..scale {
-                            let fx = ox + col * scale + sx;
-                            let fy = start_y + row * scale + sy;
-                            if fx >= 0 && fx < width as i32 && fy >= 0 && fy < height as i32 {
-                                buffer[(fy * width as i32 + fx) as usize] = color;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct SlabInstance {
+    position: [f32; 2],
+    size: [f32; 2],
+    color: [f32; 4],
 }
 
-/// Render a single draw call (slab rectangle and/or label text).
-fn render_draw(draw: &Draw, width: u32, height: u32, buffer: &mut [u32]) {
-    let cx = ((draw.position[0] + 1.0) / 2.0 * width as f32) as i32;
-    let cy = ((-draw.position[1] + 1.0) / 2.0 * height as f32) as i32;
+const QUAD_VERTICES: &[Vertex] = &[
+    Vertex { position: [0.0, 0.0] },
+    Vertex { position: [1.0, 0.0] },
+    Vertex { position: [1.0, 1.0] },
+    Vertex { position: [0.0, 1.0] },
+];
 
-    let r = (draw.color[0] * 255.0) as u32;
-    let g = (draw.color[1] * 255.0) as u32;
-    let b = (draw.color[2] * 255.0) as u32;
-    let a = (draw.color[3] * 255.0) as u32;
-    let color_u32 = (a << 24) | (r << 16) | (g << 8) | b;
+const QUAD_INDICES: &[u16] = &[0, 1, 2, 0, 2, 3];
 
-    // Draw slab rectangle (skip for pure Text primitives with no size)
-    let is_text_only = draw.primitive == Primitive::Text
-        && draw.size[0] == 0.0
-        && draw.size[1] == 0.0;
+const SHADER: &str = "
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
 
-    if !is_text_only {
-        let (sw, sh) = if draw.size[0] > 0.0 || draw.size[1] > 0.0 {
-            (
-                (draw.size[0] * width as f32) as i32,
-                (draw.size[1] * height as f32) as i32,
-            )
-        } else {
-            let w = (width as f32 * 0.6) as i32;
-            let h = (height as f32 * 0.1) as i32;
-            (w, h)
-        };
-
-        let x0 = cx - sw / 2;
-        let y0 = cy - sh / 2;
-        for py in y0..(y0 + sh) {
-            for px in x0..(x0 + sw) {
-                if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
-                    buffer[(py * width as i32 + px) as usize] = color_u32;
-                }
-            }
-        }
-    }
-
-    // Draw label text if present
-    if let Some(label) = &draw.label {
-        let scale = ((height as f32 * 0.004).max(1.0)) as i32;
-        // For text-only draws, use the draw color; for labeled slabs, use white
-        let text_color = if is_text_only {
-            color_u32
-        } else {
-            0xFFFFFFFF
-        };
-        draw_text(buffer, width, height, label, cx, cy, scale, text_color);
-    }
+@vertex
+fn vs_main(
+    @location(0) vertex_pos: vec2<f32>,
+    @location(1) inst_position: vec2<f32>,
+    @location(2) inst_size: vec2<f32>,
+    @location(3) inst_color: vec4<f32>,
+) -> VertexOutput {
+    var out: VertexOutput;
+    let pos = (vertex_pos - vec2(0.5, 0.5)) * inst_size + inst_position;
+    out.clip_position = vec4(pos.x, pos.y, 0.0, 1.0);
+    out.color = inst_color;
+    return out;
 }
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return in.color;
+}
+";
 
 fn main() {
+    // ── Arg parsing ──────────────────────────────────────────────
     let args: Vec<String> = env::args().collect();
     let mut timeout_s = None;
     let mut file_path = None;
@@ -255,6 +121,7 @@ fn main() {
         return;
     };
 
+    // ── Load & compile ───────────────────────────────────────────
     let code = match fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(e) => {
@@ -279,18 +146,139 @@ fn main() {
         }
     };
 
-    // --- Winit and Softbuffer setup ---
+    println!("Compiled {} ops from {}", compiled.ops.len(), file_path);
+
+    // ── Window ───────────────────────────────────────────────────
     let event_loop = EventLoop::new().unwrap();
     let window = Arc::new(
         event_loop
-            .create_window(Window::default_attributes().with_title("MatterStream Output"))
+            .create_window(
+                Window::default_attributes()
+                    .with_title(format!("MatterStream — {}", file_path))
+                    .with_inner_size(winit::dpi::LogicalSize::new(640, 480)),
+            )
             .unwrap(),
     );
 
-    let context = Context::new(window.clone()).unwrap();
-    let mut surface = Surface::new(&context, window.clone()).unwrap();
+    // ── wgpu setup ───────────────────────────────────────────────
+    let instance = wgpu::Instance::default();
+    let surface = instance.create_surface(window.clone()).unwrap();
 
-    // --- MatterStream setup ---
+    let adapter = pollster::block_on(
+        instance.request_adapter(&wgpu::RequestAdapterOptions {
+            compatible_surface: Some(&surface),
+            ..Default::default()
+        }),
+    )
+    .expect("No suitable GPU adapter found");
+
+    let (device, queue) = pollster::block_on(
+        adapter.request_device(&wgpu::DeviceDescriptor::default()),
+    )
+    .expect("Failed to create device");
+
+    let size = window.inner_size();
+    let mut config = surface
+        .get_default_config(&adapter, size.width.max(1), size.height.max(1))
+        .unwrap();
+    surface.configure(&device, &config);
+
+    // ── Slab render pipeline ─────────────────────────────────────
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("slab_shader"),
+        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+    });
+
+    let vertex_layout = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<Vertex>() as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[wgpu::VertexAttribute {
+            offset: 0,
+            shader_location: 0,
+            format: wgpu::VertexFormat::Float32x2,
+        }],
+    };
+
+    let instance_layout = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<SlabInstance>() as u64,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &[
+            wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: 8,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: 16,
+                shader_location: 3,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+        ],
+    };
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("slab_pipeline_layout"),
+        bind_group_layouts: &[],
+        push_constant_ranges: &[],
+    });
+
+    let slab_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("slab_pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[vertex_layout, instance_layout],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: config.format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    });
+
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("quad_vertices"),
+        contents: bytemuck::cast_slice(QUAD_VERTICES),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+
+    let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("quad_indices"),
+        contents: bytemuck::cast_slice(QUAD_INDICES),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+
+    // ── Glyphon text setup ───────────────────────────────────────
+    let mut font_system = FontSystem::new();
+    let mut swash_cache = SwashCache::new();
+    let glyphon_cache = Cache::new(&device);
+    let mut text_atlas = TextAtlas::new(&device, &queue, &glyphon_cache, config.format);
+    let mut text_renderer =
+        TextRenderer::new(&mut text_atlas, &device, wgpu::MultisampleState::default(), None);
+    let mut viewport = Viewport::new(&device, &glyphon_cache);
+
+    // ── Execute & render loop ────────────────────────────────────
+    let scale_factor = window.scale_factor() as f32;
     let mut stream = MatterStream::new();
     let header = OpsHeader::new(vec![RsiPointer::new(1, BankId::Vec3 as u8, 0)], false);
 
@@ -298,45 +286,261 @@ fn main() {
         .run(move |event, elwt| {
             elwt.set_control_flow(ControlFlow::Wait);
 
-            window.request_redraw();
-
             match event {
+                Event::WindowEvent {
+                    event: WindowEvent::Resized(new_size),
+                    ..
+                } => {
+                    config.width = new_size.width.max(1);
+                    config.height = new_size.height.max(1);
+                    surface.configure(&device, &config);
+                    window.request_redraw();
+                }
                 Event::WindowEvent {
                     event: WindowEvent::RedrawRequested,
                     ..
                 } => {
-                    // --- MatterStream Execution ---
+                    let width = config.width;
+                    let height = config.height;
+                    if width == 0 || height == 0 {
+                        return;
+                    }
+
+                    // Execute ops
                     smol::block_on(async {
-                        if let Err(errors) = stream.execute(&header, &compiled.ops).await {
-                            eprintln!("MatterStream execution failed with errors:");
-                            for error in errors {
-                                eprintln!("- {:?}", error);
-                            }
-                        }
+                        let _ = stream.execute(&header, &compiled.ops).await;
                     });
 
-                    // --- Rendering with Softbuffer ---
-                    let (width, height) = {
-                        let size = window.inner_size();
-                        (size.width, size.height)
-                    };
-                    if width == 0 || height == 0 { return; }
+                    // ── Pass 1: Measure text for auto-sizing ─────
+                    let font_size = (height as f32 * 0.035).max(14.0);
+                    let metrics = Metrics::new(font_size, font_size * 1.2);
 
-                    surface
-                        .resize(
-                            NonZeroU32::new(width).unwrap(),
-                            NonZeroU32::new(height).unwrap(),
+                    // Measure text dimensions for each draw with a label
+                    let mut text_measurements: Vec<Option<(f32, f32)>> = Vec::new();
+                    for draw in &stream.draws {
+                        if let Some(label) = &draw.label {
+                            let mut buffer = TextBuffer::new(&mut font_system, metrics);
+                            buffer.set_size(
+                                &mut font_system,
+                                Some(width as f32),
+                                Some(font_size * 2.0),
+                            );
+                            buffer.set_text(
+                                &mut font_system,
+                                label,
+                                &Attrs::new().family(Family::SansSerif),
+                                Shaping::Advanced,
+                            );
+                            buffer.shape_until_scroll(&mut font_system, false);
+
+                            let text_w: f32 =
+                                buffer.layout_runs().map(|run| run.line_w).sum();
+                            let line_h = font_size * 1.2;
+                            text_measurements.push(Some((text_w, line_h)));
+                        } else {
+                            text_measurements.push(None);
+                        }
+                    }
+
+                    // ── Pass 2: Build slab instances ────────────
+                    let mut slab_instances: Vec<SlabInstance> = Vec::new();
+
+                    for (i, draw) in stream.draws.iter().enumerate() {
+                        let is_text_only = draw.primitive == Primitive::Text
+                            && draw.size[0] == 0.0
+                            && draw.size[1] == 0.0;
+
+                        if !is_text_only {
+                            let has_padding = draw.padding.iter().any(|p| *p > 0.0);
+                            let has_explicit_size = draw.size[0] > 0.0 || draw.size[1] > 0.0;
+
+                            let size = if !has_explicit_size && has_padding {
+                                // Auto-size from text metrics + padding
+                                // Padding is in logical pixels; scale to physical
+                                if let Some(Some((text_w, text_h))) = text_measurements.get(i) {
+                                    let pad_t = draw.padding[0] * scale_factor;
+                                    let pad_r = draw.padding[1] * scale_factor;
+                                    let pad_b = draw.padding[2] * scale_factor;
+                                    let pad_l = draw.padding[3] * scale_factor;
+                                    let slab_w_px = text_w + pad_r + pad_l;
+                                    let slab_h_px = text_h + pad_t + pad_b;
+                                    let w_ndc = slab_w_px / (width as f32 / 2.0);
+                                    let h_ndc = slab_h_px / (height as f32 / 2.0);
+                                    [w_ndc, h_ndc]
+                                } else {
+                                    [0.6, 0.1]
+                                }
+                            } else if has_explicit_size {
+                                [draw.size[0], draw.size[1]]
+                            } else {
+                                [0.6, 0.1] // Default slab size
+                            };
+                            slab_instances.push(SlabInstance {
+                                position: [draw.position[0], draw.position[1]],
+                                size,
+                                color: draw.color,
+                            });
+                        }
+                    }
+
+                    // ── Build text areas ─────────────────────────
+                    let mut text_buffers: Vec<TextBuffer> = Vec::new();
+                    let mut text_meta: Vec<(f32, f32, TextColor)> = Vec::new();
+
+                    for draw in &stream.draws {
+                        if let Some(label) = &draw.label {
+                            let mut buffer = TextBuffer::new(&mut font_system, metrics);
+                            buffer.set_size(
+                                &mut font_system,
+                                Some(width as f32),
+                                Some(font_size * 2.0),
+                            );
+                            buffer.set_text(
+                                &mut font_system,
+                                label,
+                                &Attrs::new().family(Family::SansSerif),
+                                Shaping::Advanced,
+                            );
+                            buffer.shape_until_scroll(&mut font_system, false);
+
+                            // NDC to screen pixels
+                            let px =
+                                (draw.position[0] + 1.0) / 2.0 * width as f32;
+                            let py =
+                                (-draw.position[1] + 1.0) / 2.0 * height as f32;
+
+                            // Center text
+                            let text_w: f32 =
+                                buffer.layout_runs().map(|run| run.line_w).sum();
+                            let left = px - text_w / 2.0;
+                            let top = py - font_size / 2.0;
+
+                            // Use text_color if present (nested Text in Slab),
+                            // otherwise use draw.color for standalone Text primitives
+                            let is_text_only = draw.primitive == Primitive::Text
+                                && draw.size[0] == 0.0
+                                && draw.size[1] == 0.0;
+
+                            let color = if let Some(tc) = draw.text_color {
+                                TextColor::rgba(
+                                    (tc[0] * 255.0) as u8,
+                                    (tc[1] * 255.0) as u8,
+                                    (tc[2] * 255.0) as u8,
+                                    (tc[3] * 255.0) as u8,
+                                )
+                            } else if is_text_only {
+                                TextColor::rgba(
+                                    (draw.color[0] * 255.0) as u8,
+                                    (draw.color[1] * 255.0) as u8,
+                                    (draw.color[2] * 255.0) as u8,
+                                    (draw.color[3] * 255.0) as u8,
+                                )
+                            } else {
+                                TextColor::rgba(255, 255, 255, 255)
+                            };
+
+                            text_buffers.push(buffer);
+                            text_meta.push((left, top, color));
+                        }
+                    }
+
+                    let text_areas: Vec<TextArea> = text_buffers
+                        .iter()
+                        .zip(text_meta.iter())
+                        .map(|(buffer, (left, top, color))| TextArea {
+                            buffer,
+                            left: *left,
+                            top: *top,
+                            scale: 1.0,
+                            bounds: TextBounds {
+                                left: 0,
+                                top: 0,
+                                right: width as i32,
+                                bottom: height as i32,
+                            },
+                            default_color: *color,
+                            custom_glyphs: &[],
+                        })
+                        .collect();
+
+                    viewport.update(&queue, Resolution { width, height });
+
+                    text_renderer
+                        .prepare(
+                            &device,
+                            &queue,
+                            &mut font_system,
+                            &mut text_atlas,
+                            &viewport,
+                            text_areas,
+                            &mut swash_cache,
                         )
                         .unwrap();
 
-                    let mut buffer = surface.buffer_mut().unwrap();
-                    buffer.fill(0xFF181818);
+                    // ── GPU render ────────────────────────────────
+                    let frame = match surface.get_current_texture() {
+                        Ok(f) => f,
+                        Err(_) => return,
+                    };
+                    let view = frame
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+                    let mut encoder =
+                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("render_encoder"),
+                        });
 
-                    for draw in &stream.draws {
-                        render_draw(draw, width, height, &mut buffer);
+                    {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("main_pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                                        r: 0.09,
+                                        g: 0.09,
+                                        b: 0.11,
+                                        a: 1.0,
+                                    }),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            ..Default::default()
+                        });
+
+                        // Draw slabs
+                        if !slab_instances.is_empty() {
+                            let instance_buffer =
+                                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("instance_buffer"),
+                                    contents: bytemuck::cast_slice(&slab_instances),
+                                    usage: wgpu::BufferUsages::VERTEX,
+                                });
+
+                            pass.set_pipeline(&slab_pipeline);
+                            pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                            pass.set_vertex_buffer(1, instance_buffer.slice(..));
+                            pass.set_index_buffer(
+                                index_buffer.slice(..),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                            pass.draw_indexed(
+                                0..QUAD_INDICES.len() as u32,
+                                0,
+                                0..slab_instances.len() as u32,
+                            );
+                        }
+
+                        // Draw text
+                        text_renderer
+                            .render(&text_atlas, &viewport, &mut pass)
+                            .unwrap();
                     }
 
-                    buffer.present().unwrap();
+                    queue.submit(std::iter::once(encoder.finish()));
+                    frame.present();
                 }
                 Event::WindowEvent {
                     event: WindowEvent::CloseRequested,

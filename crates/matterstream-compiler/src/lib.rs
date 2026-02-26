@@ -14,6 +14,20 @@ use anyhow::{Result, anyhow};
 
 use matterstream_core::{Op, Primitive, OpsHeader, CompiledOps};
 
+#[derive(Clone, Copy)]
+enum LayoutDirection {
+    Horizontal,
+    Vertical,
+}
+
+struct LayoutContext {
+    direction: LayoutDirection,
+    origin: [f32; 2],
+    child_count: usize,
+    gap: f32,
+    child_size: [f32; 2],
+}
+
 /// A type alias for `Result` with `CompilerError` as the error type.
 pub type CompilerResult<T> = Result<T>;
 /// The error type for the `matterstream-compiler` crate, utilizing `anyhow::Error`.
@@ -78,17 +92,19 @@ struct MatterStreamVisitor {
     ops: Vec<Op>,
     /// Optional binder for resolving imported/bound components
     binder: Option<std::sync::Arc<matterstream_core::Binder>>,
+    /// Layout stack for nested HBox/VBox containers.
+    layout_stack: Vec<LayoutContext>,
 }
 
 impl MatterStreamVisitor {
     /// Creates a new, default instance of `MatterStreamVisitor` without a binder.
     fn new() -> Self {
-        Self { ops: Vec::new(), binder: None }
+        Self { ops: Vec::new(), binder: None, layout_stack: Vec::new() }
     }
 
     /// Creates a new visitor that shares the provided Binder.
     fn new_with_binder(binder: std::sync::Arc<matterstream_core::Binder>) -> Self {
-        Self { ops: Vec::new(), binder: Some(binder) }
+        Self { ops: Vec::new(), binder: Some(binder), layout_stack: Vec::new() }
     }
 
     /// Parses an RGBA hex string (e.g., "#RRGGBBAA") into an array of `f32` components.
@@ -117,6 +133,70 @@ impl MatterStreamVisitor {
             a as f32 / 255.0,
         ])
     }
+
+    /// Extract a string attribute value from a JSX element by name.
+    fn extract_string_attr<'b>(element: &JSXElement<'b>, attr_name: &str) -> Option<String> {
+        for attribute in &element.opening_element.attributes {
+            if let JSXAttributeItem::Attribute(attr) = attribute {
+                if let JSXAttributeName::Identifier(name) = &attr.name {
+                    if name.name == attr_name {
+                        if let Some(JSXAttributeValue::StringLiteral(str_literal)) = &attr.value {
+                            return Some(str_literal.value.to_string());
+                        } else if let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value {
+                            if let JSXExpression::StringLiteral(str_literal) = &container.expression {
+                                return Some(str_literal.value.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract a color attribute from a JSX element and parse it as RGBA.
+    fn extract_color_attr<'b>(element: &JSXElement<'b>, attr_name: &str) -> Option<[f32; 4]> {
+        let color_str = Self::extract_string_attr(element, attr_name)?;
+        Self::parse_rgba_hex(&color_str)
+    }
+
+    /// Find the first `<Text>` child element within a JSX element's children.
+    fn find_text_child<'b>(element: &'b JSXElement<'b>) -> Option<&'b JSXElement<'b>> {
+        for child in &element.children {
+            if let JSXChild::Element(child_elem) = child {
+                if let JSXElementName::Identifier(child_ident) = &child_elem.opening_element.name {
+                    if child_ident.name == "Text" {
+                        return Some(child_elem);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract a numeric attribute value from a JSX element by name.
+    fn extract_f32_attr<'b>(element: &JSXElement<'b>, attr_name: &str) -> Option<f32> {
+        for attribute in &element.opening_element.attributes {
+            if let JSXAttributeItem::Attribute(attr) = attribute {
+                if let JSXAttributeName::Identifier(name) = &attr.name {
+                    if name.name == attr_name {
+                        if let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value {
+                            if let JSXExpression::NumericLiteral(num) = &container.expression {
+                                return Some(num.value as f32);
+                            } else if let JSXExpression::UnaryExpression(unary) = &container.expression {
+                                if unary.operator == UnaryOperator::UnaryNegation {
+                                    if let Expression::NumericLiteral(lit) = &unary.argument {
+                                        return Some(-(lit.value as f32));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 impl<'a> Visit<'a> for MatterStreamVisitor {
@@ -131,6 +211,50 @@ impl<'a> Visit<'a> for MatterStreamVisitor {
     /// * `element` - The `JSXElement` to visit.
     fn visit_jsx_element(&mut self, element: &JSXElement<'a>) {
         if let JSXElementName::Identifier(ident) = &element.opening_element.name {
+            // ── Layout containers (HBox / VBox) ──────────────────
+            if ident.name == "HBox" || ident.name == "VBox" {
+                let direction = if ident.name == "HBox" {
+                    LayoutDirection::Horizontal
+                } else {
+                    LayoutDirection::Vertical
+                };
+                let mut x = Self::extract_f32_attr(element, "x").unwrap_or(0.0);
+                let mut y = Self::extract_f32_attr(element, "y").unwrap_or(0.0);
+                let gap = Self::extract_f32_attr(element, "gap").unwrap_or(0.1);
+
+                // If inside a parent layout, apply parent positioning
+                if let Some(ctx) = self.layout_stack.last_mut() {
+                    let idx = ctx.child_count as f32;
+                    match ctx.direction {
+                        LayoutDirection::Horizontal => {
+                            x += ctx.origin[0] + idx * (ctx.child_size[0] + ctx.gap);
+                            y += ctx.origin[1];
+                        }
+                        LayoutDirection::Vertical => {
+                            x += ctx.origin[0];
+                            y += ctx.origin[1] - idx * (ctx.child_size[1] + ctx.gap);
+                        }
+                    }
+                    ctx.child_count += 1;
+                }
+
+                self.ops.push(Op::PushState);
+                self.layout_stack.push(LayoutContext {
+                    direction,
+                    origin: [x, y],
+                    child_count: 0,
+                    gap,
+                    child_size: [0.2, 0.15],
+                });
+
+                visit::walk::walk_jsx_element(self, element);
+
+                self.layout_stack.pop();
+                self.ops.push(Op::PopState);
+                return;
+            }
+
+            // ── Drawable elements ────────────────────────────────
             // Determine if this identifier refers to a bound functional component
             let is_builtin = ident.name == "Slab" || ident.name == "Text";
             let is_component = if let Some(binder) = &self.binder {
@@ -139,87 +263,75 @@ impl<'a> Visit<'a> for MatterStreamVisitor {
                 is_builtin
             };
             if is_component {
-                let mut x_val = 0.0;
-                let mut y_val = 0.0;
-                let mut color_val: Option<[f32; 4]> = None;
-                let mut label_val: Option<String> = None;
+                let mut x_val = Self::extract_f32_attr(element, "x").unwrap_or(0.0);
+                let mut y_val = Self::extract_f32_attr(element, "y").unwrap_or(0.0);
+                let color_val = Self::extract_color_attr(element, "color");
 
-                for attribute in &element.opening_element.attributes {
-                    if let JSXAttributeItem::Attribute(attr) = attribute {
-                        if let JSXAttributeName::Identifier(name) = &attr.name {
-                            if name.name == "x" {
-                                if let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value {
-                                    if let JSXExpression::NumericLiteral(num_literal) = &container.expression {
-                                        x_val = num_literal.value as f32;
-                                    } else if let JSXExpression::UnaryExpression(unary) = &container.expression {
-                                        if unary.operator == UnaryOperator::UnaryNegation {
-                                            if let Expression::NumericLiteral(lit) = &unary.argument {
-                                                x_val = -(lit.value as f32);
-                                            }
-                                        }
-                                    }
-                                }
-                            } else if name.name == "y" {
-                                if let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value {
-                                    if let JSXExpression::NumericLiteral(num_literal) = &container.expression {
-                                        y_val = num_literal.value as f32;
-                                    } else if let JSXExpression::UnaryExpression(unary) = &container.expression {
-                                        if unary.operator == UnaryOperator::UnaryNegation {
-                                            if let Expression::NumericLiteral(lit) = &unary.argument {
-                                                y_val = -(lit.value as f32);
-                                            }
-                                        }
-                                    }
-                                }
-                            } else if name.name == "label" {
-                                if let Some(JSXAttributeValue::StringLiteral(str_literal)) = &attr.value {
-                                    label_val = Some(str_literal.value.to_string());
-                                } else if let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value {
-                                    if let JSXExpression::StringLiteral(str_literal) = &container.expression {
-                                        label_val = Some(str_literal.value.to_string());
-                                    }
-                                }
-                            } else if name.name == "color" {
-                                let color_string_option = if let Some(JSXAttributeValue::StringLiteral(str_literal)) = &attr.value {
-                                    Some(&str_literal.value)
-                                } else if let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value {
-                                    if let JSXExpression::StringLiteral(str_literal) = &container.expression {
-                                        Some(&str_literal.value)
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                };
-
-                                if let Some(color_str) = color_string_option {
-                                    if let Some(parsed_color) = Self::parse_rgba_hex(color_str) {
-                                        color_val = Some(parsed_color);
-                                    } else {
-                                        eprintln!("Warning: 'color' attribute has invalid hex format '{}'. Defaulting to white.", color_str);
-                                    }
-                                } else {
-                                    eprintln!("Warning: 'color' attribute is not a valid string literal or expression container. Defaulting to white.");
-                                }
-                            }
+                // Apply layout context positioning
+                if let Some(ctx) = self.layout_stack.last_mut() {
+                    let idx = ctx.child_count as f32;
+                    match ctx.direction {
+                        LayoutDirection::Horizontal => {
+                            x_val += ctx.origin[0] + idx * (ctx.child_size[0] + ctx.gap);
+                            y_val += ctx.origin[1];
                         }
+                        LayoutDirection::Vertical => {
+                            x_val += ctx.origin[0];
+                            y_val += ctx.origin[1] - idx * (ctx.child_size[1] + ctx.gap);
+                        }
+                    }
+                    ctx.child_count += 1;
+                }
+
+                let is_slab = ident.name == "Slab";
+                let primitive = if ident.name == "Text" { Primitive::Text } else { Primitive::Slab };
+
+                // For Slab elements, check for nested <Text> child
+                let mut absorbed_text = false;
+                if is_slab {
+                    if let Some(text_child) = Self::find_text_child(element) {
+                        // Extract label and color from the nested <Text>
+                        if let Some(text_color) = Self::extract_color_attr(text_child, "color") {
+                            self.ops.push(Op::SetTextColor(text_color));
+                        }
+                        if let Some(label) = Self::extract_string_attr(text_child, "label") {
+                            self.ops.push(Op::SetLabel(label));
+                        }
+                        // Extract padding from the Slab
+                        if let Some(padding) = Self::extract_f32_attr(element, "padding") {
+                            self.ops.push(Op::SetPadding([padding, padding, padding, padding]));
+                        }
+                        absorbed_text = true;
                     }
                 }
 
+                // For Text elements, emit label from their own attributes
+                if !is_slab {
+                    if let Some(label) = Self::extract_string_attr(element, "label") {
+                        self.ops.push(Op::SetLabel(label));
+                    }
+                }
+
+                // Emit color
                 if let Some(color) = color_val {
                     self.ops.push(Op::SetColor(color));
                 } else {
                     self.ops.push(Op::SetColor([1.0, 1.0, 1.0, 1.0]));
                 }
-                let primitive = match ident.name.as_str() {
-                    "Text" => Primitive::Text,
-                    _ => Primitive::Slab,
-                };
-                if let Some(label) = label_val {
-                    self.ops.push(Op::SetLabel(label));
+
+                // Emit SetSize if width/height attributes are specified
+                let width_val = Self::extract_f32_attr(element, "width");
+                let height_val = Self::extract_f32_attr(element, "height");
+                if let (Some(w), Some(h)) = (width_val, height_val) {
+                    self.ops.push(Op::SetSize([w, h]));
                 }
                 self.ops.push(Op::SetTrans([x_val, y_val, 0.0]));
                 self.ops.push(Op::Draw { primitive, position_rsi: 0 });
+
+                // If we absorbed the Text child, don't walk children
+                if absorbed_text {
+                    return;
+                }
             }
         }
 
