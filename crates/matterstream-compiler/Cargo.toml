@@ -1,0 +1,15 @@
+[package]
+name = "matterstream-compiler"
+version = "0.1.0"
+edition = "2021"
+description = "MatterStream TSX compiler using oxc"
+license = "Apache-2.0"
+
+[dependencies]
+matterstream-core = { workspace = true }
+oxc_parser = { workspace = true }
+oxc_allocator = { workspace = true }
+oxc_ast = { workspace = true }
+oxc_span = { workspace = true }
+oxc_syntax = { workspace = true }
+anyhow = "1.0"

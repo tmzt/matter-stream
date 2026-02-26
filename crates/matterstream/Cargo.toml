@@ -1,0 +1,23 @@
+[package]
+name = "matterstream"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+matterstream-core = { path = "../matterstream-core" }
+matterstream-compiler = { path = "../matterstream-compiler" }
+matterstream-loader = { path = "../matterstream-loader" }
+matterstream-renderer = { path = "../matterstream-renderer" }
+matterstream-parser = { path = "../matterstream-parser" }
+matterstream-processor = { path = "../matterstream-processor" }
+matterstream-packages = { path = "../matterstream-packages" }
+smol.workspace = true
+winit.workspace = true
+softbuffer.workspace = true
+
+[dev-dependencies]
+wgpu = { workspace = true }
+glyphon = { workspace = true }
+pollster = { workspace = true }
+bytemuck = { workspace = true }
+

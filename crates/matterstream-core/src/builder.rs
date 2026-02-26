@@ -29,6 +29,36 @@ impl StreamBuilder {
         self
     }
 
+    /// Adds a `SetColor` op.
+    pub fn set_color(mut self, color: [f32; 4]) -> Self {
+        self.ops.push(Op::SetColor(color));
+        self
+    }
+
+    /// Adds a `SetSize` op.
+    pub fn set_size(mut self, size: [f32; 2]) -> Self {
+        self.ops.push(Op::SetSize(size));
+        self
+    }
+
+    /// Adds a `SetLabel` op.
+    pub fn set_label(mut self, text: impl Into<String>) -> Self {
+        self.ops.push(Op::SetLabel(text.into()));
+        self
+    }
+
+    /// Adds a `SetPadding` op.
+    pub fn set_padding(mut self, padding: [f32; 4]) -> Self {
+        self.ops.push(Op::SetPadding(padding));
+        self
+    }
+
+    /// Adds a `SetTextColor` op.
+    pub fn set_text_color(mut self, color: [f32; 4]) -> Self {
+        self.ops.push(Op::SetTextColor(color));
+        self
+    }
+
     /// Adds a `SetMatrix` op.
     pub fn set_matrix(mut self, matrix: [f32; 16]) -> Self {
         self.ops.push(Op::SetMatrix(matrix));

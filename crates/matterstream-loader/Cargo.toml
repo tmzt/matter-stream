@@ -1,0 +1,12 @@
+[package]
+name = "matterstream-loader"
+version = "0.1.0"
+edition = "2021"
+description = "MatterStream font and image resource loading"
+license = "Apache-2.0"
+
+[dependencies]
+matterstream-core = { workspace = true }
+rusttype = { workspace = true }
+image = { workspace = true }
+anyhow = "1.0"

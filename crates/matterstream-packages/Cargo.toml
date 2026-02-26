@@ -1,0 +1,10 @@
+[package]
+name = "matterstream-packages"
+version = "0.1.0"
+edition = "2021"
+description = "MatterStream static component implementations"
+license = "Apache-2.0"
+
+[dependencies]
+matterstream-core = { workspace = true }
+dashmap = "5.5"
