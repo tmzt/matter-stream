@@ -1,0 +1,19 @@
+[package]
+name = "matterstream-loader-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+matterstream-loader = { path = ".." }
+
+[[bin]]
+name = "fuzz_font_atlas"
+path = "fuzz_targets/fuzz_font_atlas.rs"
+doc = false
+
+[workspace]

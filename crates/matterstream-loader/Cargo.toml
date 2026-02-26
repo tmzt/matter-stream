@@ -7,6 +7,9 @@ license = "Apache-2.0"
 
 [dependencies]
 matterstream-core = { workspace = true }
-rusttype = { workspace = true }
-image = { workspace = true }
 anyhow = "1.0"
+rusttype = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+
+[features]
+ttf = ["dep:rusttype", "dep:image"]
