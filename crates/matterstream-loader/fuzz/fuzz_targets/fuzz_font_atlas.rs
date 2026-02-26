@@ -23,6 +23,7 @@ fuzz_target!(|data: &[u8]| {
         Err(FontAtlasError::TooShort(_)) => {}
         Err(FontAtlasError::BadMagic(_)) => {}
         Err(FontAtlasError::UnsupportedVersion(_)) => {}
+        Err(FontAtlasError::UnsupportedFontType(_)) => {}
         Err(FontAtlasError::ZeroGlyphDimension) => {}
         Err(FontAtlasError::UnknownPixelFormat(_)) => {}
         Err(FontAtlasError::DataLengthMismatch { .. }) => {}

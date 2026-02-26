@@ -94,6 +94,9 @@ impl FontAtlasBin {
             return Err(FontAtlasError::UnsupportedVersion(version));
         }
         let font_type = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        if font_type != FONT_TYPE_MONOSPACED {
+            return Err(FontAtlasError::UnsupportedFontType(font_type));
+        }
         let atlas_rows = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
         let atlas_cols = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
         let glyph_rows = u32::from_le_bytes(bytes[20..24].try_into().unwrap());
@@ -154,6 +157,7 @@ pub enum FontAtlasError {
     TooShort(usize),
     BadMagic([u8; 4]),
     UnsupportedVersion(u32),
+    UnsupportedFontType(u32),
     ZeroGlyphDimension,
     UnknownPixelFormat([u8; 4]),
     DataLengthMismatch { expected: u64, actual: u64 },
@@ -165,6 +169,7 @@ impl core::fmt::Display for FontAtlasError {
             Self::TooShort(n) => write!(f, "buffer too short ({n} bytes, need at least 32)"),
             Self::BadMagic(m) => write!(f, "bad magic: {:?}", m),
             Self::UnsupportedVersion(v) => write!(f, "unsupported version: {v}"),
+            Self::UnsupportedFontType(t) => write!(f, "unsupported font type: {t} (only monospaced is supported)"),
             Self::ZeroGlyphDimension => write!(f, "glyph_rows and glyph_cols must be non-zero"),
             Self::UnknownPixelFormat(p) => write!(f, "unknown pixel format: {:?}", p),
             Self::DataLengthMismatch { expected, actual } => {
@@ -265,6 +270,22 @@ mod tests {
         bytes[4..8].copy_from_slice(&99u32.to_le_bytes());
         let err = FontAtlasBin::from_bytes(&bytes).unwrap_err();
         assert_eq!(err, FontAtlasError::UnsupportedVersion(99));
+    }
+
+    #[test]
+    fn from_bytes_non_monospaced() {
+        let mut bytes = sample_bin().to_bytes();
+        bytes[8..12].copy_from_slice(&2u32.to_le_bytes()); // font_type = 2
+        let err = FontAtlasBin::from_bytes(&bytes).unwrap_err();
+        assert_eq!(err, FontAtlasError::UnsupportedFontType(2));
+    }
+
+    #[test]
+    fn from_bytes_zero_font_type() {
+        let mut bytes = sample_bin().to_bytes();
+        bytes[8..12].copy_from_slice(&0u32.to_le_bytes()); // font_type = 0
+        let err = FontAtlasBin::from_bytes(&bytes).unwrap_err();
+        assert_eq!(err, FontAtlasError::UnsupportedFontType(0));
     }
 
     #[test]
