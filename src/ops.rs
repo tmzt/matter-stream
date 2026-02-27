@@ -1,5 +1,7 @@
 //! Op definitions, OpsHeader, and RSI pointers.
 
+use crate::dmove::DmoveDescriptor;
+use crate::fqa::{Fqa, FourCC, Ordinal};
 use crate::tier3::ResourceHandle;
 
 /// Register Set Index pointer — locates a value across the tier/bank/index space.
@@ -76,6 +78,19 @@ pub enum Op {
     BindResource(ResourceHandle),
     /// Push a raw byte payload onto the stream.
     Push(Vec<u8>),
+
+    // -- VM_SPEC v0.1.0 ops --
+
+    /// Resolve an FQA through the addressing pipeline.
+    ResolveFqa(Fqa),
+    /// Trigger arena SYNC (swap active/staging).
+    Sync,
+    /// Execute RPN bytecode.
+    ExecRpn(Vec<u8>),
+    /// Execute a batch of DMOVE descriptors.
+    Dmove(Vec<DmoveDescriptor>),
+    /// Load an archive member by ordinal + FourCC.
+    LoadArchiveMember { ordinal: Ordinal, fourcc: FourCC },
 }
 
 /// Result of a Draw execution — captures how position was resolved.
