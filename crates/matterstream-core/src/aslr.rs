@@ -93,7 +93,10 @@ impl AsymTable {
         }
         let generation = u32::from_le_bytes(data[0..4].try_into().unwrap());
         let count = u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize;
-        let expected_len = 8 + count * 8;
+        let expected_len = count
+            .checked_mul(8)
+            .and_then(|n| n.checked_add(8))
+            .ok_or(AsymError::TruncatedData)?;
         if data.len() < expected_len {
             return Err(AsymError::TruncatedData);
         }

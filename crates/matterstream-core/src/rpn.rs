@@ -91,6 +91,7 @@ pub enum RpnError {
     StackOverflow,
     TypeMismatch,
     DivisionByZero,
+    CycleLimitExceeded,
     InvalidOpcode(u8),
     TruncatedBytecode,
     ArenaError(String),
@@ -108,6 +109,7 @@ impl fmt::Display for RpnError {
             RpnError::TruncatedBytecode => write!(f, "RPN truncated bytecode"),
             RpnError::ArenaError(e) => write!(f, "RPN arena error: {}", e),
             RpnError::CallStackUnderflow => write!(f, "RPN call stack underflow"),
+            RpnError::CycleLimitExceeded => write!(f, "RPN cycle limit exceeded"),
         }
     }
 }
@@ -118,6 +120,7 @@ pub struct RpnVm {
     pub call_stack: Vec<usize>,
     pub pc: usize,
     pub max_stack_depth: usize,
+    pub max_cycles: usize,
     pub synced: bool,
 }
 
@@ -128,6 +131,7 @@ impl RpnVm {
             call_stack: Vec::new(),
             pc: 0,
             max_stack_depth: 256,
+            max_cycles: 1_000_000,
             synced: false,
         }
     }
@@ -182,8 +186,13 @@ impl RpnVm {
     ) -> Result<(), RpnError> {
         self.pc = 0;
         self.synced = false;
+        let mut cycles = 0usize;
 
         while self.pc < bytecode.len() {
+            cycles += 1;
+            if cycles > self.max_cycles {
+                return Err(RpnError::CycleLimitExceeded);
+            }
             self.step(bytecode, arenas)?;
         }
 
