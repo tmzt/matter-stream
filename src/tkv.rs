@@ -238,7 +238,9 @@ fn decode_entry(data: &[u8], pos: usize) -> Result<(TkvEntry, usize), TkvError> 
         }
         TkvType::Table => {
             let count = read_u32_le(data, val_pos)? as usize;
-            let mut sub_entries = Vec::with_capacity(count);
+            // Cap pre-allocation to remaining data length to avoid OOM from untrusted counts
+            let remaining = data.len().saturating_sub(val_pos + 4);
+            let mut sub_entries = Vec::with_capacity(count.min(remaining));
             let mut sub_pos = val_pos + 4;
             for _ in 0..count {
                 let (entry, consumed) = decode_entry(data, sub_pos)?;
