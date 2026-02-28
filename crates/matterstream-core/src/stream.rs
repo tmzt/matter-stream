@@ -12,6 +12,7 @@ use crate::tier0::GlobalUniforms;
 use crate::tier1::{BankId, Mat4Bank, Vec3Bank};
 use crate::tier2::ZeroPage;
 use crate::tier3::ResourceTable;
+use crate::ui_vm::UiDrawCmd;
 
 #[derive(Debug)]
 pub enum StreamError {
@@ -41,6 +42,9 @@ pub struct MatterStream {
     /// Pending text color for the next draw call (consumed on draw).
     pending_text_color: Option<[f32; 4]>,
 
+    /// UI draw commands collected from RPN VM execution.
+    pub ui_draws: Vec<UiDrawCmd>,
+
     // VM_SPEC v0.1.0 fields
     pub arenas: TripleArena,
     pub resolver: AddressResolver,
@@ -62,6 +66,7 @@ impl MatterStream {
             pending_label: None,
             pending_padding: [0.0; 4],
             pending_text_color: None,
+            ui_draws: Vec::new(),
             arenas: TripleArena::new(),
             resolver: AddressResolver::new(),
             rpn_vm: RpnVm::new(),
@@ -73,6 +78,7 @@ impl MatterStream {
     pub async fn execute(&mut self, header: &OpsHeader, ops: &[Op]) -> Result<(), Vec<StreamError>> {
         self.draws.clear();
         self.stream.clear();
+        self.ui_draws.clear();
         let mut errors = Vec::new();
 
         // Step 1: Hydrate RSI pointers into registers
@@ -152,6 +158,7 @@ impl MatterStream {
                     if let Err(e) = self.rpn_vm.execute(bytecode, &mut self.arenas) {
                         errors.push(StreamError::RpnError(e.to_string()));
                     }
+                    self.ui_draws.append(&mut self.rpn_vm.ui_draws);
                 }
                 Op::Dmove(descriptors) => {
                     if let Err(e) = DmoveEngine::execute(&mut self.arenas, descriptors) {

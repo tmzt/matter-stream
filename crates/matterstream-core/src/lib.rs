@@ -33,6 +33,7 @@ pub mod archive;
 pub mod scl;
 pub mod keyless;
 pub mod rpn;
+pub mod ui_vm;
 
 pub use builder::StreamBuilder;
 pub use ops::{CompiledOps, Draw, Op, OpsHeader, Primitive, RsiPointer};
@@ -53,3 +54,4 @@ pub use ova::{Ova, ArenaId};
 pub use arena::TripleArena;
 pub use scl::Scl;
 pub use rpn::RpnVm;
+pub use ui_vm::{UiDrawCmd, UiDrawState, render_ui_draws, rgba};
