@@ -7,9 +7,9 @@
 //! - Control flow: Jmp, JmpIf, Halt, comparisons
 //! - UI draw opcodes (0x40–0x48) for 2D rendering
 
-use crate::arena::TripleArena;
-use crate::fqa::Fqa;
-use crate::ova::Ova;
+use matterstream_vm_arena::arena::TripleArena;
+use matterstream_vm_addressing::fqa::Fqa;
+use matterstream_vm_addressing::ova::Ova;
 use crate::ui_vm::{UiDrawCmd, UiDrawState, UI_DRAW_CMD_MAX, UI_STATE_STACK_MAX};
 use std::collections::HashMap;
 use std::fmt;

@@ -1,7 +1,7 @@
-//! Op definitions for the MatterStream ISA.
+//! Op definitions, OpsHeader, and RSI pointers.
 
-use crate::dmove::DmoveDescriptor;
-use crate::fqa::{Fqa, FourCC, Ordinal};
+use matterstream_vm_arena::dmove::DmoveDescriptor;
+use matterstream_vm_addressing::fqa::{Fqa, FourCC, Ordinal};
 use crate::tier3::ResourceHandle;
 
 /// Register State Index pointer — resolves to a specific register in a bank/tier.

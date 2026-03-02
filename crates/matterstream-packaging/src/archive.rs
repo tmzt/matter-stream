@@ -1,6 +1,6 @@
 //! AR archive container: standard Unix ar format with Base60 ordinals + FourCC.
 
-use crate::fqa::{FourCC, Ordinal, OrdinalError};
+use matterstream_vm_addressing::fqa::{FourCC, Ordinal, OrdinalError};
 use crate::tkv::{TkvDocument, TkvError};
 use std::fmt;
 

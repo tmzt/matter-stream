@@ -1,0 +1,9 @@
+[package]
+name = "matterstream-packaging"
+version = "0.1.0"
+edition = "2021"
+description = "TKV binary metadata and AR archive container"
+license = "Apache-2.0"
+
+[dependencies]
+matterstream-vm-addressing = { workspace = true }

@@ -1,6 +1,6 @@
 //! TKV (Type, Key-Value) binary metadata format.
 
-use crate::fqa::Fqa;
+use matterstream_vm_addressing::fqa::Fqa;
 use std::collections::HashMap;
 use std::fmt;
 

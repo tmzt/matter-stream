@@ -1,6 +1,6 @@
 //! A builder API for constructing `Op` sequences.
 
-use crate::fqa::Fqa;
+use matterstream_vm_addressing::fqa::Fqa;
 use crate::ops::{Op, Primitive};
 use crate::tier3::ResourceHandle;
 

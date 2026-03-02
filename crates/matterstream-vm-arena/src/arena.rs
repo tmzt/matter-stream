@@ -1,6 +1,6 @@
 //! Triple-Arena memory: Nursery (immortal) + Dynamic A/B ping-pong + SYNC.
 
-use crate::ova::{ArenaId, Ova, MAX_GEN, MAX_OFFSET};
+use matterstream_vm_addressing::ova::{ArenaId, Ova, MAX_GEN, MAX_OFFSET};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

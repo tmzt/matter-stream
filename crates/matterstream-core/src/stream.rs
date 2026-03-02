@@ -1,9 +1,9 @@
 //! MatterStream executor — hydrates ops, drives execution lifecycle.
 
-use crate::addressing::AddressResolver;
-use crate::arena::TripleArena;
-use crate::dmove::DmoveEngine;
-use crate::keyless::KeylessPolicy;
+use matterstream_vm_addressing::addressing::AddressResolver;
+use matterstream_vm_arena::arena::TripleArena;
+use matterstream_vm_arena::dmove::DmoveEngine;
+use matterstream_vm_scl::keyless::KeylessPolicy;
 use crate::ops::{Draw, Op, OpsHeader, Primitive};
 use crate::registers::RegisterFile;
 use crate::rpn::RpnVm;

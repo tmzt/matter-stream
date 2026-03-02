@@ -4,7 +4,7 @@
 //! Secrets never enter guest logic -- DMOVE writes directly.
 
 use crate::arena::{ArenaError, TripleArena};
-use crate::ova::Ova;
+use matterstream_vm_addressing::ova::Ova;
 use std::fmt;
 
 /// Source of data for a DMOVE transfer.

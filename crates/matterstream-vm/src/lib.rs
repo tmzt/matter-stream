@@ -5,5 +5,6 @@ pub mod host;
 pub mod hooks;
 pub mod gpu;
 
-#[cfg(feature = "tsx")]
-pub mod vm_compiler;
+// vm_compiler module requires the tsx feature (matterstream-compiler crate)
+// #[cfg(feature = "tsx")]
+// pub mod vm_compiler;
