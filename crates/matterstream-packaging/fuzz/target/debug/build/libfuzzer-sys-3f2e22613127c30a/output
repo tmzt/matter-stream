@@ -1,0 +1,107 @@
+cargo:rerun-if-env-changed=CUSTOM_LIBFUZZER_PATH
+cargo:rerun-if-changed=libfuzzer/FuzzerDataFlowTrace.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerExtFunctionsDlsym.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerUtil.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerUtilWindows.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerTracePC.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerSHA1.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerExtraCountersDarwin.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerLoop.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerCrossOver.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerInterceptors.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerExtraCounters.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerDriver.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerFork.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerUtilDarwin.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerIOPosix.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerExtFunctionsWindows.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerIO.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerUtilLinux.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerExtFunctionsWeak.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerExtraCountersWindows.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerIOWindows.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerMerge.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerMain.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerUtilPosix.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerMutate.cpp
+cargo:rerun-if-changed=libfuzzer/FuzzerUtilFuchsia.cpp
+OUT_DIR = Some(/writable/WorktreesNewWritable/matter-stream/crates/matterstream-packaging/fuzz/target/debug/build/libfuzzer-sys-3f2e22613127c30a/out)
+OPT_LEVEL = Some(0)
+TARGET = Some(aarch64-unknown-linux-musl)
+CARGO_ENCODED_RUSTFLAGS = Some()
+HOST = Some(aarch64-unknown-linux-musl)
+cargo:rerun-if-env-changed=CXX_aarch64-unknown-linux-musl
+CXX_aarch64-unknown-linux-musl = None
+cargo:rerun-if-env-changed=CXX_aarch64_unknown_linux_musl
+CXX_aarch64_unknown_linux_musl = None
+cargo:rerun-if-env-changed=HOST_CXX
+HOST_CXX = None
+cargo:rerun-if-env-changed=CXX
+CXX = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+RUSTC_WRAPPER = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+DEBUG = Some(true)
+CARGO_CFG_TARGET_FEATURE = Some(neon)
+cargo:rerun-if-env-changed=CXXFLAGS
+CXXFLAGS = None
+cargo:rerun-if-env-changed=HOST_CXXFLAGS
+HOST_CXXFLAGS = None
+cargo:rerun-if-env-changed=CXXFLAGS_aarch64_unknown_linux_musl
+CXXFLAGS_aarch64_unknown_linux_musl = None
+cargo:rerun-if-env-changed=CXXFLAGS_aarch64-unknown-linux-musl
+CXXFLAGS_aarch64-unknown-linux-musl = None
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+cargo:rerun-if-env-changed=AR_aarch64-unknown-linux-musl
+AR_aarch64-unknown-linux-musl = None
+cargo:rerun-if-env-changed=AR_aarch64_unknown_linux_musl
+AR_aarch64_unknown_linux_musl = None
+cargo:rerun-if-env-changed=HOST_AR
+HOST_AR = None
+cargo:rerun-if-env-changed=AR
+AR = None
+cargo:rerun-if-env-changed=ARFLAGS
+ARFLAGS = None
+cargo:rerun-if-env-changed=HOST_ARFLAGS
+HOST_ARFLAGS = None
+cargo:rerun-if-env-changed=ARFLAGS_aarch64_unknown_linux_musl
+ARFLAGS_aarch64_unknown_linux_musl = None
+cargo:rerun-if-env-changed=ARFLAGS_aarch64-unknown-linux-musl
+ARFLAGS_aarch64-unknown-linux-musl = None
+cargo:rustc-link-lib=static=fuzzer
+cargo:rustc-link-search=native=/writable/WorktreesNewWritable/matter-stream/crates/matterstream-packaging/fuzz/target/debug/build/libfuzzer-sys-3f2e22613127c30a/out
+cargo:rerun-if-env-changed=CXXSTDLIB_aarch64-unknown-linux-musl
+CXXSTDLIB_aarch64-unknown-linux-musl = None
+cargo:rerun-if-env-changed=CXXSTDLIB_aarch64_unknown_linux_musl
+CXXSTDLIB_aarch64_unknown_linux_musl = None
+cargo:rerun-if-env-changed=HOST_CXXSTDLIB
+HOST_CXXSTDLIB = None
+cargo:rerun-if-env-changed=CXXSTDLIB
+CXXSTDLIB = None
+cargo:rustc-link-lib=stdc++

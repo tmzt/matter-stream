@@ -1,0 +1,32 @@
+[package]
+name = "matterstream-vm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+matterstream-vm-addressing = { workspace = true }
+matterstream-vm-arena = { workspace = true }
+matterstream-core = { workspace = true, optional = true }
+matterstream-compiler = { workspace = true, optional = true }
+bytemuck = { workspace = true }
+
+[features]
+tsx = ["matterstream-core", "matterstream-compiler"]
+
+[dev-dependencies]
+wgpu = { workspace = true }
+winit = { workspace = true }
+pollster = { workspace = true }
+matterstream-packaging = { workspace = true }
+
+[[example]]
+name = "connect4"
+
+[[example]]
+name = "game2048"
+
+[[example]]
+name = "flappy_bird"
+
+[[example]]
+name = "package_demo"
