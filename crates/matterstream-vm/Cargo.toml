@@ -10,6 +10,7 @@ bytemuck = { workspace = true }
 
 [dev-dependencies]
 matterstream-packaging = { workspace = true }
+matterstream-vm-asm = { workspace = true }
 
 [[example]]
 name = "connect4"
