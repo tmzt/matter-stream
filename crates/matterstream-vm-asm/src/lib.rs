@@ -199,6 +199,61 @@ impl Asm {
     pub fn frame_count(&mut self) -> &mut Self { self.op(RpnOp::FrameCount) }
     pub fn rand(&mut self) -> &mut Self { self.op(RpnOp::Rand) }
 
+    // ── Float arithmetic helpers ──
+
+    pub fn fadd(&mut self) -> &mut Self { self.op(RpnOp::FAdd) }
+    pub fn fsub(&mut self) -> &mut Self { self.op(RpnOp::FSub) }
+    pub fn fmul(&mut self) -> &mut Self { self.op(RpnOp::FMul) }
+    pub fn fdiv(&mut self) -> &mut Self { self.op(RpnOp::FDiv) }
+    pub fn fcmp_gt(&mut self) -> &mut Self { self.op(RpnOp::FCmpGt) }
+    pub fn fcmp_lt(&mut self) -> &mut Self { self.op(RpnOp::FCmpLt) }
+    pub fn fcmp_eq(&mut self) -> &mut Self { self.op(RpnOp::FCmpEq) }
+    pub fn fneg(&mut self) -> &mut Self { self.op(RpnOp::FNeg) }
+    pub fn fabs(&mut self) -> &mut Self { self.op(RpnOp::FAbs) }
+    pub fn i2f(&mut self) -> &mut Self { self.op(RpnOp::I2F) }
+    pub fn f2i(&mut self) -> &mut Self { self.op(RpnOp::F2I) }
+
+    /// Push an f32 value as its bit representation (u32 pushed via Push32).
+    pub fn push_f32(&mut self, val: f32) -> &mut Self {
+        self.push32(f32::to_bits(val))
+    }
+
+    // ── ZeroPage i32 helpers ──
+
+    /// Load a 4-byte i32 from ZeroPage at a constant address.
+    pub fn load_zp_i32(&mut self, addr: u32) -> &mut Self {
+        self.push32(addr);
+        self.op(RpnOp::LoadZpI32)
+    }
+
+    /// Store a 4-byte i32 to ZeroPage at a constant address.
+    /// Expects the value to store already on the stack.
+    pub fn store_zp_i32(&mut self, addr: u32) -> &mut Self {
+        self.push32(addr);
+        self.op(RpnOp::StoreZpI32)
+    }
+
+    // ── Component-aware bank helpers ──
+
+    /// Load a specific component from a bank slot.
+    pub fn load_bank_comp(&mut self, slot: StateSlot, component: u32) -> &mut Self {
+        let bank_id = slot.bank as u32;
+        self.push32(bank_id);
+        self.push32(slot.index);
+        self.push32(component);
+        self.op(RpnOp::LoadBankComp)
+    }
+
+    /// Store a value to a specific component of a bank slot.
+    /// Expects the value to store already on the stack.
+    pub fn store_bank_comp(&mut self, slot: StateSlot, component: u32) -> &mut Self {
+        let bank_id = slot.bank as u32;
+        self.push32(bank_id);
+        self.push32(slot.index);
+        self.push32(component);
+        self.op(RpnOp::StoreBankComp)
+    }
+
     // ── UI draw helpers ──
 
     pub fn set_color(&mut self, r: u8, g: u8, b: u8, a: u8) -> &mut Self {

@@ -64,6 +64,24 @@ pub enum RpnOp {
     CmpGe = 0x22,
     CmpLe = 0x23,
     CmpNe = 0x24,
+    // ZeroPage i32 load/store (v0.4.0)
+    LoadZpI32 = 0x25,
+    StoreZpI32 = 0x26,
+    // Component-aware bank access (v0.4.0)
+    LoadBankComp = 0x27,
+    StoreBankComp = 0x28,
+    // Float arithmetic opcodes (v0.4.0)
+    FAdd = 0x30,
+    FSub = 0x31,
+    FMul = 0x32,
+    FDiv = 0x33,
+    FCmpGt = 0x34,
+    FCmpLt = 0x35,
+    FCmpEq = 0x36,
+    FNeg = 0x37,
+    FAbs = 0x38,
+    I2F = 0x39,
+    F2I = 0x3A,
     // UI draw opcodes (v0.2.0)
     UiSetColor = 0x40,
     UiBox = 0x41,
@@ -123,6 +141,21 @@ impl RpnOp {
             0x22 => Some(RpnOp::CmpGe),
             0x23 => Some(RpnOp::CmpLe),
             0x24 => Some(RpnOp::CmpNe),
+            0x25 => Some(RpnOp::LoadZpI32),
+            0x26 => Some(RpnOp::StoreZpI32),
+            0x27 => Some(RpnOp::LoadBankComp),
+            0x28 => Some(RpnOp::StoreBankComp),
+            0x30 => Some(RpnOp::FAdd),
+            0x31 => Some(RpnOp::FSub),
+            0x32 => Some(RpnOp::FMul),
+            0x33 => Some(RpnOp::FDiv),
+            0x34 => Some(RpnOp::FCmpGt),
+            0x35 => Some(RpnOp::FCmpLt),
+            0x36 => Some(RpnOp::FCmpEq),
+            0x37 => Some(RpnOp::FNeg),
+            0x38 => Some(RpnOp::FAbs),
+            0x39 => Some(RpnOp::I2F),
+            0x3A => Some(RpnOp::F2I),
             0x40 => Some(RpnOp::UiSetColor),
             0x41 => Some(RpnOp::UiBox),
             0x42 => Some(RpnOp::UiSlab),
@@ -201,9 +234,12 @@ impl GasConfig {
             RpnOp::Nop | RpnOp::Halt => self.cost_nop,
             RpnOp::Push32 | RpnOp::Push64 | RpnOp::PushFqa => self.cost_push,
             RpnOp::Dup | RpnOp::Drop | RpnOp::Swap => self.cost_stack_op,
-            RpnOp::Add | RpnOp::Sub | RpnOp::Mul | RpnOp::Div | RpnOp::Mod => {
+            RpnOp::Add | RpnOp::Sub | RpnOp::Mul | RpnOp::Div | RpnOp::Mod
+            | RpnOp::FAdd | RpnOp::FSub | RpnOp::FMul | RpnOp::FDiv
+            | RpnOp::FNeg | RpnOp::FAbs | RpnOp::I2F | RpnOp::F2I => {
                 self.cost_arithmetic
             }
+            RpnOp::FCmpGt | RpnOp::FCmpLt | RpnOp::FCmpEq => self.cost_compare,
             RpnOp::Load | RpnOp::Store => self.cost_memory,
             RpnOp::Call | RpnOp::Ret => self.cost_call,
             RpnOp::Sync => self.cost_sync,
@@ -214,7 +250,9 @@ impl GasConfig {
             RpnOp::And | RpnOp::Or | RpnOp::Xor | RpnOp::Shl | RpnOp::Shr | RpnOp::Not => {
                 self.cost_bitwise
             }
-            RpnOp::LoadBank | RpnOp::StoreBank => self.cost_bank,
+            RpnOp::LoadBank | RpnOp::StoreBank
+            | RpnOp::LoadZpI32 | RpnOp::StoreZpI32
+            | RpnOp::LoadBankComp | RpnOp::StoreBankComp => self.cost_bank,
             RpnOp::EvPoll | RpnOp::EvHasEvent | RpnOp::FrameCount | RpnOp::Rand => {
                 self.cost_event
             }
@@ -567,6 +605,97 @@ impl RpnVm {
                     return Err(RpnError::InvalidBankSlot { bank, slot });
                 }
                 Ok(self.zero_page[slot as usize] as u64)
+            }
+            _ => Err(RpnError::InvalidBankId(bank)),
+        }
+    }
+
+    /// Load a specific component from a vec3/vec4 bank.
+    fn load_bank_comp(&self, bank: u32, slot: u32, comp: u32) -> Result<u64, RpnError> {
+        match bank {
+            BANK_VEC3 => {
+                if slot >= 16 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                if comp >= 3 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                Ok(f32::to_bits(self.vec3_bank[slot as usize][comp as usize]) as u64)
+            }
+            BANK_VEC4 => {
+                if slot >= 16 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                if comp >= 4 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                Ok(f32::to_bits(self.vec4_bank[slot as usize][comp as usize]) as u64)
+            }
+            BANK_SCALAR => {
+                if slot >= 16 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                Ok(f32::to_bits(self.scalar_bank[slot as usize]) as u64)
+            }
+            BANK_INT => {
+                if slot >= 16 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                Ok(self.int_bank[slot as usize] as u32 as u64)
+            }
+            BANK_ZERO_PAGE => {
+                if slot >= 256 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                Ok(self.zero_page[slot as usize] as u64)
+            }
+            _ => Err(RpnError::InvalidBankId(bank)),
+        }
+    }
+
+    /// Store a value to a specific component of a vec3/vec4 bank.
+    fn store_bank_comp(&mut self, value: u64, bank: u32, slot: u32, comp: u32) -> Result<(), RpnError> {
+        match bank {
+            BANK_VEC3 => {
+                if slot >= 16 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                if comp >= 3 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                self.vec3_bank[slot as usize][comp as usize] = f32::from_bits(value as u32);
+                Ok(())
+            }
+            BANK_VEC4 => {
+                if slot >= 16 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                if comp >= 4 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                self.vec4_bank[slot as usize][comp as usize] = f32::from_bits(value as u32);
+                Ok(())
+            }
+            BANK_SCALAR => {
+                if slot >= 16 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                self.scalar_bank[slot as usize] = f32::from_bits(value as u32);
+                Ok(())
+            }
+            BANK_INT => {
+                if slot >= 16 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                self.int_bank[slot as usize] = value as i32;
+                Ok(())
+            }
+            BANK_ZERO_PAGE => {
+                if slot >= 256 {
+                    return Err(RpnError::InvalidBankSlot { bank, slot });
+                }
+                self.zero_page[slot as usize] = value as u8;
+                Ok(())
             }
             _ => Err(RpnError::InvalidBankId(bank)),
         }
@@ -939,6 +1068,129 @@ impl RpnVm {
                 let bank = self.pop_u32_coerce()?;
                 let value = self.pop_u64()?;
                 self.store_bank(value, bank, slot)?;
+                self.pc += 1;
+            }
+            // --- ZeroPage i32 load/store ---
+            RpnOp::LoadZpI32 => {
+                let addr = self.pop_u32_coerce()? as usize;
+                if addr + 3 >= 256 {
+                    return Err(RpnError::InvalidBankSlot { bank: BANK_ZERO_PAGE, slot: addr as u32 });
+                }
+                let val = i32::from_le_bytes([
+                    self.zero_page[addr],
+                    self.zero_page[addr + 1],
+                    self.zero_page[addr + 2],
+                    self.zero_page[addr + 3],
+                ]);
+                self.push(RpnValue::U64(val as u32 as u64))?;
+                self.pc += 1;
+            }
+            RpnOp::StoreZpI32 => {
+                let addr = self.pop_u32_coerce()? as usize;
+                let value = self.pop_u32_coerce()? as i32;
+                if addr + 3 >= 256 {
+                    return Err(RpnError::InvalidBankSlot { bank: BANK_ZERO_PAGE, slot: addr as u32 });
+                }
+                let bytes = value.to_le_bytes();
+                self.zero_page[addr] = bytes[0];
+                self.zero_page[addr + 1] = bytes[1];
+                self.zero_page[addr + 2] = bytes[2];
+                self.zero_page[addr + 3] = bytes[3];
+                self.pc += 1;
+            }
+            // --- Component-aware bank access ---
+            RpnOp::LoadBankComp => {
+                let comp = self.pop_u32_coerce()?;
+                let slot = self.pop_u32_coerce()?;
+                let bank = self.pop_u32_coerce()?;
+                let value = self.load_bank_comp(bank, slot, comp)?;
+                self.push(RpnValue::U64(value))?;
+                self.pc += 1;
+            }
+            RpnOp::StoreBankComp => {
+                let comp = self.pop_u32_coerce()?;
+                let slot = self.pop_u32_coerce()?;
+                let bank = self.pop_u32_coerce()?;
+                let value = self.pop_u64()?;
+                self.store_bank_comp(value, bank, slot, comp)?;
+                self.pc += 1;
+            }
+            // --- Float arithmetic opcodes ---
+            RpnOp::FAdd => {
+                let b_bits = self.pop_u64()? as u32;
+                let a_bits = self.pop_u64()? as u32;
+                let result = f32::from_bits(a_bits) + f32::from_bits(b_bits);
+                self.push(RpnValue::U64(f32::to_bits(result) as u64))?;
+                self.pc += 1;
+            }
+            RpnOp::FSub => {
+                let b_bits = self.pop_u64()? as u32;
+                let a_bits = self.pop_u64()? as u32;
+                let result = f32::from_bits(a_bits) - f32::from_bits(b_bits);
+                self.push(RpnValue::U64(f32::to_bits(result) as u64))?;
+                self.pc += 1;
+            }
+            RpnOp::FMul => {
+                let b_bits = self.pop_u64()? as u32;
+                let a_bits = self.pop_u64()? as u32;
+                let result = f32::from_bits(a_bits) * f32::from_bits(b_bits);
+                self.push(RpnValue::U64(f32::to_bits(result) as u64))?;
+                self.pc += 1;
+            }
+            RpnOp::FDiv => {
+                let b_bits = self.pop_u64()? as u32;
+                let a_bits = self.pop_u64()? as u32;
+                let b = f32::from_bits(b_bits);
+                if b == 0.0 {
+                    return Err(RpnError::DivisionByZero);
+                }
+                let result = f32::from_bits(a_bits) / b;
+                self.push(RpnValue::U64(f32::to_bits(result) as u64))?;
+                self.pc += 1;
+            }
+            RpnOp::FCmpGt => {
+                let b_bits = self.pop_u64()? as u32;
+                let a_bits = self.pop_u64()? as u32;
+                let result = if f32::from_bits(a_bits) > f32::from_bits(b_bits) { 1u64 } else { 0 };
+                self.push(RpnValue::U64(result))?;
+                self.pc += 1;
+            }
+            RpnOp::FCmpLt => {
+                let b_bits = self.pop_u64()? as u32;
+                let a_bits = self.pop_u64()? as u32;
+                let result = if f32::from_bits(a_bits) < f32::from_bits(b_bits) { 1u64 } else { 0 };
+                self.push(RpnValue::U64(result))?;
+                self.pc += 1;
+            }
+            RpnOp::FCmpEq => {
+                let b_bits = self.pop_u64()? as u32;
+                let a_bits = self.pop_u64()? as u32;
+                let result = if f32::from_bits(a_bits) == f32::from_bits(b_bits) { 1u64 } else { 0 };
+                self.push(RpnValue::U64(result))?;
+                self.pc += 1;
+            }
+            RpnOp::FNeg => {
+                let a_bits = self.pop_u64()? as u32;
+                let result = -f32::from_bits(a_bits);
+                self.push(RpnValue::U64(f32::to_bits(result) as u64))?;
+                self.pc += 1;
+            }
+            RpnOp::FAbs => {
+                let a_bits = self.pop_u64()? as u32;
+                let result = f32::from_bits(a_bits).abs();
+                self.push(RpnValue::U64(f32::to_bits(result) as u64))?;
+                self.pc += 1;
+            }
+            RpnOp::I2F => {
+                let a = self.pop_u64()? as i32;
+                let result = a as f32;
+                self.push(RpnValue::U64(f32::to_bits(result) as u64))?;
+                self.pc += 1;
+            }
+            RpnOp::F2I => {
+                let a_bits = self.pop_u64()? as u32;
+                let result = f32::from_bits(a_bits) as i32;
+                self.push(RpnValue::U64(result as u32 as u64))?;
                 self.pc += 1;
             }
             // --- UI draw opcodes ---
