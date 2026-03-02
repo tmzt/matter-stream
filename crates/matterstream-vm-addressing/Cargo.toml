@@ -1,0 +1,6 @@
+[package]
+name = "matterstream-vm-addressing"
+version = "0.1.0"
+edition = "2021"
+description = "FQA/OVA addressing, ASLR token tables, address resolution"
+license = "Apache-2.0"

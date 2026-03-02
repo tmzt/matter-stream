@@ -1,0 +1,24 @@
+[package]
+name = "matterstream-vm-addressing-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+matterstream-vm-addressing = { path = ".." }
+
+[[bin]]
+name = "fuzz_asym"
+path = "fuzz_targets/fuzz_asym.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_ordinal"
+path = "fuzz_targets/fuzz_ordinal.rs"
+doc = false
+
+[workspace]

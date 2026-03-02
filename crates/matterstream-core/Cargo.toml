@@ -1,0 +1,37 @@
+[package]
+name = "matterstream-core"
+version = "0.1.0"
+edition = "2021"
+description = "UI ISA core — ops, registers, tiers, stream executor, RPN VM, UI draw commands"
+license = "Apache-2.0"
+
+[dependencies]
+matterstream-vm-addressing = { workspace = true }
+matterstream-vm-arena = { workspace = true }
+matterstream-vm-scl = { workspace = true }
+matterstream-packaging = { workspace = true }
+futures = { workspace = true }
+
+[features]
+compiler = ["dep:oxc_parser", "dep:oxc_allocator", "dep:oxc_ast", "dep:oxc_span"]
+
+[dependencies.oxc_parser]
+workspace = true
+optional = true
+
+[dependencies.oxc_allocator]
+workspace = true
+optional = true
+
+[dependencies.oxc_ast]
+workspace = true
+optional = true
+
+[dependencies.oxc_span]
+workspace = true
+optional = true
+
+[dev-dependencies]
+async-io = { workspace = true }
+smol = { workspace = true }
+tempfile = { workspace = true }

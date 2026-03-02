@@ -1,0 +1,19 @@
+[package]
+name = "matterstream-vm-scl-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+matterstream-vm-scl = { path = ".." }
+
+[[bin]]
+name = "fuzz_scl"
+path = "fuzz_targets/fuzz_scl.rs"
+doc = false
+
+[workspace]
