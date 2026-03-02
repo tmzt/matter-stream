@@ -1,0 +1,10 @@
+[package]
+name = "matterstream-vm-asm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+matterstream-vm = { workspace = true }
+
+[dev-dependencies]
+matterstream-vm-arena = { workspace = true }

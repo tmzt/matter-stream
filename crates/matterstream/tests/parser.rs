@@ -17,16 +17,16 @@ fn test_parse_sequence() {
     match &ops[0] {
         Op::Draw { primitive, position_rsi } => {
             assert!(matches!(primitive, Primitive::Slab));
-            assert_eq!(*position_rsi, 0);
+            assert_eq!(position_rsi, &0);
         }
         _ => panic!("Expected Draw op"),
     }
     match &ops[1] {
-        Op::SetTrans(trans) => assert_eq!(*trans, [1.0, 2.0, 3.0]),
+        Op::SetTrans(trans) => assert_eq!(trans, &[1.0, 2.0, 3.0]),
         _ => panic!("Expected SetTrans op"),
     }
     match &ops[2] {
-        Op::Push(payload) => assert_eq!(*payload, vec![1, 2, 3, 4]),
+        Op::Push(payload) => assert_eq!(payload, &vec![1, 2, 3, 4]),
         _ => panic!("Expected Push op"),
     }
 }
@@ -46,16 +46,16 @@ fn test_parse_file() {
     match &ops[0] {
         Op::Draw { primitive, position_rsi } => {
             assert!(matches!(primitive, Primitive::Slab));
-            assert_eq!(*position_rsi, 0);
+            assert_eq!(position_rsi, &0);
         }
         _ => panic!("Expected Draw op"),
     }
     match &ops[1] {
-        Op::SetTrans(trans) => assert_eq!(*trans, [1.0, 2.0, 3.0]),
+        Op::SetTrans(trans) => assert_eq!(trans, &[1.0, 2.0, 3.0]),
         _ => panic!("Expected SetTrans op"),
     }
     match &ops[2] {
-        Op::Push(payload) => assert_eq!(*payload, vec![1, 2, 3, 4]),
+        Op::Push(payload) => assert_eq!(payload, &vec![1, 2, 3, 4]),
         _ => panic!("Expected Push op"),
     }
 }

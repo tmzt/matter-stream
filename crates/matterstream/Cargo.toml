@@ -1,23 +1,38 @@
 [package]
 name = "matterstream"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "UI ISA treating UI as a stream of immutable instructions against register-mapped memory"
+license = "Apache-2.0"
 
 [dependencies]
-matterstream-core = { path = "../matterstream-core" }
-matterstream-compiler = { path = "../matterstream-compiler" }
-matterstream-loader = { path = "../matterstream-loader" }
-matterstream-renderer = { path = "../matterstream-renderer" }
-matterstream-parser = { path = "../matterstream-parser" }
-matterstream-processor = { path = "../matterstream-processor" }
-matterstream-packages = { path = "../matterstream-packages" }
-smol.workspace = true
-winit.workspace = true
-softbuffer.workspace = true
+matterstream-core = { workspace = true }
+matterstream-vm = { workspace = true }
+matterstream-vm-asm = { workspace = true }
+matterstream-vm-addressing = { workspace = true }
+matterstream-vm-arena = { workspace = true }
+matterstream-packaging = { workspace = true }
+matterstream-vm-scl = { workspace = true }
+
+[features]
+compiler = ["matterstream-core/compiler"]
+
+[[example]]
+name = "rpn-arena"
+
+[[example]]
+name = "vm-pipeline"
+
+[[example]]
+name = "ui-demo"
+
+[[example]]
+name = "run-tsx"
+required-features = ["compiler"]
 
 [dev-dependencies]
-wgpu = { workspace = true }
-glyphon = { workspace = true }
-pollster = { workspace = true }
-bytemuck = { workspace = true }
-
+async-io = { workspace = true }
+smol = { workspace = true }
+tempfile = { workspace = true }
+winit = { workspace = true }
+softbuffer = { workspace = true }

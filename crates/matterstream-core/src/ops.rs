@@ -1,5 +1,7 @@
-//! Op definitions for the MatterStream ISA.
+//! Op definitions, OpsHeader, and RSI pointers.
 
+use matterstream_vm_arena::dmove::DmoveDescriptor;
+use matterstream_vm_addressing::fqa::{Fqa, FourCC, Ordinal};
 use crate::tier3::ResourceHandle;
 
 /// Register State Index pointer — resolves to a specific register in a bank/tier.
@@ -72,6 +74,19 @@ pub enum Op {
     SetTextColor([f32; 4]),
     /// Push raw bytes to the stream.
     Push(Vec<u8>),
+
+    // -- VM_SPEC v0.1.0 ops --
+
+    /// Resolve an FQA through the addressing pipeline.
+    ResolveFqa(Fqa),
+    /// Trigger arena SYNC (swap active/staging).
+    Sync,
+    /// Execute RPN bytecode.
+    ExecRpn(Vec<u8>),
+    /// Execute a batch of DMOVE descriptors.
+    Dmove(Vec<DmoveDescriptor>),
+    /// Load an archive member by ordinal + FourCC.
+    LoadArchiveMember { ordinal: Ordinal, fourcc: FourCC },
 }
 
 /// Result of executing a Draw op.

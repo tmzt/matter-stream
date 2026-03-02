@@ -1,0 +1,25 @@
+[package]
+name = "matterstream-vm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+matterstream-vm-addressing = { workspace = true }
+matterstream-vm-arena = { workspace = true }
+bytemuck = { workspace = true }
+
+[dev-dependencies]
+matterstream-packaging = { workspace = true }
+matterstream-vm-asm = { workspace = true }
+
+[[example]]
+name = "connect4"
+
+[[example]]
+name = "game2048"
+
+[[example]]
+name = "flappy_bird"
+
+[[example]]
+name = "package_demo"

@@ -1,16 +1,26 @@
 //! MatterStream executor — hydrates ops, drives execution lifecycle.
 
+use matterstream_vm_addressing::addressing::AddressResolver;
+use matterstream_vm_arena::arena::TripleArena;
+use matterstream_vm_arena::dmove::DmoveEngine;
+use matterstream_vm_scl::keyless::KeylessPolicy;
 use crate::ops::{Draw, Op, OpsHeader, Primitive};
 use crate::registers::RegisterFile;
+use crate::rpn::RpnVm;
 use crate::state_stack::{ProjStack, StateStack};
 use crate::tier0::GlobalUniforms;
 use crate::tier1::{BankId, Mat4Bank, Vec3Bank};
 use crate::tier2::ZeroPage;
 use crate::tier3::ResourceTable;
+use crate::ui_vm::UiDrawCmd;
 
 #[derive(Debug)]
 pub enum StreamError {
     InvalidRsi(usize),
+    ResolveError(String),
+    ArenaError(String),
+    RpnError(String),
+    DmoveError(String),
 }
 
 /// The main stream executor: owns all tiers, register file, and state stacks.
@@ -31,6 +41,15 @@ pub struct MatterStream {
     pending_padding: [f32; 4],
     /// Pending text color for the next draw call (consumed on draw).
     pending_text_color: Option<[f32; 4]>,
+
+    /// UI draw commands collected from RPN VM execution.
+    pub ui_draws: Vec<UiDrawCmd>,
+
+    // VM_SPEC v0.1.0 fields
+    pub arenas: TripleArena,
+    pub resolver: AddressResolver,
+    pub rpn_vm: RpnVm,
+    pub keyless: KeylessPolicy,
 }
 
 impl MatterStream {
@@ -47,6 +66,11 @@ impl MatterStream {
             pending_label: None,
             pending_padding: [0.0; 4],
             pending_text_color: None,
+            ui_draws: Vec::new(),
+            arenas: TripleArena::new(),
+            resolver: AddressResolver::new(),
+            rpn_vm: RpnVm::new(),
+            keyless: KeylessPolicy::new(),
         }
     }
 
@@ -54,6 +78,7 @@ impl MatterStream {
     pub async fn execute(&mut self, header: &OpsHeader, ops: &[Op]) -> Result<(), Vec<StreamError>> {
         self.draws.clear();
         self.stream.clear();
+        self.ui_draws.clear();
         let mut errors = Vec::new();
 
         // Step 1: Hydrate RSI pointers into registers
@@ -119,6 +144,29 @@ impl MatterStream {
                 }
                 Op::Push(data) => {
                     self.stream.extend_from_slice(data);
+                }
+                Op::ResolveFqa(fqa) => {
+                    match self.resolver.resolve(*fqa) {
+                        Ok(_ova) => { /* resolved successfully */ }
+                        Err(e) => errors.push(StreamError::ResolveError(e.to_string())),
+                    }
+                }
+                Op::Sync => {
+                    self.arenas.sync();
+                }
+                Op::ExecRpn(bytecode) => {
+                    if let Err(e) = self.rpn_vm.execute(bytecode, &mut self.arenas) {
+                        errors.push(StreamError::RpnError(e.to_string()));
+                    }
+                    self.ui_draws.append(&mut self.rpn_vm.ui_draws);
+                }
+                Op::Dmove(descriptors) => {
+                    if let Err(e) = DmoveEngine::execute(&mut self.arenas, descriptors) {
+                        errors.push(StreamError::DmoveError(e.to_string()));
+                    }
+                }
+                Op::LoadArchiveMember { .. } => {
+                    // Archive loading handled at a higher level
                 }
             }
         }

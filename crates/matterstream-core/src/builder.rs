@@ -1,5 +1,6 @@
 //! A builder API for constructing `Op` sequences.
 
+use matterstream_vm_addressing::fqa::Fqa;
 use crate::ops::{Op, Primitive};
 use crate::tier3::ResourceHandle;
 
@@ -104,6 +105,24 @@ impl StreamBuilder {
     /// Adds a `Push` op.
     pub fn push(mut self, data: Vec<u8>) -> Self {
         self.ops.push(Op::Push(data));
+        self
+    }
+
+    /// Adds a `ResolveFqa` op.
+    pub fn resolve_fqa(mut self, fqa: Fqa) -> Self {
+        self.ops.push(Op::ResolveFqa(fqa));
+        self
+    }
+
+    /// Adds a `Sync` op.
+    pub fn sync(mut self) -> Self {
+        self.ops.push(Op::Sync);
+        self
+    }
+
+    /// Adds an `ExecRpn` op.
+    pub fn exec_rpn(mut self, bytecode: Vec<u8>) -> Self {
+        self.ops.push(Op::ExecRpn(bytecode));
         self
     }
 

@@ -1,0 +1,6 @@
+[package]
+name = "matterstream-vm-scl"
+version = "0.1.0"
+edition = "2021"
+description = "SCL entropy guard and Keyless invariant enforcement"
+license = "Apache-2.0"
