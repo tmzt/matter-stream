@@ -1,4 +1,5 @@
 [package]
+<<<<<<< HEAD
 name = "matterstream"
 version = "0.1.0"
 edition = "2021"
@@ -36,3 +37,10 @@ smol = { workspace = true }
 tempfile = { workspace = true }
 winit = { workspace = true }
 softbuffer = { workspace = true }
+=======
+name = "matterstream-tests"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+>>>>>>> 3b9a15a (Commit current work)

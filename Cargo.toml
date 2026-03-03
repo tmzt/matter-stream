@@ -3,7 +3,10 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.dependencies]
+<<<<<<< HEAD
 # External deps
+=======
+>>>>>>> 3b9a15a (Commit current work)
 futures = "0.3"
 oxc_parser = "0.13"
 oxc_allocator = "0.13"
@@ -11,9 +14,16 @@ oxc_ast = "0.13"
 oxc_span = "0.13"
 winit = "0.30.12"
 softbuffer = "0.4.8"
+<<<<<<< HEAD
 bytemuck = { version = "1", features = ["derive"] }
+=======
+rusttype = "0.9.3"
+image = "0.25.9"
+>>>>>>> 3b9a15a (Commit current work)
 smol = "2"
+async-io = "2.6.0"
 tempfile = "3"
+<<<<<<< HEAD
 async-io = "2.6.0"
 
 # Internal workspace crates
@@ -24,4 +34,11 @@ matterstream-vm-addressing = { path = "crates/matterstream-vm-addressing" }
 matterstream-vm-arena = { path = "crates/matterstream-vm-arena" }
 matterstream-packaging = { path = "crates/matterstream-packaging" }
 matterstream-vm-scl = { path = "crates/matterstream-vm-scl" }
+=======
+matterstream-core = { path = "crates/matterstream-core" }
+matterstream-compiler = { path = "crates/matterstream-compiler" }
+matterstream-renderer = { path = "crates/matterstream-renderer" }
+matterstream-loader = { path = "crates/matterstream-loader" }
+matterstream-packages = { path = "crates/matterstream-packages" }
+>>>>>>> 3b9a15a (Commit current work)
 matterstream = { path = "crates/matterstream" }

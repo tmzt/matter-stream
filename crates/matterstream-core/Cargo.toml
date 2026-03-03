@@ -2,6 +2,7 @@
 name = "matterstream-core"
 version = "0.1.0"
 edition = "2021"
+<<<<<<< HEAD
 description = "UI ISA core — ops, registers, tiers, stream executor, RPN VM, UI draw commands"
 license = "Apache-2.0"
 
@@ -33,5 +34,14 @@ optional = true
 
 [dev-dependencies]
 async-io = { workspace = true }
+=======
+description = "MatterStream ISA core types, executor, builder, and parser"
+license = "Apache-2.0"
+
+[dependencies]
+futures = { workspace = true }
+
+[dev-dependencies]
+>>>>>>> 3b9a15a (Commit current work)
 smol = { workspace = true }
 tempfile = { workspace = true }
