@@ -6,10 +6,10 @@ edition = "2021"
 [dependencies]
 matterstream-vm-addressing = { workspace = true }
 matterstream-vm-arena = { workspace = true }
+matterstream-packaging = { workspace = true }
 bytemuck = { workspace = true }
 
 [dev-dependencies]
-matterstream-packaging = { workspace = true }
 matterstream-vm-asm = { workspace = true }
 
 [[example]]

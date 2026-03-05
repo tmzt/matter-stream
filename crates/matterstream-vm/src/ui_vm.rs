@@ -104,6 +104,18 @@ pub fn blend_pixel(dst: u32, src_rgba: u32) -> u32 {
 
 /// Render a list of draw commands into a softbuffer pixel buffer.
 pub fn render_ui_draws(draws: &[UiDrawCmd], buf: &mut [u32], width: u32, height: u32) {
+    render_ui_draws_with_font(draws, buf, width, height, &[], None);
+}
+
+/// Render draw commands with font atlas support for actual text rendering.
+pub fn render_ui_draws_with_font(
+    draws: &[UiDrawCmd],
+    buf: &mut [u32],
+    width: u32,
+    height: u32,
+    string_table: &[String],
+    font: Option<&matterstream_packaging::fnta::FontAtlas>,
+) {
     for cmd in draws {
         match cmd {
             UiDrawCmd::Box { x, y, w, h, color } => {
@@ -129,18 +141,24 @@ pub fn render_ui_draws(draws: &[UiDrawCmd], buf: &mut [u32], width: u32, height:
                 slot: _,
                 color,
             } => {
-                // Placeholder: draw a colored rectangle for the text area
+                // Slot-based text has no string data — render placeholder
                 draw_filled_rect(buf, width, height, *x, *y, *size * 4, *size, *color);
             }
             UiDrawCmd::TextStr {
                 x,
                 y,
                 size,
-                str_idx: _,
+                str_idx,
                 color,
             } => {
-                // Placeholder: draw a colored rectangle for the text area
-                draw_filled_rect(buf, width, height, *x, *y, *size * 4, *size, *color);
+                if let (Some(font), Some(text)) =
+                    (font, string_table.get(*str_idx as usize))
+                {
+                    draw_text_glyphs(buf, width, height, *x, *y, *size, text, *color, font);
+                } else {
+                    // Fallback: placeholder rectangle
+                    draw_filled_rect(buf, width, height, *x, *y, *size * 4, *size, *color);
+                }
             }
             UiDrawCmd::Line {
                 x1,
@@ -152,6 +170,65 @@ pub fn render_ui_draws(draws: &[UiDrawCmd], buf: &mut [u32], width: u32, height:
                 draw_line(buf, width, height, *x1, *y1, *x2, *y2, *color);
             }
         }
+    }
+}
+
+/// Render a text string using bitmap glyphs from a font atlas.
+/// Uses nearest-neighbor scaling: scale = max(1, size / glyph_h).
+#[allow(clippy::too_many_arguments)]
+fn draw_text_glyphs(
+    buf: &mut [u32],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    size: u32,
+    text: &str,
+    color: u32,
+    font: &matterstream_packaging::fnta::FontAtlas,
+) {
+    let gw = font.glyph_w as u32;
+    let gh = font.glyph_h as u32;
+    if gw == 0 || gh == 0 {
+        return;
+    }
+    let scale = (size / gh).max(1);
+    let advance = (gw + 1) * scale; // 1px inter-character gap, scaled
+
+    let mut cursor_x = x;
+    for ch in text.bytes() {
+        let cp = if ch >= font.first_cp && ch <= font.last_cp {
+            ch
+        } else {
+            b'?' // fallback glyph
+        };
+        if let Some(rows) = font.glyph_rows(cp) {
+            for (row_idx, &row_byte) in rows.iter().enumerate() {
+                for col in 0..gw {
+                    let bit = gw - 1 - col;
+                    if row_byte & (1 << bit) != 0 {
+                        // Draw a scale×scale block for this pixel
+                        let px = cursor_x + (col * scale) as i32;
+                        let py = y + (row_idx as u32 * scale) as i32;
+                        for dy in 0..scale {
+                            for dx in 0..scale {
+                                let fx = px + dx as i32;
+                                let fy = py + dy as i32;
+                                if fx >= 0
+                                    && fy >= 0
+                                    && (fx as u32) < width
+                                    && (fy as u32) < height
+                                {
+                                    let idx = (fy as u32 * width + fx as u32) as usize;
+                                    buf[idx] = blend_pixel(buf[idx], color);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        cursor_x += advance as i32;
     }
 }
 

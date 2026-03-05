@@ -2,7 +2,7 @@
 //!
 //! Parses TSX using OXC and emits `Asm` tokens (pixel-coordinate draw commands)
 //! for the MatterStream RPN VM. Supports:
-//! - Primitive components: Box, Slab, Circle, Text, Line, VStack
+//! - Primitive components: Box, Slab, Circle, Text, Line, Path, VStack
 //! - Arrow-function composite components with prop substitution
 //! - Compile-time arithmetic in numeric expressions (e.g. `y + 8`)
 
@@ -442,6 +442,251 @@ fn resolve_prop(val: &PropValue, ctx: &HashMap<String, PropValue>) -> PropValue 
     }
 }
 
+// ── SVG path parsing & Bezier flattening ────────────────────────────────
+
+#[derive(Debug, Clone)]
+enum PathCmd {
+    MoveTo(f64, f64),
+    LineTo(f64, f64),
+    CubicTo(f64, f64, f64, f64, f64, f64),
+    Close,
+}
+
+/// Parse an SVG `d` attribute string into path commands.
+/// Supports: M/m, L/l, H/h, V/v, C/c, Z/z (absolute and relative).
+fn parse_svg_path(d: &str) -> Vec<PathCmd> {
+    let mut cmds = Vec::new();
+    let mut cur_x: f64 = 0.0;
+    let mut cur_y: f64 = 0.0;
+    let mut start_x: f64 = 0.0;
+    let mut start_y: f64 = 0.0;
+
+    // Tokenize: split on command letters, keeping them as delimiters
+    let mut tokens: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    for ch in d.chars() {
+        if "MmLlHhVvCcZz".contains(ch) {
+            if !buf.is_empty() {
+                tokens.push(buf.clone());
+                buf.clear();
+            }
+            tokens.push(ch.to_string());
+        } else {
+            buf.push(ch);
+        }
+    }
+    if !buf.is_empty() {
+        tokens.push(buf);
+    }
+
+    fn parse_nums(s: &str) -> Vec<f64> {
+        // Handle comma and space separated numbers, including negative signs
+        let mut nums = Vec::new();
+        let mut buf = String::new();
+        for ch in s.chars() {
+            if ch == ',' || ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+                if !buf.is_empty() {
+                    if let Ok(n) = buf.parse::<f64>() {
+                        nums.push(n);
+                    }
+                    buf.clear();
+                }
+            } else if ch == '-' && !buf.is_empty() {
+                // Negative sign starts a new number
+                if let Ok(n) = buf.parse::<f64>() {
+                    nums.push(n);
+                }
+                buf.clear();
+                buf.push(ch);
+            } else {
+                buf.push(ch);
+            }
+        }
+        if !buf.is_empty() {
+            if let Ok(n) = buf.parse::<f64>() {
+                nums.push(n);
+            }
+        }
+        nums
+    }
+
+    let mut i = 0;
+    while i < tokens.len() {
+        let cmd_ch = tokens[i].chars().next().unwrap_or(' ');
+        let nums = if i + 1 < tokens.len() && !"MmLlHhVvCcZz".contains(tokens[i + 1].chars().next().unwrap_or(' ')) {
+            i += 1;
+            parse_nums(&tokens[i])
+        } else {
+            Vec::new()
+        };
+        i += 1;
+
+        match cmd_ch {
+            'M' => {
+                let mut j = 0;
+                while j + 1 < nums.len() {
+                    cur_x = nums[j];
+                    cur_y = nums[j + 1];
+                    if j == 0 {
+                        start_x = cur_x;
+                        start_y = cur_y;
+                        cmds.push(PathCmd::MoveTo(cur_x, cur_y));
+                    } else {
+                        cmds.push(PathCmd::LineTo(cur_x, cur_y));
+                    }
+                    j += 2;
+                }
+            }
+            'm' => {
+                let mut j = 0;
+                while j + 1 < nums.len() {
+                    cur_x += nums[j];
+                    cur_y += nums[j + 1];
+                    if j == 0 {
+                        start_x = cur_x;
+                        start_y = cur_y;
+                        cmds.push(PathCmd::MoveTo(cur_x, cur_y));
+                    } else {
+                        cmds.push(PathCmd::LineTo(cur_x, cur_y));
+                    }
+                    j += 2;
+                }
+            }
+            'L' => {
+                let mut j = 0;
+                while j + 1 < nums.len() {
+                    cur_x = nums[j];
+                    cur_y = nums[j + 1];
+                    cmds.push(PathCmd::LineTo(cur_x, cur_y));
+                    j += 2;
+                }
+            }
+            'l' => {
+                let mut j = 0;
+                while j + 1 < nums.len() {
+                    cur_x += nums[j];
+                    cur_y += nums[j + 1];
+                    cmds.push(PathCmd::LineTo(cur_x, cur_y));
+                    j += 2;
+                }
+            }
+            'H' => {
+                for n in &nums {
+                    cur_x = *n;
+                    cmds.push(PathCmd::LineTo(cur_x, cur_y));
+                }
+            }
+            'h' => {
+                for n in &nums {
+                    cur_x += *n;
+                    cmds.push(PathCmd::LineTo(cur_x, cur_y));
+                }
+            }
+            'V' => {
+                for n in &nums {
+                    cur_y = *n;
+                    cmds.push(PathCmd::LineTo(cur_x, cur_y));
+                }
+            }
+            'v' => {
+                for n in &nums {
+                    cur_y += *n;
+                    cmds.push(PathCmd::LineTo(cur_x, cur_y));
+                }
+            }
+            'C' => {
+                let mut j = 0;
+                while j + 5 < nums.len() {
+                    let (x1, y1) = (nums[j], nums[j + 1]);
+                    let (x2, y2) = (nums[j + 2], nums[j + 3]);
+                    let (x3, y3) = (nums[j + 4], nums[j + 5]);
+                    cmds.push(PathCmd::CubicTo(x1, y1, x2, y2, x3, y3));
+                    cur_x = x3;
+                    cur_y = y3;
+                    j += 6;
+                }
+            }
+            'c' => {
+                let mut j = 0;
+                while j + 5 < nums.len() {
+                    let (x1, y1) = (cur_x + nums[j], cur_y + nums[j + 1]);
+                    let (x2, y2) = (cur_x + nums[j + 2], cur_y + nums[j + 3]);
+                    let (x3, y3) = (cur_x + nums[j + 4], cur_y + nums[j + 5]);
+                    cmds.push(PathCmd::CubicTo(x1, y1, x2, y2, x3, y3));
+                    cur_x = x3;
+                    cur_y = y3;
+                    j += 6;
+                }
+            }
+            'Z' | 'z' => {
+                cmds.push(PathCmd::Close);
+                cur_x = start_x;
+                cur_y = start_y;
+            }
+            _ => {}
+        }
+    }
+    cmds
+}
+
+/// Flatten a cubic Bezier curve into line segments using recursive de Casteljau subdivision.
+fn flatten_cubic(
+    p0: (f64, f64),
+    p1: (f64, f64),
+    p2: (f64, f64),
+    p3: (f64, f64),
+    tolerance: f64,
+    out: &mut Vec<(f64, f64)>,
+) {
+    // Check if curve is flat enough: max distance of control points from the line p0→p3
+    let dx = p3.0 - p0.0;
+    let dy = p3.1 - p0.1;
+    let len_sq = dx * dx + dy * dy;
+
+    let d1 = if len_sq > 0.0 {
+        let t = ((p1.0 - p0.0) * dx + (p1.1 - p0.1) * dy) / len_sq;
+        let proj_x = p0.0 + t * dx;
+        let proj_y = p0.1 + t * dy;
+        let ex = p1.0 - proj_x;
+        let ey = p1.1 - proj_y;
+        ex * ex + ey * ey
+    } else {
+        let ex = p1.0 - p0.0;
+        let ey = p1.1 - p0.1;
+        ex * ex + ey * ey
+    };
+
+    let d2 = if len_sq > 0.0 {
+        let t = ((p2.0 - p0.0) * dx + (p2.1 - p0.1) * dy) / len_sq;
+        let proj_x = p0.0 + t * dx;
+        let proj_y = p0.1 + t * dy;
+        let ex = p2.0 - proj_x;
+        let ey = p2.1 - proj_y;
+        ex * ex + ey * ey
+    } else {
+        let ex = p2.0 - p0.0;
+        let ey = p2.1 - p0.1;
+        ex * ex + ey * ey
+    };
+
+    let tol_sq = tolerance * tolerance;
+    if d1 <= tol_sq && d2 <= tol_sq {
+        out.push(p3);
+        return;
+    }
+
+    // Subdivide at t=0.5
+    let mid01 = ((p0.0 + p1.0) * 0.5, (p0.1 + p1.1) * 0.5);
+    let mid12 = ((p1.0 + p2.0) * 0.5, (p1.1 + p2.1) * 0.5);
+    let mid23 = ((p2.0 + p3.0) * 0.5, (p2.1 + p3.1) * 0.5);
+    let mid012 = ((mid01.0 + mid12.0) * 0.5, (mid01.1 + mid12.1) * 0.5);
+    let mid123 = ((mid12.0 + mid23.0) * 0.5, (mid12.1 + mid23.1) * 0.5);
+    let mid0123 = ((mid012.0 + mid123.0) * 0.5, (mid012.1 + mid123.1) * 0.5);
+
+    flatten_cubic(p0, mid01, mid012, mid0123, tolerance, out);
+    flatten_cubic(mid0123, mid123, mid23, p3, tolerance, out);
+}
+
 // ── JsxNode → Asm emission ──────────────────────────────────────────────
 
 fn parse_color(color: &str) -> (u8, u8, u8, u8) {
@@ -546,6 +791,68 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                 asm.set_color(r, g, b, a);
             }
             asm.draw_line(x1, y1, x2, y2);
+        }
+        "Path" => {
+            let ox = get_num_prop(&node.props, "x").unwrap_or(0) as f64;
+            let oy = get_num_prop(&node.props, "y").unwrap_or(0) as f64;
+            let _stroke = get_num_prop(&node.props, "stroke").unwrap_or(2);
+            if let Some(color) = get_str_prop(&node.props, "color") {
+                let (r, g, b, a) = parse_color(&color);
+                asm.set_color(r, g, b, a);
+            }
+            if let Some(d) = get_str_prop(&node.props, "d") {
+                let cmds = parse_svg_path(&d);
+                let mut cur = (0.0_f64, 0.0_f64);
+                let mut start = (0.0_f64, 0.0_f64);
+                for cmd in &cmds {
+                    match cmd {
+                        PathCmd::MoveTo(x, y) => {
+                            cur = (*x, *y);
+                            start = cur;
+                        }
+                        PathCmd::LineTo(x, y) => {
+                            asm.draw_line(
+                                (cur.0 + ox) as i32,
+                                (cur.1 + oy) as i32,
+                                (*x + ox) as i32,
+                                (*y + oy) as i32,
+                            );
+                            cur = (*x, *y);
+                        }
+                        PathCmd::CubicTo(x1, y1, x2, y2, x3, y3) => {
+                            let mut pts = Vec::new();
+                            flatten_cubic(
+                                cur,
+                                (*x1, *y1),
+                                (*x2, *y2),
+                                (*x3, *y3),
+                                1.0,
+                                &mut pts,
+                            );
+                            for pt in &pts {
+                                asm.draw_line(
+                                    (cur.0 + ox) as i32,
+                                    (cur.1 + oy) as i32,
+                                    (pt.0 + ox) as i32,
+                                    (pt.1 + oy) as i32,
+                                );
+                                cur = *pt;
+                            }
+                        }
+                        PathCmd::Close => {
+                            if (cur.0 - start.0).abs() > 0.5 || (cur.1 - start.1).abs() > 0.5 {
+                                asm.draw_line(
+                                    (cur.0 + ox) as i32,
+                                    (cur.1 + oy) as i32,
+                                    (start.0 + ox) as i32,
+                                    (start.1 + oy) as i32,
+                                );
+                            }
+                            cur = start;
+                        }
+                    }
+                }
+            }
         }
         "VStack" => {
             let x = get_num_prop(&node.props, "x").unwrap_or(0) as i32;
