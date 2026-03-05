@@ -13,7 +13,7 @@ matterstream-packaging = { workspace = true }
 futures = { workspace = true }
 
 [features]
-compiler = ["dep:oxc_parser", "dep:oxc_allocator", "dep:oxc_ast", "dep:oxc_span"]
+compiler = ["dep:oxc_parser", "dep:oxc_allocator", "dep:oxc_ast", "dep:oxc_span", "dep:matterstream-vm-asm"]
 
 [dependencies.oxc_parser]
 workspace = true
@@ -28,6 +28,10 @@ workspace = true
 optional = true
 
 [dependencies.oxc_span]
+workspace = true
+optional = true
+
+[dependencies.matterstream-vm-asm]
 workspace = true
 optional = true
 

@@ -5,6 +5,8 @@
 
 pub mod builder;
 #[cfg(feature = "compiler")]
+pub mod asm_compiler;
+#[cfg(feature = "compiler")]
 pub mod compiler;
 pub mod ops;
 pub mod parser;
@@ -19,6 +21,8 @@ pub mod tier3;
 pub mod ui_vm;
 
 pub use builder::StreamBuilder;
+#[cfg(feature = "compiler")]
+pub use asm_compiler::compile_to_asm;
 #[cfg(feature = "compiler")]
 pub use compiler::Compiler;
 pub use ops::{Op, OpsHeader, Primitive, RsiPointer};
