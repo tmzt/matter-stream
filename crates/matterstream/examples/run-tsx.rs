@@ -5,7 +5,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use matterstream::{MatterStream, OpsHeader, ops::RsiPointer, tier1::BankId};
+use matterstream::compile_to_asm;
+use matterstream::arena::TripleArena;
+use matterstream_vm::rpn::RpnVm;
+use matterstream_vm::ui_vm::render_ui_draws_with_font;
+use matterstream_packaging::fnta::builtin_font;
 use softbuffer::{Context, Surface};
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{EventLoop, ControlFlow};
@@ -61,13 +65,28 @@ fn main() {
             return;
         }
     };
-    let ops = match matterstream::Compiler::compile(&code) {
-        Ok(ops) => ops,
+
+    let asm_output = match compile_to_asm(&code) {
+        Ok(out) => out,
         Err(e) => {
             eprintln!("Error compiling tsx file: {}", e);
             return;
         }
     };
+
+    // Execute bytecode through RPN VM
+    let mut arenas = TripleArena::new();
+    let mut vm = RpnVm::new();
+    vm.string_table = asm_output.string_table.clone();
+
+    if let Err(e) = vm.execute(&asm_output.bytecode, &mut arenas) {
+        eprintln!("VM execution error: {:?}", e);
+        return;
+    }
+
+    let draws = vm.ui_draws.clone();
+    let string_table = asm_output.string_table;
+    let font = builtin_font();
 
     // --- Winit and Softbuffer setup ---
     let event_loop = EventLoop::new().unwrap();
@@ -75,36 +94,18 @@ fn main() {
 
     let context = Context::new(window.clone()).unwrap();
     let mut surface = Surface::new(&context, window.clone()).unwrap();
-    
-    // --- MatterStream setup ---
-    let mut stream = MatterStream::new();
-    let header = OpsHeader::new(vec![RsiPointer::new(1, BankId::Vec3 as u8, 0)], false);
 
     event_loop.run(move |event, elwt| {
         elwt.set_control_flow(ControlFlow::Wait);
-        
-        // Request a redraw on every event to keep the animation loop running
-        window.request_redraw();
 
         match event {
             Event::WindowEvent {
                 event: WindowEvent::RedrawRequested,
                 ..
             } => {
-                // --- MatterStream Execution ---
-                smol::block_on(async {
-                    if let Err(errors) = stream.execute(&header, &ops).await {
-                        eprintln!("MatterStream execution failed with errors:");
-                        for error in errors {
-                            eprintln!("- {:?}", error);
-                        }
-                    }
-                });
-
-                // --- Rendering with Softbuffer ---
                 let (width, height) = {
                     let size = window.inner_size();
-                    (size.width, size.height)
+                    (size.width.max(1), size.height.max(1))
                 };
                 surface
                     .resize(
@@ -114,35 +115,17 @@ fn main() {
                     .unwrap();
 
                 let mut buffer = surface.buffer_mut().unwrap();
-                buffer.fill(0xFF181818); // Fill with a dark gray background
+                buffer.fill(0xFF181818); // Dark gray background
 
-                for draw in &stream.draws {
-                    // Simple coordinate transformation from [-1, 1] to [0, width/height]
-                    let x = ((draw.position[0] + 1.0) / 2.0 * width as f32) as i32;
-                    let y = ((-draw.position[1] + 1.0) / 2.0 * height as f32) as i32;
+                render_ui_draws_with_font(
+                    &draws,
+                    &mut buffer,
+                    width,
+                    height,
+                    &string_table,
+                    Some(&font),
+                );
 
-                    // Convert f32 RGBA to u32 0xRRGGBBAA
-                    let r = (draw.color[0] * 255.0) as u32;
-                    let g = (draw.color[1] * 255.0) as u32;
-                    let b = (draw.color[2] * 255.0) as u32;
-                    let a = (draw.color[3] * 255.0) as u32;
-                    let color_u32 = (a << 24) | (r << 16) | (g << 8) | b;
-
-                    // Draw a 10x10 colored square
-                    for i in 0..10 {
-                        for j in 0..10 {
-                            let px = x + i;
-                            let py = y + j;
-                            if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
-                                let index = (py * width as i32 + px) as usize;
-                                if index < buffer.len() {
-                                    buffer[index] = color_u32;
-                                }
-                            }
-                        }
-                    }
-                }
-                
                 buffer.present().unwrap();
             }
             Event::WindowEvent {
