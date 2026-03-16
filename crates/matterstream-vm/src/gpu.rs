@@ -153,6 +153,7 @@ pub fn build_draw_list_from_ui_draws(
                     unpack_color_f32(*color),
                 ));
             }
+            crate::ui_vm::UiDrawCmd::Action { .. } => {}
         }
     }
     cmds

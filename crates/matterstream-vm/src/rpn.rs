@@ -94,6 +94,7 @@ pub enum RpnOp {
     UiLine = 0x48,
     // Extended UI (v0.3.0)
     UiTextStr = 0x49,
+    UiAction = 0x4A,
     // Event & runtime opcodes (v0.3.0)
     EvPoll = 0x50,
     EvHasEvent = 0x51,
@@ -166,6 +167,7 @@ impl RpnOp {
             0x47 => Some(RpnOp::UiSetOffset),
             0x48 => Some(RpnOp::UiLine),
             0x49 => Some(RpnOp::UiTextStr),
+            0x4A => Some(RpnOp::UiAction),
             0x50 => Some(RpnOp::EvPoll),
             0x51 => Some(RpnOp::EvHasEvent),
             0x52 => Some(RpnOp::FrameCount),
@@ -265,7 +267,8 @@ impl GasConfig {
             | RpnOp::UiPopState
             | RpnOp::UiSetOffset
             | RpnOp::UiLine
-            | RpnOp::UiTextStr => self.cost_ui,
+            | RpnOp::UiTextStr
+            | RpnOp::UiAction => self.cost_ui,
         }
     }
 }
@@ -1281,6 +1284,24 @@ impl RpnVm {
                     size,
                     str_idx,
                     color: self.ui_state.color,
+                });
+                self.pc += 1;
+            }
+            RpnOp::UiAction => {
+                if self.ui_draws.len() >= UI_DRAW_CMD_MAX {
+                    return Err(RpnError::UiDrawLimitExceeded);
+                }
+                let str_idx = self.pop_u32_coerce()?;
+                let h = self.pop_u32_coerce()?;
+                let w = self.pop_u32_coerce()?;
+                let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
+                let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                self.ui_draws.push(UiDrawCmd::Action {
+                    x,
+                    y,
+                    w,
+                    h,
+                    str_idx,
                 });
                 self.pc += 1;
             }

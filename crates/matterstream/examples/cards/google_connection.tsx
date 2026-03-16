@@ -10,7 +10,7 @@
   <Text x={120} y={150} size={12} label="Not connected" color="#FF6666FF" />
 
   {/* Connect button */}
-  <Slab x={20} y={185} w={320} h={42} radius={8} color="#4285F4FF" />
+  <Slab x={20} y={185} w={320} h={42} radius={8} color="#4285F4FF" action="google_oauth_connect" />
   <Text x={72} y={197} size={14} label="Connect with Google" color="#FFFFFFFF" />
 
   {/* Scope info */}

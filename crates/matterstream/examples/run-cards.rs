@@ -91,6 +91,13 @@ fn offset_scale_draws(
                 y2: s(y2 + dy),
                 color: *color,
             },
+            UiDrawCmd::Action { x, y, w, h, str_idx } => UiDrawCmd::Action {
+                x: s(x + dx),
+                y: s(y + dy),
+                w: su(*w),
+                h: su(*h),
+                str_idx: str_idx + str_offset,
+            },
         })
         .collect()
 }
@@ -189,6 +196,7 @@ fn card_bounds(draws: &[UiDrawCmd]) -> (i32, i32) {
             UiDrawCmd::Line { x1, y1, x2, y2, .. } => {
                 ((*x1).max(*x2), (*y1).max(*y2))
             }
+            UiDrawCmd::Action { x, y, w, h, .. } => (x + *w as i32, y + *h as i32),
         };
         max_x = max_x.max(right);
         max_y = max_y.max(bottom);
@@ -392,11 +400,12 @@ fn main() {
                     WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
                         match state {
                             ElementState::Pressed => {
+                                let cx = cursor_x as i32;
+                                let cy = cursor_y as i32;
+
                                 // Hit test cards in reverse order (last = top)
                                 let mut hit = None;
                                 for (i, card) in compiled_cards.iter().enumerate().rev() {
-                                    let cx = cursor_x as i32;
-                                    let cy = cursor_y as i32;
                                     if cx >= card.x
                                         && cx < card.x + card.w
                                         && cy >= card.y
@@ -407,13 +416,46 @@ fn main() {
                                     }
                                 }
                                 if let Some(idx) = hit {
-                                    drag_offset_x = cursor_x - compiled_cards[idx].x as f64;
-                                    drag_offset_y = cursor_y - compiled_cards[idx].y as f64;
-                                    dragging = Some(idx);
-                                    // Move dragged card to end (top of z-order)
+                                    // Check if click landed on an action region
+                                    let card = &compiled_cards[idx];
+                                    let local_x = cx - card.x;
+                                    let local_y = cy - card.y;
+                                    let mut fired_action = false;
+                                    for cmd in &card.draws {
+                                        if let UiDrawCmd::Action { x, y, w, h, str_idx } = cmd {
+                                            if local_x >= *x
+                                                && local_x < x + *w as i32
+                                                && local_y >= *y
+                                                && local_y < y + *h as i32
+                                            {
+                                                if let Some(name) =
+                                                    card.string_table.get(*str_idx as usize)
+                                                {
+                                                    println!(
+                                                        "[action] {{ \"action\": \"{}\", \"card\": {} }}",
+                                                        name, idx
+                                                    );
+                                                }
+                                                fired_action = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    // Start drag (even on action buttons, for flexibility)
+                                    if !fired_action {
+                                        drag_offset_x =
+                                            cursor_x - compiled_cards[idx].x as f64;
+                                        drag_offset_y =
+                                            cursor_y - compiled_cards[idx].y as f64;
+                                        dragging = Some(idx);
+                                    }
+                                    // Move clicked card to end (top of z-order)
                                     let card = compiled_cards.remove(idx);
                                     compiled_cards.push(card);
-                                    dragging = Some(compiled_cards.len() - 1);
+                                    if dragging == Some(idx) {
+                                        dragging = Some(compiled_cards.len() - 1);
+                                    }
                                     window.request_redraw();
                                 }
                             }

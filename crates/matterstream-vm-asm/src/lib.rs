@@ -35,6 +35,7 @@ enum AsmToken {
     LoadBank(StateSlot),
     StoreBank(StateSlot),
     UiTextStr(StringId),
+    UiAction(StringId),
 }
 
 impl AsmToken {
@@ -51,6 +52,7 @@ impl AsmToken {
             AsmToken::LoadBank(_) => 5 + 5 + 1, // Push32(bank) + Push32(index) + LoadBank
             AsmToken::StoreBank(_) => 5 + 5 + 1, // Push32(bank) + Push32(index) + StoreBank
             AsmToken::UiTextStr(_) => 5, // Push32(str_idx)
+            AsmToken::UiAction(_) => 5,  // Push32(str_idx)
         }
     }
 }
@@ -311,6 +313,15 @@ impl Asm {
         self.op(RpnOp::UiLine)
     }
 
+    pub fn draw_action(&mut self, x: i32, y: i32, w: u32, h: u32, id: StringId) -> &mut Self {
+        self.push32(x as u32);
+        self.push32(y as u32);
+        self.push32(w);
+        self.push32(h);
+        self.tokens.push(AsmToken::UiAction(id));
+        self.op(RpnOp::UiAction)
+    }
+
     // ── Finalization ──
 
     pub fn finish(self) -> Result<AsmOutput, AsmError> {
@@ -384,6 +395,10 @@ impl Asm {
                     bytecode.push(RpnOp::StoreBank as u8);
                 }
                 AsmToken::UiTextStr(id) => {
+                    bytecode.push(RpnOp::Push32 as u8);
+                    bytecode.extend_from_slice(&id.0.to_le_bytes());
+                }
+                AsmToken::UiAction(id) => {
                     bytecode.push(RpnOp::Push32 as u8);
                     bytecode.extend_from_slice(&id.0.to_le_bytes());
                 }

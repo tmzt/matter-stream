@@ -12,7 +12,7 @@
   <Slab x={176} y={126} w={8} h={12} radius={2} color="#6C8CFFFF" />
 
   {/* Passkey button */}
-  <Slab x={20} y={180} w={320} h={48} radius={8} color="#4466FFFF" />
+  <Slab x={20} y={180} w={320} h={48} radius={8} color="#4466FFFF" action="passkey_login" />
   <Text x={82} y={195} size={16} label="Sign in with Passkey" color="#FFFFFFFF" />
 
   {/* Divider */}

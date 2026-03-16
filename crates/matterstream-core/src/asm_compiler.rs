@@ -758,6 +758,10 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                 asm.set_color(r, g, b, a);
             }
             asm.draw_slab(x, y, w, h, radius);
+            if let Some(action) = get_str_prop(&node.props, "action") {
+                let action_id = asm.def_string(&action);
+                asm.draw_action(x, y, w, h, action_id);
+            }
         }
         "Circle" => {
             let x = get_num_prop(&node.props, "x").unwrap_or(0) as i32;

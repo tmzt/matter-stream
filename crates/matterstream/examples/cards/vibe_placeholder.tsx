@@ -12,6 +12,6 @@
   <Text x={32} y={118} size={10} label="will be built for you." color="#555555FF" />
 
   {/* Generate button */}
-  <Slab x={20} y={168} w={320} h={36} radius={8} color="#8B5CF6FF" />
+  <Slab x={20} y={168} w={320} h={36} radius={8} color="#8B5CF6FF" action="vibe_generate" />
   <Text x={130} y={178} size={14} label="Generate" color="#FFFFFFFF" />
 </>
