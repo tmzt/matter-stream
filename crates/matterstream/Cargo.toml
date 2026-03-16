@@ -30,6 +30,10 @@ name = "ui-demo"
 name = "run-tsx"
 required-features = ["compiler"]
 
+[[example]]
+name = "run-cards"
+required-features = ["compiler"]
+
 [dev-dependencies]
 async-io = { workspace = true }
 smol = { workspace = true }

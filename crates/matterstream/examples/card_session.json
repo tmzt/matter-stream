@@ -1,0 +1,9 @@
+{
+  "cards": [
+    { "id": "login", "file": "cards/login.tsx", "x": 20, "y": 20 },
+    { "id": "google_connection", "file": "cards/google_connection.tsx", "x": 400, "y": 20 },
+    { "id": "vibe_placeholder", "file": "cards/vibe_placeholder.tsx", "x": 400, "y": 320 },
+    { "id": "contacts", "file": "cards/contacts.tsx", "x": 780, "y": 20 },
+    { "id": "inbox", "file": "cards/inbox.tsx", "x": 780, "y": 420 }
+  ]
+}
