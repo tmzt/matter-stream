@@ -538,13 +538,12 @@ fn main() {
                                                     input_focused = true;
                                                     clicked_prompt = true;
                                                 } else if action_name == "prompt_send" {
-                                                    if !input_text.is_empty() {
-                                                        println!(
-                                                            "[action] {{ \"action\": \"prompt_send\", \"text\": \"{}\" }}",
-                                                            input_text.replace('\\', "\\\\").replace('"', "\\\"")
-                                                        );
-                                                        input_text.clear();
-                                                    }
+                                                    println!(
+                                                        "[action] {{ \"action\": \"prompt_send\", \"text\": \"{}\" }}",
+                                                        input_text.replace('\\', "\\\\").replace('"', "\\\"")
+                                                    );
+                                                    input_text.clear();
+                                                    input_focused = true;
                                                     clicked_prompt = true;
                                                 } else {
                                                     println!(
@@ -612,14 +611,12 @@ fn main() {
                         if input_focused && event.state == ElementState::Pressed {
                             match &event.logical_key {
                                 Key::Named(NamedKey::Enter) => {
-                                    if !input_text.is_empty() {
-                                        println!(
-                                            "[action] {{ \"action\": \"prompt_send\", \"text\": \"{}\" }}",
-                                            input_text.replace('\\', "\\\\").replace('"', "\\\"")
-                                        );
-                                        input_text.clear();
-                                        window.request_redraw();
-                                    }
+                                    println!(
+                                        "[action] {{ \"action\": \"prompt_send\", \"text\": \"{}\" }}",
+                                        input_text.replace('\\', "\\\\").replace('"', "\\\"")
+                                    );
+                                    input_text.clear();
+                                    window.request_redraw();
                                 }
                                 Key::Named(NamedKey::Backspace) => {
                                     input_text.pop();
