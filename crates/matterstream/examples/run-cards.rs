@@ -26,7 +26,7 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Event, MouseButton, WindowEvent};
 use winit::event_loop::{EventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::Window;
+use winit::window::{Fullscreen, Window};
 
 /// A compiled card ready to render.
 struct CompiledCard {
@@ -401,6 +401,10 @@ fn main() {
     let mut input_text = String::new();
     let mut input_focused = false;
 
+    // Double-click detection
+    let mut last_click_time = Instant::now();
+    let mut last_click_hit_card = true; // true = don't trigger on first click
+
     // Animation
     let start_time = Instant::now();
 
@@ -411,7 +415,7 @@ fn main() {
             .create_window(
                 Window::default_attributes()
                     .with_title("MatterStream — Card Session")
-                    .with_inner_size(LogicalSize::new(1280.0, 800.0)),
+                    .with_inner_size(LogicalSize::new(1440.0, 900.0)),
             )
             .unwrap(),
     );
@@ -571,13 +575,31 @@ fn main() {
                                     window.request_redraw();
                                 }
 
-                                // Clicking outside any card unfocuses input
+                                // Clicking outside any card
                                 if hit.is_none() {
                                     input_focused = false;
+                                    // Double-click empty space → toggle fullscreen
+                                    let now = Instant::now();
+                                    if !last_click_hit_card
+                                        && now.duration_since(last_click_time)
+                                            < Duration::from_millis(400)
+                                    {
+                                        if window.fullscreen().is_some() {
+                                            window.set_fullscreen(None);
+                                        } else {
+                                            window.set_fullscreen(Some(
+                                                Fullscreen::Borderless(None),
+                                            ));
+                                        }
+                                    }
+                                    last_click_time = now;
+                                    last_click_hit_card = false;
                                     window.request_redraw();
-                                } else if !clicked_prompt {
-                                    // Clicked a non-prompt card
-                                    input_focused = false;
+                                } else {
+                                    last_click_hit_card = true;
+                                    if !clicked_prompt {
+                                        input_focused = false;
+                                    }
                                 }
                             }
                             ElementState::Released => {
@@ -609,7 +631,7 @@ fn main() {
                                 }
                                 Key::Character(ch) => {
                                     // Limit input length to fit the bar
-                                    if input_text.len() < 68 {
+                                    if input_text.len() < 88 {
                                         input_text.push_str(ch.as_str());
                                         window.request_redraw();
                                     }
