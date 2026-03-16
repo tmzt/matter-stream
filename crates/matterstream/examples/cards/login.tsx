@@ -1,26 +1,25 @@
 <>
   {/* Card background */}
-  <Slab x={0} y={0} w={360} h={420} radius={12} color="#1E1E2EFF" />
+  <Slab x={0} y={0} w={360} h={340} radius={12} color="#1E1E2EFF" />
 
   {/* Title */}
-  <Text x={140} y={30} size={28} label="Login" color="#EEEEEEFF" />
+  <Text x={120} y={30} size={28} label="Sign In" color="#EEEEEEFF" />
 
-  {/* Username label */}
-  <Text x={30} y={100} size={14} label="Username" color="#AAAAAAFF" />
-  <Slab x={20} y={120} w={320} h={36} radius={6} color="#333344FF" />
+  {/* Passkey icon area */}
+  <Circle x={180} y={120} r={32} color="#282840FF" />
+  <Slab x={164} y={108} w={14} h={24} radius={6} color="#6C8CFFFF" />
+  <Circle x={180} y={108} r={7} color="#6C8CFFFF" />
+  <Slab x={176} y={126} w={8} h={12} radius={2} color="#6C8CFFFF" />
 
-  {/* Password label */}
-  <Text x={30} y={186} size={14} label="Password" color="#AAAAAAFF" />
-  <Slab x={20} y={206} w={320} h={36} radius={6} color="#333344FF" />
+  {/* Passkey button */}
+  <Slab x={20} y={180} w={320} h={48} radius={8} color="#4466FFFF" />
+  <Text x={82} y={195} size={16} label="Sign in with Passkey" color="#FFFFFFFF" />
 
-  {/* Remember me checkbox area */}
-  <Slab x={20} y={270} w={18} h={18} radius={3} color="#333344FF" />
-  <Text x={48} y={272} size={12} label="Remember me" color="#888888FF" />
+  {/* Divider */}
+  <Slab x={20} y={254} w={140} h={1} radius={0} color="#333344FF" />
+  <Text x={170} y={248} size={12} label="or" color="#666666FF" />
+  <Slab x={200} y={254} w={140} h={1} radius={0} color="#333344FF" />
 
-  {/* Login button */}
-  <Slab x={20} y={320} w={320} h={42} radius={8} color="#007BFFFF" />
-  <Text x={148} y={332} size={16} label="Login" color="#FFFFFFFF" />
-
-  {/* Footer link */}
-  <Text x={100} y={385} size={12} label="Forgot password?" color="#5599FFFF" />
+  {/* Register passkey link */}
+  <Text x={82} y={286} size={12} label="Register a new passkey" color="#5599FFFF" />
 </>
