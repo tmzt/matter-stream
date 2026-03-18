@@ -437,6 +437,25 @@ impl Asm {
         self.op(RpnOp::SkillCronJitter)
     }
 
+    // ── Card helpers ──
+
+    pub fn card_begin(&mut self, name: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.op(RpnOp::CardBegin)
+    }
+
+    pub fn card_end(&mut self) -> &mut Self { self.op(RpnOp::CardEnd) }
+
+    pub fn card_set_short_desc(&mut self, desc: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(desc));
+        self.op(RpnOp::CardSetShortDesc)
+    }
+
+    pub fn card_set_long_desc(&mut self, desc: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(desc));
+        self.op(RpnOp::CardSetLongDesc)
+    }
+
     // ── Object type helpers ──
 
     pub fn objtype_begin(&mut self, name: StringId) -> &mut Self {

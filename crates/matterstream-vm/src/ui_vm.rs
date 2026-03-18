@@ -204,6 +204,8 @@ pub struct SkillDef {
     pub cron: Option<CronSpec>,
     /// Object types defined by this skill.
     pub object_types: Vec<ObjectTypeDef>,
+    /// Card definitions (UI templates) defined by this skill.
+    pub cards: Vec<CardDef>,
 }
 
 impl SkillDef {
@@ -215,6 +217,36 @@ impl SkillDef {
             steps: Vec::new(),
             cron: None,
             object_types: Vec::new(),
+            cards: Vec::new(),
+        }
+    }
+}
+
+/// Maximum card definitions per execution.
+pub const CARD_DEF_MAX: usize = 64;
+
+// ── Card definitions ────────────────────────────────────────────────────
+
+/// A named UI card definition with compiled draw commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardDef {
+    pub name: String,
+    pub short_description: String,
+    pub long_description: String,
+    /// Compiled UI draw commands for this card.
+    pub draws: Vec<UiDrawCmd>,
+    /// String table entries referenced by draw commands.
+    pub string_table: Vec<String>,
+}
+
+impl CardDef {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            short_description: String::new(),
+            long_description: String::new(),
+            draws: Vec::new(),
+            string_table: Vec::new(),
         }
     }
 }

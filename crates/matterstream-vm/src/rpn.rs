@@ -19,6 +19,7 @@ use crate::ui_vm::{
     VqlOutput, VqlField, VQL_OUTPUT_MAX,
     SkillDef, SkillStep, SkillReplaceable, LlmUseCase, CronSpec, SKILL_OUTPUT_MAX,
     ObjectTypeDef, ObjectFieldDef, OBJECT_TYPE_MAX,
+    CardDef, CARD_DEF_MAX,
     FOURCC_MTUI,
 };
 use std::collections::HashMap;
@@ -131,6 +132,11 @@ pub enum RpnOp {
     SkillSetLongDesc = 0x7A,
     SkillCronInterval = 0x7B,
     SkillCronJitter = 0x7C,
+    // Card definition (v0.5.0)
+    CardBegin = 0x82,
+    CardEnd = 0x83,
+    CardSetShortDesc = 0x84,
+    CardSetLongDesc = 0x85,
     // Object type definition (v0.5.0)
     ObjTypeBegin = 0x7D,
     ObjTypeEnd = 0x7E,
@@ -236,6 +242,10 @@ impl RpnOp {
             0x7F => Some(RpnOp::ObjTypeSetShortDesc),
             0x80 => Some(RpnOp::ObjTypeSetLongDesc),
             0x81 => Some(RpnOp::ObjTypeField),
+            0x82 => Some(RpnOp::CardBegin),
+            0x83 => Some(RpnOp::CardEnd),
+            0x84 => Some(RpnOp::CardSetShortDesc),
+            0x85 => Some(RpnOp::CardSetLongDesc),
             _ => None,
         }
     }
@@ -365,7 +375,11 @@ impl GasConfig {
             | RpnOp::ObjTypeEnd
             | RpnOp::ObjTypeSetShortDesc
             | RpnOp::ObjTypeSetLongDesc
-            | RpnOp::ObjTypeField => self.cost_skill,
+            | RpnOp::ObjTypeField
+            | RpnOp::CardBegin
+            | RpnOp::CardEnd
+            | RpnOp::CardSetShortDesc
+            | RpnOp::CardSetLongDesc => self.cost_skill,
         }
     }
 }
@@ -444,6 +458,8 @@ pub enum RpnError {
     InvalidStringIndex(u32),
     ObjTypeLimitExceeded,
     ObjTypeNoActiveDef,
+    CardLimitExceeded,
+    CardNoActiveDef,
 }
 
 impl fmt::Display for RpnError {
@@ -487,6 +503,8 @@ impl fmt::Display for RpnError {
             RpnError::InvalidStringIndex(idx) => write!(f, "RPN invalid string index: {}", idx),
             RpnError::ObjTypeLimitExceeded => write!(f, "RPN object type limit exceeded"),
             RpnError::ObjTypeNoActiveDef => write!(f, "RPN no active object type definition"),
+            RpnError::CardLimitExceeded => write!(f, "RPN card definition limit exceeded"),
+            RpnError::CardNoActiveDef => write!(f, "RPN no active card definition"),
         }
     }
 }
@@ -574,6 +592,11 @@ pub struct RpnVm {
     // Object type state
     pub objtype_outputs: Vec<ObjectTypeDef>,
     objtype_active: Option<ObjectTypeDef>,
+    // Card state
+    pub card_outputs: Vec<CardDef>,
+    card_active: Option<CardDef>,
+    /// When inside a CardBegin/CardEnd, UI draws go to the card instead of ui_draws.
+    card_capturing: bool,
 }
 
 impl RpnVm {
@@ -611,6 +634,9 @@ impl RpnVm {
             skill_active_llm_use_case: LlmUseCase::General,
             objtype_outputs: Vec::new(),
             objtype_active: None,
+            card_outputs: Vec::new(),
+            card_active: None,
+            card_capturing: false,
         }
     }
 
@@ -675,6 +701,20 @@ impl RpnVm {
                 use_case: self.skill_active_llm_use_case,
             });
             self.skill_active_llm_use_case = LlmUseCase::General;
+        }
+        Ok(())
+    }
+
+    /// Push a draw command to the active card (if capturing) or ui_draws.
+    fn push_draw(&mut self, cmd: UiDrawCmd) -> Result<(), RpnError> {
+        if self.card_capturing {
+            let card = self.card_active.as_mut().ok_or(RpnError::CardNoActiveDef)?;
+            card.draws.push(cmd);
+        } else {
+            if self.ui_draws.len() >= UI_DRAW_CMD_MAX {
+                return Err(RpnError::UiDrawLimitExceeded);
+            }
+            self.ui_draws.push(cmd);
         }
         Ok(())
     }
@@ -942,6 +982,9 @@ impl RpnVm {
         self.skill_active_llm_use_case = LlmUseCase::General;
         self.objtype_outputs.clear();
         self.objtype_active = None;
+        self.card_outputs.clear();
+        self.card_active = None;
+        self.card_capturing = false;
         let mut cycles = 0usize;
 
         while self.pc < bytecode.len() {
@@ -1383,105 +1426,52 @@ impl RpnVm {
                 self.pc += 1;
             }
             RpnOp::UiBox => {
-                if self.ui_draws.len() >= UI_DRAW_CMD_MAX {
-                    return Err(RpnError::UiDrawLimitExceeded);
-                }
                 let h = self.pop_u32_coerce()?;
                 let w = self.pop_u32_coerce()?;
                 let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
                 let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
-                self.ui_draws.push(UiDrawCmd::Box {
-                    x,
-                    y,
-                    w,
-                    h,
-                    color: self.ui_state.color,
-                });
+                self.push_draw(UiDrawCmd::Box { x, y, w, h, color: self.ui_state.color })?;
                 self.pc += 1;
             }
             RpnOp::UiSlab => {
-                if self.ui_draws.len() >= UI_DRAW_CMD_MAX {
-                    return Err(RpnError::UiDrawLimitExceeded);
-                }
                 let radius = self.pop_u32_coerce()?;
                 let h = self.pop_u32_coerce()?;
                 let w = self.pop_u32_coerce()?;
                 let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
                 let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
-                self.ui_draws.push(UiDrawCmd::Slab {
-                    x,
-                    y,
-                    w,
-                    h,
-                    radius,
-                    color: self.ui_state.color,
-                });
+                self.push_draw(UiDrawCmd::Slab { x, y, w, h, radius, color: self.ui_state.color })?;
                 self.pc += 1;
             }
             RpnOp::UiCircle => {
-                if self.ui_draws.len() >= UI_DRAW_CMD_MAX {
-                    return Err(RpnError::UiDrawLimitExceeded);
-                }
                 let r = self.pop_u32_coerce()?;
                 let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
                 let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
-                self.ui_draws.push(UiDrawCmd::Circle {
-                    x,
-                    y,
-                    r,
-                    color: self.ui_state.color,
-                });
+                self.push_draw(UiDrawCmd::Circle { x, y, r, color: self.ui_state.color })?;
                 self.pc += 1;
             }
             RpnOp::UiText => {
-                if self.ui_draws.len() >= UI_DRAW_CMD_MAX {
-                    return Err(RpnError::UiDrawLimitExceeded);
-                }
                 let slot = self.pop_u32_coerce()?;
                 let size = self.pop_u32_coerce()?;
                 let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
                 let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
-                self.ui_draws.push(UiDrawCmd::Text {
-                    x,
-                    y,
-                    size,
-                    slot,
-                    color: self.ui_state.color,
-                });
+                self.push_draw(UiDrawCmd::Text { x, y, size, slot, color: self.ui_state.color })?;
                 self.pc += 1;
             }
             RpnOp::UiTextStr => {
-                if self.ui_draws.len() >= UI_DRAW_CMD_MAX {
-                    return Err(RpnError::UiDrawLimitExceeded);
-                }
                 let str_idx = self.pop_u32_coerce()?;
                 let size = self.pop_u32_coerce()?;
                 let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
                 let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
-                self.ui_draws.push(UiDrawCmd::TextStr {
-                    x,
-                    y,
-                    size,
-                    str_idx,
-                    color: self.ui_state.color,
-                });
+                self.push_draw(UiDrawCmd::TextStr { x, y, size, str_idx, color: self.ui_state.color })?;
                 self.pc += 1;
             }
             RpnOp::UiAction => {
-                if self.ui_draws.len() >= UI_DRAW_CMD_MAX {
-                    return Err(RpnError::UiDrawLimitExceeded);
-                }
                 let str_idx = self.pop_u32_coerce()?;
                 let h = self.pop_u32_coerce()?;
                 let w = self.pop_u32_coerce()?;
                 let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
                 let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
-                self.ui_draws.push(UiDrawCmd::Action {
-                    x,
-                    y,
-                    w,
-                    h,
-                    str_idx,
+                self.push_draw(UiDrawCmd::Action { x, y, w, h, str_idx
                 });
                 self.pc += 1;
             }
@@ -1507,20 +1497,11 @@ impl RpnVm {
                 self.pc += 1;
             }
             RpnOp::UiLine => {
-                if self.ui_draws.len() >= UI_DRAW_CMD_MAX {
-                    return Err(RpnError::UiDrawLimitExceeded);
-                }
                 let y2 = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
                 let x2 = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
                 let y1 = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
                 let x1 = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
-                self.ui_draws.push(UiDrawCmd::Line {
-                    x1,
-                    y1,
-                    x2,
-                    y2,
-                    color: self.ui_state.color,
-                });
+                self.push_draw(UiDrawCmd::Line { x1, y1, x2, y2, color: self.ui_state.color })?;
                 self.pc += 1;
             }
             // --- Event & runtime opcodes ---
@@ -1772,6 +1753,43 @@ impl RpnVm {
                     fts: flags & 1 != 0,
                     vec: flags & 2 != 0,
                 });
+                self.pc += 1;
+            }
+            // --- Card definition opcodes ---
+            RpnOp::CardBegin => {
+                if self.card_outputs.len() >= CARD_DEF_MAX {
+                    return Err(RpnError::CardLimitExceeded);
+                }
+                let name_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(name_idx)?;
+                self.card_active = Some(CardDef::new(name));
+                self.card_capturing = true;
+                self.pc += 1;
+            }
+            RpnOp::CardEnd => {
+                self.card_capturing = false;
+                let mut card = self.card_active.take().ok_or(RpnError::CardNoActiveDef)?;
+                // Copy relevant string table entries to the card
+                card.string_table = self.string_table.clone();
+                // Attach to active skill if one exists
+                if let Some(skill) = self.skill_active.as_mut() {
+                    skill.cards.push(card.clone());
+                }
+                self.card_outputs.push(card);
+                self.pc += 1;
+            }
+            RpnOp::CardSetShortDesc => {
+                let str_idx = self.pop_u32_coerce()?;
+                let desc = self.resolve_str(str_idx)?;
+                let card = self.card_active.as_mut().ok_or(RpnError::CardNoActiveDef)?;
+                card.short_description = desc;
+                self.pc += 1;
+            }
+            RpnOp::CardSetLongDesc => {
+                let str_idx = self.pop_u32_coerce()?;
+                let desc = self.resolve_str(str_idx)?;
+                let card = self.card_active.as_mut().ok_or(RpnError::CardNoActiveDef)?;
+                card.long_description = desc;
                 self.pc += 1;
             }
             RpnOp::SkillInvoke => {

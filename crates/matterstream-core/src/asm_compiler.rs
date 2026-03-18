@@ -957,6 +957,23 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
             let default_id = asm.def_string(&default);
             asm.skill_replaceable(name_id, default_id);
         }
+        "Card" => {
+            let name = get_str_prop(&node.props, "name").unwrap_or_default();
+            let name_id = asm.def_string(&name);
+            asm.card_begin(name_id);
+            if let Some(short) = get_str_prop(&node.props, "shortDescription") {
+                let id = asm.def_string(&short);
+                asm.card_set_short_desc(id);
+            }
+            if let Some(long) = get_str_prop(&node.props, "longDescription") {
+                let id = asm.def_string(&long);
+                asm.card_set_long_desc(id);
+            }
+            // Children are UI elements (Box, Slab, Text, etc.) captured into the card
+            emit_nodes(asm, &node.children);
+            asm.card_end();
+            return;
+        }
         "ObjectType" => {
             let name = get_str_prop(&node.props, "name").unwrap_or_default();
             let name_id = asm.def_string(&name);
