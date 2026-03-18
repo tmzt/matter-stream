@@ -146,6 +146,15 @@ pub struct SkillReplaceable {
     pub default: String,
 }
 
+/// Optional cron schedule attached to a skill.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CronSpec {
+    /// Base interval in milliseconds.
+    pub interval_ms: u64,
+    /// Random jitter added to interval (0..jitter_ms).
+    pub jitter_ms: u64,
+}
+
 /// A complete skill definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillDef {
@@ -153,6 +162,8 @@ pub struct SkillDef {
     pub short_description: String,
     pub long_description: String,
     pub steps: Vec<SkillStep>,
+    /// Optional cron schedule for periodic execution.
+    pub cron: Option<CronSpec>,
 }
 
 impl SkillDef {
@@ -162,6 +173,7 @@ impl SkillDef {
             short_description: String::new(),
             long_description: String::new(),
             steps: Vec::new(),
+            cron: None,
         }
     }
 }

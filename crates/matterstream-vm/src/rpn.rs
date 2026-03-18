@@ -17,7 +17,7 @@ use crate::event::{VmEvent, VmEventType};
 use crate::ui_vm::{
     UiDrawCmd, UiDrawState, UI_DRAW_CMD_MAX, UI_STATE_STACK_MAX,
     VqlOutput, VqlField, VQL_OUTPUT_MAX,
-    SkillDef, SkillStep, SkillReplaceable, LlmUseCase, SKILL_OUTPUT_MAX,
+    SkillDef, SkillStep, SkillReplaceable, LlmUseCase, CronSpec, SKILL_OUTPUT_MAX,
     FOURCC_MTUI,
 };
 use std::collections::HashMap;
@@ -128,6 +128,8 @@ pub enum RpnOp {
     SkillLlmUseCase = 0x78,
     SkillSetShortDesc = 0x79,
     SkillSetLongDesc = 0x7A,
+    SkillCronInterval = 0x7B,
+    SkillCronJitter = 0x7C,
 }
 
 impl RpnOp {
@@ -220,6 +222,8 @@ impl RpnOp {
             0x78 => Some(RpnOp::SkillLlmUseCase),
             0x79 => Some(RpnOp::SkillSetShortDesc),
             0x7A => Some(RpnOp::SkillSetLongDesc),
+            0x7B => Some(RpnOp::SkillCronInterval),
+            0x7C => Some(RpnOp::SkillCronJitter),
             _ => None,
         }
     }
@@ -342,7 +346,9 @@ impl GasConfig {
             | RpnOp::SkillLlmModel
             | RpnOp::SkillLlmUseCase
             | RpnOp::SkillSetShortDesc
-            | RpnOp::SkillSetLongDesc => self.cost_skill,
+            | RpnOp::SkillSetLongDesc
+            | RpnOp::SkillCronInterval
+            | RpnOp::SkillCronJitter => self.cost_skill,
         }
     }
 }
@@ -1659,6 +1665,28 @@ impl RpnVm {
                 let desc = self.resolve_str(str_idx)?;
                 let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
                 skill.long_description = desc;
+                self.pc += 1;
+            }
+            RpnOp::SkillCronInterval => {
+                let hi = self.pop_u32_coerce()? as u64;
+                let lo = self.pop_u32_coerce()? as u64;
+                let interval_ms = (hi << 32) | lo;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                match &mut skill.cron {
+                    Some(spec) => spec.interval_ms = interval_ms,
+                    None => skill.cron = Some(CronSpec { interval_ms, jitter_ms: 0 }),
+                }
+                self.pc += 1;
+            }
+            RpnOp::SkillCronJitter => {
+                let hi = self.pop_u32_coerce()? as u64;
+                let lo = self.pop_u32_coerce()? as u64;
+                let jitter_ms = (hi << 32) | lo;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                match &mut skill.cron {
+                    Some(spec) => spec.jitter_ms = jitter_ms,
+                    None => skill.cron = Some(CronSpec { interval_ms: 0, jitter_ms }),
+                }
                 self.pc += 1;
             }
             RpnOp::SkillInvoke => {

@@ -957,6 +957,14 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
             let default_id = asm.def_string(&default);
             asm.skill_replaceable(name_id, default_id);
         }
+        "Cron" => {
+            if let Some(interval) = get_num_prop(&node.props, "interval") {
+                asm.skill_cron_interval(interval as u64);
+            }
+            if let Some(jitter) = get_num_prop(&node.props, "jitter") {
+                asm.skill_cron_jitter(jitter as u64);
+            }
+        }
         "Invoke" => {
             let action = get_str_prop(&node.props, "action").unwrap_or_default();
             if let Some(symbol) = get_num_prop(&node.props, "symbol") {

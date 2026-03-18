@@ -423,6 +423,20 @@ impl Asm {
         self.op(RpnOp::SkillSetLongDesc)
     }
 
+    /// Set cron interval (u64 split as lo/hi u32 pushes).
+    pub fn skill_cron_interval(&mut self, interval_ms: u64) -> &mut Self {
+        self.push32(interval_ms as u32);          // lo
+        self.push32((interval_ms >> 32) as u32);  // hi
+        self.op(RpnOp::SkillCronInterval)
+    }
+
+    /// Set cron jitter (u64 split as lo/hi u32 pushes).
+    pub fn skill_cron_jitter(&mut self, jitter_ms: u64) -> &mut Self {
+        self.push32(jitter_ms as u32);
+        self.push32((jitter_ms >> 32) as u32);
+        self.op(RpnOp::SkillCronJitter)
+    }
+
     pub fn skill_invoke_symbol(&mut self, symbol: u32) -> &mut Self {
         self.push32(symbol);
         self.op(RpnOp::SkillInvokeSymbol)
