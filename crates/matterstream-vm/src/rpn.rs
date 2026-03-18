@@ -1471,8 +1471,7 @@ impl RpnVm {
                 let w = self.pop_u32_coerce()?;
                 let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
                 let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
-                self.push_draw(UiDrawCmd::Action { x, y, w, h, str_idx
-                });
+                self.push_draw(UiDrawCmd::Action { x, y, w, h, str_idx })?;
                 self.pc += 1;
             }
             RpnOp::UiPushState => {
