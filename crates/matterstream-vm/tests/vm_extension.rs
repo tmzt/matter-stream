@@ -395,6 +395,76 @@ fn test_skill_mixed_steps() {
     );
 }
 
+// ── Nested skill tests ──────────────────────────────────────────────────
+
+#[test]
+fn test_nested_skills() {
+    // 0="parent", 1="child_a", 2="child_b", 3="step_p", 4="step_a", 5="step_b"
+    let mut vm = make_vm_with_strings(&[
+        "parent", "child_a", "child_b", "step_p", "step_a", "step_b",
+    ]);
+    let mut arena = TripleArena::new();
+
+    let bytecode = RpnVm::encode(&[
+        // Begin parent skill
+        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
+        (RpnOp::SkillBegin, None),
+        (RpnOp::Push32, Some(&3u32.to_le_bytes())),
+        (RpnOp::SkillStep, None),
+        // Nested: child_a
+        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
+        (RpnOp::SkillBegin, None),
+        (RpnOp::Push32, Some(&4u32.to_le_bytes())),
+        (RpnOp::SkillStep, None),
+        (RpnOp::SkillEnd, None),
+        // Nested: child_b
+        (RpnOp::Push32, Some(&2u32.to_le_bytes())),
+        (RpnOp::SkillBegin, None),
+        (RpnOp::Push32, Some(&5u32.to_le_bytes())),
+        (RpnOp::SkillStep, None),
+        (RpnOp::SkillEnd, None),
+        // End parent skill
+        (RpnOp::SkillEnd, None),
+        (RpnOp::Halt, None),
+    ]);
+
+    vm.execute(&bytecode, &mut arena).unwrap();
+    // Should have 3 skills: child_a, child_b, parent (in order of SkillEnd)
+    assert_eq!(vm.skill_outputs.len(), 3);
+    assert_eq!(vm.skill_outputs[0].name, "child_a");
+    assert_eq!(vm.skill_outputs[0].steps.len(), 1);
+    assert_eq!(vm.skill_outputs[1].name, "child_b");
+    assert_eq!(vm.skill_outputs[1].steps.len(), 1);
+    assert_eq!(vm.skill_outputs[2].name, "parent");
+    assert_eq!(vm.skill_outputs[2].steps.len(), 1);
+}
+
+#[test]
+fn test_sibling_skills() {
+    // 0="alpha", 1="beta", 2="s1", 3="s2"
+    let mut vm = make_vm_with_strings(&["alpha", "beta", "s1", "s2"]);
+    let mut arena = TripleArena::new();
+
+    let bytecode = RpnVm::encode(&[
+        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
+        (RpnOp::SkillBegin, None),
+        (RpnOp::Push32, Some(&2u32.to_le_bytes())),
+        (RpnOp::SkillStep, None),
+        (RpnOp::SkillEnd, None),
+        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
+        (RpnOp::SkillBegin, None),
+        (RpnOp::Push32, Some(&3u32.to_le_bytes())),
+        (RpnOp::SkillStep, None),
+        (RpnOp::SkillEnd, None),
+        (RpnOp::Halt, None),
+    ]);
+
+    vm.execute(&bytecode, &mut arena).unwrap();
+    assert_eq!(vm.skill_outputs.len(), 2);
+    assert_eq!(vm.skill_outputs[0].name, "alpha");
+    assert_eq!(vm.skill_outputs[1].name, "beta");
+}
+
 // ── LlmUseCase enum tests ──────────────────────────────────────────────
 
 #[test]

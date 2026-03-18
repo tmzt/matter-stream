@@ -543,6 +543,8 @@ pub struct RpnVm {
     // SKLL state
     pub skill_outputs: Vec<SkillDef>,
     skill_active: Option<SkillDef>,
+    /// Stack for nested skill definitions (parent pushed when child begins).
+    skill_stack: Vec<SkillDef>,
     /// Temporary storage for replaceables being added to the current LLM step
     skill_active_llm_prompt: Option<String>,
     skill_active_llm_replaceables: Vec<SkillReplaceable>,
@@ -578,6 +580,7 @@ impl RpnVm {
             vql_active: None,
             skill_outputs: Vec::new(),
             skill_active: None,
+            skill_stack: Vec::new(),
             skill_active_llm_prompt: None,
             skill_active_llm_replaceables: Vec::new(),
             skill_active_llm_model: None,
@@ -906,6 +909,7 @@ impl RpnVm {
         self.vql_active = None;
         self.skill_outputs.clear();
         self.skill_active = None;
+        self.skill_stack.clear();
         self.skill_active_llm_prompt = None;
         self.skill_active_llm_replaceables.clear();
         self.skill_active_llm_model = None;
@@ -1596,6 +1600,11 @@ impl RpnVm {
                 }
                 let name_idx = self.pop_u32_coerce()?;
                 let name = self.resolve_str(name_idx)?;
+                // If there's already an active skill, push it onto the stack
+                // (supports nested <Skill> definitions)
+                if let Some(parent) = self.skill_active.take() {
+                    self.skill_stack.push(parent);
+                }
                 self.skill_active = Some(SkillDef::new(name));
                 self.pc += 1;
             }
@@ -1604,6 +1613,8 @@ impl RpnVm {
                 self.flush_llm_step()?;
                 let skill = self.skill_active.take().ok_or(RpnError::SkillNoActiveDef)?;
                 self.skill_outputs.push(skill);
+                // Restore parent skill if nested
+                self.skill_active = self.skill_stack.pop();
                 self.pc += 1;
             }
             RpnOp::SkillStep => {
