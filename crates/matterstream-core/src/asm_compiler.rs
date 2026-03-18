@@ -5,6 +5,8 @@
 //! - Primitive components: Box, Slab, Circle, Text, Line, Path, VStack
 //! - Arrow-function composite components with prop substitution
 //! - Compile-time arithmetic in numeric expressions (e.g. `y + 8`)
+//! - VQL queries: Query, Bind, Field, Filter, Param
+//! - SKLL skills: Skill, Step, LlmStep, Replaceable, Invoke
 
 use std::collections::HashMap;
 
@@ -13,6 +15,7 @@ use oxc_ast::ast::*;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 
+use matterstream_vm::ui_vm::{LlmUseCase, CR_OUTPUT_MODE, FOURCC_MTUI, FOURCC_VQL0, FOURCC_SKLL};
 use matterstream_vm_asm::{Asm, AsmOutput};
 
 // ── Intermediate representation ──────────────────────────────────────────
@@ -856,6 +859,102 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                         }
                     }
                 }
+            }
+        }
+        // ── VQL0: Query / Vesicle tags ────────────────────────────────
+        "Query" => {
+            asm.set_cr(CR_OUTPUT_MODE as u32, FOURCC_VQL0);
+            asm.vql_begin_query();
+            // Emit entity/filter as fields from props
+            if let Some(entity) = get_str_prop(&node.props, "entity") {
+                let name_id = asm.def_string("entity");
+                let val_id = asm.def_string(&entity);
+                asm.vql_set_field_str(name_id, val_id);
+            }
+            if let Some(filter) = get_str_prop(&node.props, "filter") {
+                let id = asm.def_string(&filter);
+                asm.vql_filter(id);
+            }
+            emit_nodes(asm, &node.children);
+            asm.vql_end_query();
+            asm.set_cr(CR_OUTPUT_MODE as u32, FOURCC_MTUI);
+            return;
+        }
+        "Bind" => {
+            let name = get_str_prop(&node.props, "name").unwrap_or_default();
+            let value = get_str_prop(&node.props, "value").unwrap_or_default();
+            let name_id = asm.def_string(&name);
+            let val_id = asm.def_string(&value);
+            asm.vql_bind(name_id, val_id);
+        }
+        "Field" => {
+            let name = get_str_prop(&node.props, "name").unwrap_or_default();
+            let id = asm.def_string(&name);
+            asm.vql_project(id);
+        }
+        "Filter" => {
+            let name = get_str_prop(&node.props, "name").unwrap_or_default();
+            let id = asm.def_string(&name);
+            asm.vql_filter(id);
+        }
+        "Param" => {
+            let key = get_str_prop(&node.props, "name").unwrap_or_default();
+            let value = get_str_prop(&node.props, "value").unwrap_or_default();
+            let key_id = asm.def_string(&key);
+            let val_id = asm.def_string(&value);
+            asm.vql_param(key_id, val_id);
+        }
+        // ── SKLL: Skill tags ─────────────────────────────────────────
+        "Skill" => {
+            asm.set_cr(CR_OUTPUT_MODE as u32, FOURCC_SKLL);
+            let name = get_str_prop(&node.props, "name").unwrap_or_default();
+            let name_id = asm.def_string(&name);
+            asm.skill_begin(name_id);
+            emit_nodes(asm, &node.children);
+            asm.skill_end();
+            asm.set_cr(CR_OUTPUT_MODE as u32, FOURCC_MTUI);
+            return;
+        }
+        "Step" => {
+            let name = get_str_prop(&node.props, "name").unwrap_or_default();
+            // If action prop present, emit as name (action is the step identity)
+            let step_name = get_str_prop(&node.props, "action").unwrap_or(name);
+            let id = asm.def_string(&step_name);
+            asm.skill_step(id);
+        }
+        "LlmStep" => {
+            let prompt = get_str_prop(&node.props, "prompt").unwrap_or_default();
+            let prompt_id = asm.def_string(&prompt);
+            asm.skill_llm_step(prompt_id);
+            // Optional model attribute
+            if let Some(model) = get_str_prop(&node.props, "model") {
+                let model_id = asm.def_string(&model);
+                asm.skill_llm_model(model_id);
+            }
+            // Optional useCase attribute
+            if let Some(uc_str) = get_str_prop(&node.props, "useCase") {
+                if let Some(uc) = LlmUseCase::from_str(&uc_str) {
+                    asm.skill_llm_use_case(uc as u8);
+                }
+            }
+            // Emit children (Replaceable elements)
+            emit_nodes(asm, &node.children);
+            return;
+        }
+        "Replaceable" => {
+            let name = get_str_prop(&node.props, "name").unwrap_or_default();
+            let default = get_str_prop(&node.props, "default").unwrap_or_default();
+            let name_id = asm.def_string(&name);
+            let default_id = asm.def_string(&default);
+            asm.skill_replaceable(name_id, default_id);
+        }
+        "Invoke" => {
+            let action = get_str_prop(&node.props, "action").unwrap_or_default();
+            if let Some(symbol) = get_num_prop(&node.props, "symbol") {
+                asm.skill_invoke_symbol(symbol as u32);
+            } else {
+                let id = asm.def_string(&action);
+                asm.skill_invoke(id);
             }
         }
         "VStack" => {

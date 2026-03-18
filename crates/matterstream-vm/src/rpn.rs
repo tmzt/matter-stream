@@ -14,7 +14,12 @@ use matterstream_vm_addressing::ova::Ova;
 use matterstream_vm_arena::TripleArena;
 
 use crate::event::{VmEvent, VmEventType};
-use crate::ui_vm::{UiDrawCmd, UiDrawState, UI_DRAW_CMD_MAX, UI_STATE_STACK_MAX};
+use crate::ui_vm::{
+    UiDrawCmd, UiDrawState, UI_DRAW_CMD_MAX, UI_STATE_STACK_MAX,
+    VqlOutput, VqlField, VQL_OUTPUT_MAX,
+    SkillDef, SkillStep, SkillReplaceable, LlmUseCase, SKILL_OUTPUT_MAX,
+    FOURCC_MTUI,
+};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
@@ -100,6 +105,27 @@ pub enum RpnOp {
     EvHasEvent = 0x51,
     FrameCount = 0x52,
     Rand = 0x53,
+    // Control register (v0.5.0)
+    SetCR = 0x60,
+    // VQL0 — Vesicle Query Language (v0.5.0)
+    VqlBeginQuery = 0x61,
+    VqlEndQuery = 0x62,
+    VqlBind = 0x63,
+    VqlSetField = 0x64,
+    VqlSetFieldStr = 0x65,
+    VqlFilter = 0x66,
+    VqlProject = 0x67,
+    VqlParam = 0x68,
+    // SKLL — Skill / invocable logic (v0.5.0)
+    SkillBegin = 0x70,
+    SkillEnd = 0x71,
+    SkillStep = 0x72,
+    SkillLlmStep = 0x73,
+    SkillReplaceable = 0x74,
+    SkillInvoke = 0x75,
+    SkillInvokeSymbol = 0x76,
+    SkillLlmModel = 0x77,
+    SkillLlmUseCase = 0x78,
 }
 
 impl RpnOp {
@@ -172,6 +198,24 @@ impl RpnOp {
             0x51 => Some(RpnOp::EvHasEvent),
             0x52 => Some(RpnOp::FrameCount),
             0x53 => Some(RpnOp::Rand),
+            0x60 => Some(RpnOp::SetCR),
+            0x61 => Some(RpnOp::VqlBeginQuery),
+            0x62 => Some(RpnOp::VqlEndQuery),
+            0x63 => Some(RpnOp::VqlBind),
+            0x64 => Some(RpnOp::VqlSetField),
+            0x65 => Some(RpnOp::VqlSetFieldStr),
+            0x66 => Some(RpnOp::VqlFilter),
+            0x67 => Some(RpnOp::VqlProject),
+            0x68 => Some(RpnOp::VqlParam),
+            0x70 => Some(RpnOp::SkillBegin),
+            0x71 => Some(RpnOp::SkillEnd),
+            0x72 => Some(RpnOp::SkillStep),
+            0x73 => Some(RpnOp::SkillLlmStep),
+            0x74 => Some(RpnOp::SkillReplaceable),
+            0x75 => Some(RpnOp::SkillInvoke),
+            0x76 => Some(RpnOp::SkillInvokeSymbol),
+            0x77 => Some(RpnOp::SkillLlmModel),
+            0x78 => Some(RpnOp::SkillLlmUseCase),
             _ => None,
         }
     }
@@ -206,6 +250,9 @@ pub struct GasConfig {
     pub cost_bitwise: u64,
     pub cost_bank: u64,
     pub cost_event: u64,
+    pub cost_cr: u64,
+    pub cost_vql: u64,
+    pub cost_skill: u64,
 }
 
 impl GasConfig {
@@ -227,6 +274,9 @@ impl GasConfig {
             cost_bitwise: 2,
             cost_bank: 3,
             cost_event: 5,
+            cost_cr: 2,
+            cost_vql: 5,
+            cost_skill: 5,
         }
     }
 
@@ -269,6 +319,24 @@ impl GasConfig {
             | RpnOp::UiLine
             | RpnOp::UiTextStr
             | RpnOp::UiAction => self.cost_ui,
+            RpnOp::SetCR => self.cost_cr,
+            RpnOp::VqlBeginQuery
+            | RpnOp::VqlEndQuery
+            | RpnOp::VqlBind
+            | RpnOp::VqlSetField
+            | RpnOp::VqlSetFieldStr
+            | RpnOp::VqlFilter
+            | RpnOp::VqlProject
+            | RpnOp::VqlParam => self.cost_vql,
+            RpnOp::SkillBegin
+            | RpnOp::SkillEnd
+            | RpnOp::SkillStep
+            | RpnOp::SkillLlmStep
+            | RpnOp::SkillReplaceable
+            | RpnOp::SkillInvoke
+            | RpnOp::SkillInvokeSymbol
+            | RpnOp::SkillLlmModel
+            | RpnOp::SkillLlmUseCase => self.cost_skill,
         }
     }
 }
@@ -338,6 +406,13 @@ pub enum RpnError {
     UiDrawLimitExceeded,
     InvalidBankId(u32),
     InvalidBankSlot { bank: u32, slot: u32 },
+    InvalidCRIndex(u32),
+    VqlLimitExceeded,
+    VqlNoActiveQuery,
+    SkillLimitExceeded,
+    SkillNoActiveDef,
+    SkillNoActiveLlmStep,
+    InvalidStringIndex(u32),
 }
 
 impl fmt::Display for RpnError {
@@ -372,6 +447,13 @@ impl fmt::Display for RpnError {
             RpnError::InvalidBankSlot { bank, slot } => {
                 write!(f, "RPN invalid bank slot: bank={}, slot={}", bank, slot)
             }
+            RpnError::InvalidCRIndex(idx) => write!(f, "RPN invalid CR index: {}", idx),
+            RpnError::VqlLimitExceeded => write!(f, "RPN VQL output limit exceeded"),
+            RpnError::VqlNoActiveQuery => write!(f, "RPN VQL no active query"),
+            RpnError::SkillLimitExceeded => write!(f, "RPN SKLL output limit exceeded"),
+            RpnError::SkillNoActiveDef => write!(f, "RPN SKLL no active skill definition"),
+            RpnError::SkillNoActiveLlmStep => write!(f, "RPN SKLL no active LLM step"),
+            RpnError::InvalidStringIndex(idx) => write!(f, "RPN invalid string index: {}", idx),
         }
     }
 }
@@ -441,6 +523,19 @@ pub struct RpnVm {
     pub frame_count: u64,
     // RNG
     pub rng: SimpleRng,
+    // Control register bank (8 registers, CR0 = output mode FourCC)
+    pub cr_bank: [u32; 8],
+    // VQL state
+    pub vql_outputs: Vec<VqlOutput>,
+    vql_active: Option<VqlOutput>,
+    // SKLL state
+    pub skill_outputs: Vec<SkillDef>,
+    skill_active: Option<SkillDef>,
+    /// Temporary storage for replaceables being added to the current LLM step
+    skill_active_llm_prompt: Option<String>,
+    skill_active_llm_replaceables: Vec<SkillReplaceable>,
+    skill_active_llm_model: Option<String>,
+    skill_active_llm_use_case: LlmUseCase,
 }
 
 impl RpnVm {
@@ -466,6 +561,15 @@ impl RpnVm {
             event_queue: VecDeque::new(),
             frame_count: 0,
             rng: SimpleRng::new(0xDEAD_BEEF),
+            cr_bank: [FOURCC_MTUI, 0, 0, 0, 0, 0, 0, 0],
+            vql_outputs: Vec::new(),
+            vql_active: None,
+            skill_outputs: Vec::new(),
+            skill_active: None,
+            skill_active_llm_prompt: None,
+            skill_active_llm_replaceables: Vec::new(),
+            skill_active_llm_model: None,
+            skill_active_llm_use_case: LlmUseCase::General,
         }
     }
 
@@ -510,6 +614,28 @@ impl RpnVm {
             RpnValue::U64(x) => Ok(x as u32),
             _ => Err(RpnError::TypeMismatch),
         }
+    }
+
+    fn resolve_str(&self, idx: u32) -> Result<String, RpnError> {
+        self.string_table
+            .get(idx as usize)
+            .cloned()
+            .ok_or(RpnError::InvalidStringIndex(idx))
+    }
+
+    /// Flush the pending LLM step (prompt + replaceables + model + use_case) into the active skill.
+    fn flush_llm_step(&mut self) -> Result<(), RpnError> {
+        if let Some(prompt) = self.skill_active_llm_prompt.take() {
+            let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+            skill.steps.push(SkillStep::Llm {
+                prompt,
+                replaceables: std::mem::take(&mut self.skill_active_llm_replaceables),
+                model: self.skill_active_llm_model.take(),
+                use_case: self.skill_active_llm_use_case,
+            });
+            self.skill_active_llm_use_case = LlmUseCase::General;
+        }
+        Ok(())
     }
 
     fn read_u8(bytecode: &[u8], pos: usize) -> Result<u8, RpnError> {
@@ -762,6 +888,16 @@ impl RpnVm {
         // Stack is cleared, but banks persist
         self.stack.clear();
         self.call_stack.clear();
+        // Reset control registers and extension outputs
+        self.cr_bank = [FOURCC_MTUI, 0, 0, 0, 0, 0, 0, 0];
+        self.vql_outputs.clear();
+        self.vql_active = None;
+        self.skill_outputs.clear();
+        self.skill_active = None;
+        self.skill_active_llm_prompt = None;
+        self.skill_active_llm_replaceables.clear();
+        self.skill_active_llm_model = None;
+        self.skill_active_llm_use_case = LlmUseCase::General;
         let mut cycles = 0usize;
 
         while self.pc < bytecode.len() {
@@ -1367,6 +1503,159 @@ impl RpnVm {
                 let max = self.pop_u32_coerce()?;
                 let value = self.rng.next_bounded(max);
                 self.push(RpnValue::U32(value))?;
+                self.pc += 1;
+            }
+            // --- Control register ---
+            RpnOp::SetCR => {
+                let value = self.pop_u32_coerce()?;
+                let cr_idx = self.pop_u32_coerce()?;
+                if cr_idx as usize >= self.cr_bank.len() {
+                    return Err(RpnError::InvalidCRIndex(cr_idx));
+                }
+                self.cr_bank[cr_idx as usize] = value;
+                self.pc += 1;
+            }
+            // --- VQL0 opcodes ---
+            RpnOp::VqlBeginQuery => {
+                if self.vql_outputs.len() >= VQL_OUTPUT_MAX {
+                    return Err(RpnError::VqlLimitExceeded);
+                }
+                self.vql_active = Some(VqlOutput::new());
+                self.pc += 1;
+            }
+            RpnOp::VqlEndQuery => {
+                let query = self.vql_active.take().ok_or(RpnError::VqlNoActiveQuery)?;
+                self.vql_outputs.push(query);
+                self.pc += 1;
+            }
+            RpnOp::VqlBind => {
+                let val_idx = self.pop_u32_coerce()?;
+                let key_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(key_idx)?;
+                let value = self.resolve_str(val_idx)?;
+                let query = self.vql_active.as_mut().ok_or(RpnError::VqlNoActiveQuery)?;
+                query.fields.push(VqlField::Bind { name, value });
+                self.pc += 1;
+            }
+            RpnOp::VqlSetField => {
+                let value = self.pop_u64()?;
+                let name_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(name_idx)?;
+                let query = self.vql_active.as_mut().ok_or(RpnError::VqlNoActiveQuery)?;
+                query.fields.push(VqlField::FieldValue { name, value });
+                self.pc += 1;
+            }
+            RpnOp::VqlSetFieldStr => {
+                let val_idx = self.pop_u32_coerce()?;
+                let name_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(name_idx)?;
+                let value = self.resolve_str(val_idx)?;
+                let query = self.vql_active.as_mut().ok_or(RpnError::VqlNoActiveQuery)?;
+                query.fields.push(VqlField::FieldStr { name, value });
+                self.pc += 1;
+            }
+            RpnOp::VqlFilter => {
+                let name_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(name_idx)?;
+                let query = self.vql_active.as_mut().ok_or(RpnError::VqlNoActiveQuery)?;
+                query.fields.push(VqlField::Filter(name));
+                self.pc += 1;
+            }
+            RpnOp::VqlProject => {
+                let name_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(name_idx)?;
+                let query = self.vql_active.as_mut().ok_or(RpnError::VqlNoActiveQuery)?;
+                query.fields.push(VqlField::Project(name));
+                self.pc += 1;
+            }
+            RpnOp::VqlParam => {
+                let val_idx = self.pop_u32_coerce()?;
+                let key_idx = self.pop_u32_coerce()?;
+                let key = self.resolve_str(key_idx)?;
+                let value = self.resolve_str(val_idx)?;
+                let query = self.vql_active.as_mut().ok_or(RpnError::VqlNoActiveQuery)?;
+                query.fields.push(VqlField::Param { key, value });
+                self.pc += 1;
+            }
+            // --- SKLL opcodes ---
+            RpnOp::SkillBegin => {
+                if self.skill_outputs.len() >= SKILL_OUTPUT_MAX {
+                    return Err(RpnError::SkillLimitExceeded);
+                }
+                let name_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(name_idx)?;
+                self.skill_active = Some(SkillDef::new(name));
+                self.pc += 1;
+            }
+            RpnOp::SkillEnd => {
+                // Flush any pending LLM step
+                self.flush_llm_step()?;
+                let skill = self.skill_active.take().ok_or(RpnError::SkillNoActiveDef)?;
+                self.skill_outputs.push(skill);
+                self.pc += 1;
+            }
+            RpnOp::SkillStep => {
+                // Flush any pending LLM step first
+                self.flush_llm_step()?;
+                let name_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(name_idx)?;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                skill.steps.push(SkillStep::Deterministic { name });
+                self.pc += 1;
+            }
+            RpnOp::SkillLlmStep => {
+                // Flush any previous pending LLM step
+                self.flush_llm_step()?;
+                let prompt_idx = self.pop_u32_coerce()?;
+                let prompt = self.resolve_str(prompt_idx)?;
+                self.skill_active_llm_prompt = Some(prompt);
+                self.pc += 1;
+            }
+            RpnOp::SkillReplaceable => {
+                let default_idx = self.pop_u32_coerce()?;
+                let name_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(name_idx)?;
+                let default = self.resolve_str(default_idx)?;
+                if self.skill_active_llm_prompt.is_none() {
+                    return Err(RpnError::SkillNoActiveLlmStep);
+                }
+                self.skill_active_llm_replaceables.push(SkillReplaceable { name, default });
+                self.pc += 1;
+            }
+            RpnOp::SkillLlmModel => {
+                let model_idx = self.pop_u32_coerce()?;
+                let model = self.resolve_str(model_idx)?;
+                if self.skill_active_llm_prompt.is_none() {
+                    return Err(RpnError::SkillNoActiveLlmStep);
+                }
+                self.skill_active_llm_model = Some(model);
+                self.pc += 1;
+            }
+            RpnOp::SkillLlmUseCase => {
+                let use_case_val = self.pop_u32_coerce()? as u8;
+                let use_case = LlmUseCase::from_u8(use_case_val)
+                    .unwrap_or(LlmUseCase::General);
+                if self.skill_active_llm_prompt.is_none() {
+                    return Err(RpnError::SkillNoActiveLlmStep);
+                }
+                self.skill_active_llm_use_case = use_case;
+                self.pc += 1;
+            }
+            RpnOp::SkillInvoke => {
+                // Flush any pending LLM step first
+                self.flush_llm_step()?;
+                let name_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(name_idx)?;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                skill.steps.push(SkillStep::InvokeAction { name });
+                self.pc += 1;
+            }
+            RpnOp::SkillInvokeSymbol => {
+                // Flush any pending LLM step first
+                self.flush_llm_step()?;
+                let symbol = self.pop_u32_coerce()?;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                skill.steps.push(SkillStep::InvokeSymbol { symbol });
                 self.pc += 1;
             }
         }

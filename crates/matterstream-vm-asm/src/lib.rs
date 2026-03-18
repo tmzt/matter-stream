@@ -36,6 +36,8 @@ enum AsmToken {
     StoreBank(StateSlot),
     UiTextStr(StringId),
     UiAction(StringId),
+    /// Push a string table index as u32 (generic, used by VQL/SKLL ops).
+    StrRef(StringId),
 }
 
 impl AsmToken {
@@ -53,6 +55,7 @@ impl AsmToken {
             AsmToken::StoreBank(_) => 5 + 5 + 1, // Push32(bank) + Push32(index) + StoreBank
             AsmToken::UiTextStr(_) => 5, // Push32(str_idx)
             AsmToken::UiAction(_) => 5,  // Push32(str_idx)
+            AsmToken::StrRef(_) => 5,    // Push32(str_idx)
         }
     }
 }
@@ -322,6 +325,99 @@ impl Asm {
         self.op(RpnOp::UiAction)
     }
 
+    // ── Control register helpers ──
+
+    /// Set a control register: push cr_index, push value, SetCR.
+    pub fn set_cr(&mut self, cr_index: u32, value: u32) -> &mut Self {
+        self.push32(cr_index);
+        self.push32(value);
+        self.op(RpnOp::SetCR)
+    }
+
+    // ── VQL helpers ──
+
+    pub fn vql_begin_query(&mut self) -> &mut Self { self.op(RpnOp::VqlBeginQuery) }
+    pub fn vql_end_query(&mut self) -> &mut Self { self.op(RpnOp::VqlEndQuery) }
+
+    pub fn vql_bind(&mut self, key: StringId, value: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(key));
+        self.tokens.push(AsmToken::StrRef(value));
+        self.op(RpnOp::VqlBind)
+    }
+
+    pub fn vql_set_field(&mut self, name: StringId, value: u64) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.push64(value);
+        self.op(RpnOp::VqlSetField)
+    }
+
+    pub fn vql_set_field_str(&mut self, name: StringId, value: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.tokens.push(AsmToken::StrRef(value));
+        self.op(RpnOp::VqlSetFieldStr)
+    }
+
+    pub fn vql_filter(&mut self, name: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.op(RpnOp::VqlFilter)
+    }
+
+    pub fn vql_project(&mut self, name: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.op(RpnOp::VqlProject)
+    }
+
+    pub fn vql_param(&mut self, key: StringId, value: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(key));
+        self.tokens.push(AsmToken::StrRef(value));
+        self.op(RpnOp::VqlParam)
+    }
+
+    // ── SKLL helpers ──
+
+    pub fn skill_begin(&mut self, name: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.op(RpnOp::SkillBegin)
+    }
+
+    pub fn skill_end(&mut self) -> &mut Self { self.op(RpnOp::SkillEnd) }
+
+    pub fn skill_step(&mut self, name: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.op(RpnOp::SkillStep)
+    }
+
+    pub fn skill_llm_step(&mut self, prompt: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(prompt));
+        self.op(RpnOp::SkillLlmStep)
+    }
+
+    pub fn skill_replaceable(&mut self, name: StringId, default: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.tokens.push(AsmToken::StrRef(default));
+        self.op(RpnOp::SkillReplaceable)
+    }
+
+    pub fn skill_llm_model(&mut self, model: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(model));
+        self.op(RpnOp::SkillLlmModel)
+    }
+
+    pub fn skill_llm_use_case(&mut self, use_case: u8) -> &mut Self {
+        self.push32(use_case as u32);
+        self.op(RpnOp::SkillLlmUseCase)
+    }
+
+    pub fn skill_invoke(&mut self, name: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.op(RpnOp::SkillInvoke)
+    }
+
+    pub fn skill_invoke_symbol(&mut self, symbol: u32) -> &mut Self {
+        self.push32(symbol);
+        self.op(RpnOp::SkillInvokeSymbol)
+    }
+
     // ── Finalization ──
 
     pub fn finish(self) -> Result<AsmOutput, AsmError> {
@@ -399,6 +495,10 @@ impl Asm {
                     bytecode.extend_from_slice(&id.0.to_le_bytes());
                 }
                 AsmToken::UiAction(id) => {
+                    bytecode.push(RpnOp::Push32 as u8);
+                    bytecode.extend_from_slice(&id.0.to_le_bytes());
+                }
+                AsmToken::StrRef(id) => {
                     bytecode.push(RpnOp::Push32 as u8);
                     bytecode.extend_from_slice(&id.0.to_le_bytes());
                 }

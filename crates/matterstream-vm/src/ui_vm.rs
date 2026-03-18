@@ -1,7 +1,166 @@
-//! UI draw commands, draw state, color helpers, and CPU-side softbuffer rasterizer.
+//! UI draw commands, draw state, color helpers, CPU-side softbuffer rasterizer,
+//! VQL (Vesicle Query Language) output, and SKLL (Skill) definitions.
 
 /// Maximum UI state stack depth.
 pub const UI_STATE_STACK_MAX: usize = 16;
+
+/// Maximum VQL outputs per execution.
+pub const VQL_OUTPUT_MAX: usize = 256;
+
+/// Maximum SKLL outputs per execution.
+pub const SKILL_OUTPUT_MAX: usize = 64;
+
+// ── Control Register constants ──────────────────────────────────────────
+
+/// Control register index for output mode FourCC.
+pub const CR_OUTPUT_MODE: usize = 0;
+
+/// FourCC: MatterStream UI output (default).
+pub const FOURCC_MTUI: u32 = 0x4D545549;
+/// FourCC: Vesicle Query Language.
+pub const FOURCC_VQL0: u32 = 0x56514C30;
+/// FourCC: Skill / invocable logic.
+pub const FOURCC_SKLL: u32 = 0x534B4C4C;
+
+// ── VQL (Vesicle Query Language) types ──────────────────────────────────
+
+/// A single field in a VQL query output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VqlField {
+    /// A projected field name.
+    Project(String),
+    /// A filter predicate name.
+    Filter(String),
+    /// A bound parameter (name, value from string table).
+    Bind { name: String, value: String },
+    /// A named parameter (key, value).
+    Param { key: String, value: String },
+    /// A field with a numeric value.
+    FieldValue { name: String, value: u64 },
+    /// A field with a string value.
+    FieldStr { name: String, value: String },
+}
+
+/// A complete VQL query output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VqlOutput {
+    pub fields: Vec<VqlField>,
+}
+
+impl VqlOutput {
+    pub fn new() -> Self {
+        Self { fields: Vec::new() }
+    }
+}
+
+impl Default for VqlOutput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── SKLL (Skill) types ──────────────────────────────────────────────────
+
+/// LLM use-case hint for routing/dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum LlmUseCase {
+    /// General-purpose / unspecified.
+    General = 0,
+    /// Fast routing / classification / triage.
+    Routing = 1,
+    /// Extended thinking / chain-of-thought.
+    Thinking = 2,
+    /// Deep research / multi-step investigation.
+    DeepResearch = 3,
+    /// Summarization.
+    Summarize = 4,
+    /// Code generation.
+    CodeGen = 5,
+    /// Extraction / structured output.
+    Extract = 6,
+    /// Validation / checking.
+    Validate = 7,
+}
+
+impl LlmUseCase {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::General),
+            1 => Some(Self::Routing),
+            2 => Some(Self::Thinking),
+            3 => Some(Self::DeepResearch),
+            4 => Some(Self::Summarize),
+            5 => Some(Self::CodeGen),
+            6 => Some(Self::Extract),
+            7 => Some(Self::Validate),
+            _ => None,
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "general" => Some(Self::General),
+            "routing" => Some(Self::Routing),
+            "thinking" => Some(Self::Thinking),
+            "deep-research" | "deep_research" => Some(Self::DeepResearch),
+            "summarize" => Some(Self::Summarize),
+            "codegen" | "code-gen" | "code_gen" => Some(Self::CodeGen),
+            "extract" => Some(Self::Extract),
+            "validate" => Some(Self::Validate),
+            _ => None,
+        }
+    }
+}
+
+impl Default for LlmUseCase {
+    fn default() -> Self {
+        Self::General
+    }
+}
+
+/// A single step within a skill definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillStep {
+    /// A deterministic step (name from string table).
+    Deterministic { name: String },
+    /// An LLM step with a prompt template, optional model, and use-case.
+    Llm {
+        prompt: String,
+        replaceables: Vec<SkillReplaceable>,
+        /// Optional model name (e.g. "claude-sonnet-4-20250514", "gpt-4o").
+        model: Option<String>,
+        /// Use-case hint for routing.
+        use_case: LlmUseCase,
+    },
+    /// Invoke an action by name.
+    InvokeAction { name: String },
+    /// Invoke an action by numeric symbol.
+    InvokeSymbol { symbol: u32 },
+}
+
+/// A replaceable placeholder within an LLM prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillReplaceable {
+    pub name: String,
+    pub default: String,
+}
+
+/// A complete skill definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillDef {
+    pub name: String,
+    pub steps: Vec<SkillStep>,
+}
+
+impl SkillDef {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            steps: Vec::new(),
+        }
+    }
+}
 
 /// Maximum draw commands per execution.
 pub const UI_DRAW_CMD_MAX: usize = 4096;
