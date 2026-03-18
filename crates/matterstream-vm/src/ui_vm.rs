@@ -150,6 +150,8 @@ pub struct SkillReplaceable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillDef {
     pub name: String,
+    pub short_description: String,
+    pub long_description: String,
     pub steps: Vec<SkillStep>,
 }
 
@@ -157,6 +159,8 @@ impl SkillDef {
     pub fn new(name: String) -> Self {
         Self {
             name,
+            short_description: String::new(),
+            long_description: String::new(),
             steps: Vec::new(),
         }
     }

@@ -126,6 +126,8 @@ pub enum RpnOp {
     SkillInvokeSymbol = 0x76,
     SkillLlmModel = 0x77,
     SkillLlmUseCase = 0x78,
+    SkillSetShortDesc = 0x79,
+    SkillSetLongDesc = 0x7A,
 }
 
 impl RpnOp {
@@ -216,6 +218,8 @@ impl RpnOp {
             0x76 => Some(RpnOp::SkillInvokeSymbol),
             0x77 => Some(RpnOp::SkillLlmModel),
             0x78 => Some(RpnOp::SkillLlmUseCase),
+            0x79 => Some(RpnOp::SkillSetShortDesc),
+            0x7A => Some(RpnOp::SkillSetLongDesc),
             _ => None,
         }
     }
@@ -336,7 +340,9 @@ impl GasConfig {
             | RpnOp::SkillInvoke
             | RpnOp::SkillInvokeSymbol
             | RpnOp::SkillLlmModel
-            | RpnOp::SkillLlmUseCase => self.cost_skill,
+            | RpnOp::SkillLlmUseCase
+            | RpnOp::SkillSetShortDesc
+            | RpnOp::SkillSetLongDesc => self.cost_skill,
         }
     }
 }
@@ -1639,6 +1645,20 @@ impl RpnVm {
                     return Err(RpnError::SkillNoActiveLlmStep);
                 }
                 self.skill_active_llm_use_case = use_case;
+                self.pc += 1;
+            }
+            RpnOp::SkillSetShortDesc => {
+                let str_idx = self.pop_u32_coerce()?;
+                let desc = self.resolve_str(str_idx)?;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                skill.short_description = desc;
+                self.pc += 1;
+            }
+            RpnOp::SkillSetLongDesc => {
+                let str_idx = self.pop_u32_coerce()?;
+                let desc = self.resolve_str(str_idx)?;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                skill.long_description = desc;
                 self.pc += 1;
             }
             RpnOp::SkillInvoke => {

@@ -910,6 +910,15 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
             let name = get_str_prop(&node.props, "name").unwrap_or_default();
             let name_id = asm.def_string(&name);
             asm.skill_begin(name_id);
+            // Optional description props
+            if let Some(short) = get_str_prop(&node.props, "shortDescription") {
+                let id = asm.def_string(&short);
+                asm.skill_set_short_desc(id);
+            }
+            if let Some(long) = get_str_prop(&node.props, "longDescription") {
+                let id = asm.def_string(&long);
+                asm.skill_set_long_desc(id);
+            }
             emit_nodes(asm, &node.children);
             asm.skill_end();
             asm.set_cr(CR_OUTPUT_MODE as u32, FOURCC_MTUI);

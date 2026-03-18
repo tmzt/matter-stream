@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-matterstream-vm-addressing = { workspace = true }
-matterstream-vm-arena = { workspace = true }
-matterstream-packaging = { workspace = true }
-bytemuck = { workspace = true }
+matterstream-vm-addressing = { path = "../matterstream-vm-addressing" }
+matterstream-vm-arena = { path = "../matterstream-vm-arena" }
+matterstream-packaging = { path = "../matterstream-packaging" }
+bytemuck = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-matterstream-vm-asm = { workspace = true }
+matterstream-vm-asm = { path = "../matterstream-vm-asm" }
 
 [[example]]
 name = "connect4"

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-matterstream-vm = { workspace = true }
+matterstream-vm = { path = "../matterstream-vm" }
 
 [dev-dependencies]
-matterstream-vm-arena = { workspace = true }
+matterstream-vm-arena = { path = "../matterstream-vm-arena" }

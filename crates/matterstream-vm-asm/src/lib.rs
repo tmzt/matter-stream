@@ -413,6 +413,16 @@ impl Asm {
         self.op(RpnOp::SkillInvoke)
     }
 
+    pub fn skill_set_short_desc(&mut self, desc: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(desc));
+        self.op(RpnOp::SkillSetShortDesc)
+    }
+
+    pub fn skill_set_long_desc(&mut self, desc: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(desc));
+        self.op(RpnOp::SkillSetLongDesc)
+    }
+
     pub fn skill_invoke_symbol(&mut self, symbol: u32) -> &mut Self {
         self.push32(symbol);
         self.op(RpnOp::SkillInvokeSymbol)

@@ -6,40 +6,40 @@ description = "UI ISA core — ops, registers, tiers, stream executor, RPN VM, U
 license = "Apache-2.0"
 
 [dependencies]
-matterstream-vm-addressing = { workspace = true }
-matterstream-vm-arena = { workspace = true }
-matterstream-vm-scl = { workspace = true }
-matterstream-packaging = { workspace = true }
-futures = { workspace = true }
+matterstream-vm-addressing = { path = "../matterstream-vm-addressing" }
+matterstream-vm-arena = { path = "../matterstream-vm-arena" }
+matterstream-vm-scl = { path = "../matterstream-vm-scl" }
+matterstream-packaging = { path = "../matterstream-packaging" }
+futures = "0.3"
 
 [features]
 compiler = ["dep:oxc_parser", "dep:oxc_allocator", "dep:oxc_ast", "dep:oxc_span", "dep:matterstream-vm-asm", "dep:matterstream-vm"]
 
 [dependencies.oxc_parser]
-workspace = true
+version = "0.13"
 optional = true
 
 [dependencies.oxc_allocator]
-workspace = true
+version = "0.13"
 optional = true
 
 [dependencies.oxc_ast]
-workspace = true
+version = "0.13"
 optional = true
 
 [dependencies.oxc_span]
-workspace = true
+version = "0.13"
 optional = true
 
 [dependencies.matterstream-vm-asm]
-workspace = true
+path = "../matterstream-vm-asm"
 optional = true
 
 [dependencies.matterstream-vm]
-workspace = true
+path = "../matterstream-vm"
 optional = true
 
 [dev-dependencies]
-async-io = { workspace = true }
-smol = { workspace = true }
-tempfile = { workspace = true }
+async-io = "2.6.0"
+smol = "2"
+tempfile = "3"
