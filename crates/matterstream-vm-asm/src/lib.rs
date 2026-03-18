@@ -413,6 +413,16 @@ impl Asm {
         self.op(RpnOp::SkillInvoke)
     }
 
+    pub fn skill_forward_prompt(&mut self, dest: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(dest));
+        self.op(RpnOp::SkillForwardPrompt)
+    }
+
+    pub fn skill_add_to_system_prompt(&mut self, content: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(content));
+        self.op(RpnOp::SkillAddToSystemPrompt)
+    }
+
     pub fn skill_set_short_desc(&mut self, desc: StringId) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(desc));
         self.op(RpnOp::SkillSetShortDesc)

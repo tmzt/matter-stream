@@ -137,6 +137,8 @@ pub enum RpnOp {
     CardEnd = 0x83,
     CardSetShortDesc = 0x84,
     CardSetLongDesc = 0x85,
+    SkillForwardPrompt = 0x86,
+    SkillAddToSystemPrompt = 0x87,
     // Object type definition (v0.5.0)
     ObjTypeBegin = 0x7D,
     ObjTypeEnd = 0x7E,
@@ -246,6 +248,8 @@ impl RpnOp {
             0x83 => Some(RpnOp::CardEnd),
             0x84 => Some(RpnOp::CardSetShortDesc),
             0x85 => Some(RpnOp::CardSetLongDesc),
+            0x86 => Some(RpnOp::SkillForwardPrompt),
+            0x87 => Some(RpnOp::SkillAddToSystemPrompt),
             _ => None,
         }
     }
@@ -367,6 +371,8 @@ impl GasConfig {
             | RpnOp::SkillInvokeSymbol
             | RpnOp::SkillLlmModel
             | RpnOp::SkillLlmUseCase
+            | RpnOp::SkillForwardPrompt
+            | RpnOp::SkillAddToSystemPrompt
             | RpnOp::SkillSetShortDesc
             | RpnOp::SkillSetLongDesc
             | RpnOp::SkillCronInterval
@@ -1806,6 +1812,22 @@ impl RpnVm {
                 let symbol = self.pop_u32_coerce()?;
                 let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
                 skill.steps.push(SkillStep::InvokeSymbol { symbol });
+                self.pc += 1;
+            }
+            RpnOp::SkillForwardPrompt => {
+                self.flush_llm_step()?;
+                let dest_idx = self.pop_u32_coerce()?;
+                let dest = self.resolve_str(dest_idx)?;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                skill.steps.push(SkillStep::ForwardPrompt { dest });
+                self.pc += 1;
+            }
+            RpnOp::SkillAddToSystemPrompt => {
+                self.flush_llm_step()?;
+                let content_idx = self.pop_u32_coerce()?;
+                let content = self.resolve_str(content_idx)?;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                skill.steps.push(SkillStep::AddToSystemPrompt { content });
                 self.pc += 1;
             }
         }

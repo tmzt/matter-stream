@@ -775,6 +775,11 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                 asm.set_color(cr, cg, cb, ca);
             }
             asm.draw_circle(x, y, r);
+            if let Some(action) = get_str_prop(&node.props, "action") {
+                // Action region is a bounding box around the circle
+                let action_id = asm.def_string(&action);
+                asm.draw_action(x - r as i32, y - r as i32, r * 2, r * 2, action_id);
+            }
         }
         "Text" => {
             let x = get_num_prop(&node.props, "x").unwrap_or(0) as i32;
@@ -1014,6 +1019,16 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                 let id = asm.def_string(&action);
                 asm.skill_invoke(id);
             }
+        }
+        "ForwardPrompt" => {
+            let dest = get_str_prop(&node.props, "dest").unwrap_or_else(|| "thinker".to_string());
+            let id = asm.def_string(&dest);
+            asm.skill_forward_prompt(id);
+        }
+        "AddToSystemPrompt" => {
+            let content = get_str_prop(&node.props, "content").unwrap_or_default();
+            let id = asm.def_string(&content);
+            asm.skill_add_to_system_prompt(id);
         }
         "VStack" => {
             let x = get_num_prop(&node.props, "x").unwrap_or(0) as i32;

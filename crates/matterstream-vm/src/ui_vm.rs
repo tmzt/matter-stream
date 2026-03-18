@@ -137,6 +137,11 @@ pub enum SkillStep {
     InvokeAction { name: String },
     /// Invoke an action by numeric symbol.
     InvokeSymbol { symbol: u32 },
+    /// Forward the user's original prompt to a destination (e.g. "thinker").
+    /// The skill captures the prompt and passes it through for LLM processing.
+    ForwardPrompt { dest: String },
+    /// Inject text into the system prompt when this skill is invoked.
+    AddToSystemPrompt { content: String },
 }
 
 /// A replaceable placeholder within an LLM prompt.
