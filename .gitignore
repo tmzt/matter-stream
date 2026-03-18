@@ -1,5 +1,5 @@
 
 *.ttf
 
-/target
+target/
 Cargo.lock
