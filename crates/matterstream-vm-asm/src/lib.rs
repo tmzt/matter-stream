@@ -437,6 +437,32 @@ impl Asm {
         self.op(RpnOp::SkillCronJitter)
     }
 
+    // ── Object type helpers ──
+
+    pub fn objtype_begin(&mut self, name: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.op(RpnOp::ObjTypeBegin)
+    }
+
+    pub fn objtype_end(&mut self) -> &mut Self { self.op(RpnOp::ObjTypeEnd) }
+
+    pub fn objtype_set_short_desc(&mut self, desc: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(desc));
+        self.op(RpnOp::ObjTypeSetShortDesc)
+    }
+
+    pub fn objtype_set_long_desc(&mut self, desc: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(desc));
+        self.op(RpnOp::ObjTypeSetLongDesc)
+    }
+
+    /// Add a field definition. flags: bit0=fts, bit1=vec.
+    pub fn objtype_field(&mut self, name: StringId, flags: u32) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.push32(flags);
+        self.op(RpnOp::ObjTypeField)
+    }
+
     pub fn skill_invoke_symbol(&mut self, symbol: u32) -> &mut Self {
         self.push32(symbol);
         self.op(RpnOp::SkillInvokeSymbol)

@@ -18,6 +18,7 @@ use crate::ui_vm::{
     UiDrawCmd, UiDrawState, UI_DRAW_CMD_MAX, UI_STATE_STACK_MAX,
     VqlOutput, VqlField, VQL_OUTPUT_MAX,
     SkillDef, SkillStep, SkillReplaceable, LlmUseCase, CronSpec, SKILL_OUTPUT_MAX,
+    ObjectTypeDef, ObjectFieldDef, OBJECT_TYPE_MAX,
     FOURCC_MTUI,
 };
 use std::collections::HashMap;
@@ -130,6 +131,12 @@ pub enum RpnOp {
     SkillSetLongDesc = 0x7A,
     SkillCronInterval = 0x7B,
     SkillCronJitter = 0x7C,
+    // Object type definition (v0.5.0)
+    ObjTypeBegin = 0x7D,
+    ObjTypeEnd = 0x7E,
+    ObjTypeSetShortDesc = 0x7F,
+    ObjTypeSetLongDesc = 0x80,
+    ObjTypeField = 0x81,
 }
 
 impl RpnOp {
@@ -224,6 +231,11 @@ impl RpnOp {
             0x7A => Some(RpnOp::SkillSetLongDesc),
             0x7B => Some(RpnOp::SkillCronInterval),
             0x7C => Some(RpnOp::SkillCronJitter),
+            0x7D => Some(RpnOp::ObjTypeBegin),
+            0x7E => Some(RpnOp::ObjTypeEnd),
+            0x7F => Some(RpnOp::ObjTypeSetShortDesc),
+            0x80 => Some(RpnOp::ObjTypeSetLongDesc),
+            0x81 => Some(RpnOp::ObjTypeField),
             _ => None,
         }
     }
@@ -348,7 +360,12 @@ impl GasConfig {
             | RpnOp::SkillSetShortDesc
             | RpnOp::SkillSetLongDesc
             | RpnOp::SkillCronInterval
-            | RpnOp::SkillCronJitter => self.cost_skill,
+            | RpnOp::SkillCronJitter
+            | RpnOp::ObjTypeBegin
+            | RpnOp::ObjTypeEnd
+            | RpnOp::ObjTypeSetShortDesc
+            | RpnOp::ObjTypeSetLongDesc
+            | RpnOp::ObjTypeField => self.cost_skill,
         }
     }
 }
@@ -425,6 +442,8 @@ pub enum RpnError {
     SkillNoActiveDef,
     SkillNoActiveLlmStep,
     InvalidStringIndex(u32),
+    ObjTypeLimitExceeded,
+    ObjTypeNoActiveDef,
 }
 
 impl fmt::Display for RpnError {
@@ -466,6 +485,8 @@ impl fmt::Display for RpnError {
             RpnError::SkillNoActiveDef => write!(f, "RPN SKLL no active skill definition"),
             RpnError::SkillNoActiveLlmStep => write!(f, "RPN SKLL no active LLM step"),
             RpnError::InvalidStringIndex(idx) => write!(f, "RPN invalid string index: {}", idx),
+            RpnError::ObjTypeLimitExceeded => write!(f, "RPN object type limit exceeded"),
+            RpnError::ObjTypeNoActiveDef => write!(f, "RPN no active object type definition"),
         }
     }
 }
@@ -550,6 +571,9 @@ pub struct RpnVm {
     skill_active_llm_replaceables: Vec<SkillReplaceable>,
     skill_active_llm_model: Option<String>,
     skill_active_llm_use_case: LlmUseCase,
+    // Object type state
+    pub objtype_outputs: Vec<ObjectTypeDef>,
+    objtype_active: Option<ObjectTypeDef>,
 }
 
 impl RpnVm {
@@ -585,6 +609,8 @@ impl RpnVm {
             skill_active_llm_replaceables: Vec::new(),
             skill_active_llm_model: None,
             skill_active_llm_use_case: LlmUseCase::General,
+            objtype_outputs: Vec::new(),
+            objtype_active: None,
         }
     }
 
@@ -914,6 +940,8 @@ impl RpnVm {
         self.skill_active_llm_replaceables.clear();
         self.skill_active_llm_model = None;
         self.skill_active_llm_use_case = LlmUseCase::General;
+        self.objtype_outputs.clear();
+        self.objtype_active = None;
         let mut cycles = 0usize;
 
         while self.pc < bytecode.len() {
@@ -1698,6 +1726,52 @@ impl RpnVm {
                     Some(spec) => spec.jitter_ms = jitter_ms,
                     None => skill.cron = Some(CronSpec { interval_ms: 0, jitter_ms }),
                 }
+                self.pc += 1;
+            }
+            // --- Object type definition opcodes ---
+            RpnOp::ObjTypeBegin => {
+                if self.objtype_outputs.len() >= OBJECT_TYPE_MAX {
+                    return Err(RpnError::ObjTypeLimitExceeded);
+                }
+                let name_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(name_idx)?;
+                self.objtype_active = Some(ObjectTypeDef::new(name));
+                self.pc += 1;
+            }
+            RpnOp::ObjTypeEnd => {
+                let def = self.objtype_active.take().ok_or(RpnError::ObjTypeNoActiveDef)?;
+                // Attach to active skill if one exists, otherwise standalone
+                if let Some(skill) = self.skill_active.as_mut() {
+                    skill.object_types.push(def.clone());
+                }
+                self.objtype_outputs.push(def);
+                self.pc += 1;
+            }
+            RpnOp::ObjTypeSetShortDesc => {
+                let str_idx = self.pop_u32_coerce()?;
+                let desc = self.resolve_str(str_idx)?;
+                let def = self.objtype_active.as_mut().ok_or(RpnError::ObjTypeNoActiveDef)?;
+                def.short_description = desc;
+                self.pc += 1;
+            }
+            RpnOp::ObjTypeSetLongDesc => {
+                let str_idx = self.pop_u32_coerce()?;
+                let desc = self.resolve_str(str_idx)?;
+                let def = self.objtype_active.as_mut().ok_or(RpnError::ObjTypeNoActiveDef)?;
+                def.long_description = desc;
+                self.pc += 1;
+            }
+            RpnOp::ObjTypeField => {
+                // Stack: name_idx, flags (bit0=fts, bit1=vec)
+                let flags = self.pop_u32_coerce()?;
+                let name_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(name_idx)?;
+                let def = self.objtype_active.as_mut().ok_or(RpnError::ObjTypeNoActiveDef)?;
+                def.fields.push(ObjectFieldDef {
+                    name,
+                    fts: flags & 1 != 0,
+                    vec: flags & 2 != 0,
+                });
                 self.pc += 1;
             }
             RpnOp::SkillInvoke => {

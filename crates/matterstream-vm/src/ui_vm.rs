@@ -146,6 +146,44 @@ pub struct SkillReplaceable {
     pub default: String,
 }
 
+// ── Object type definitions ─────────────────────────────────────────────
+
+/// A field definition within an object type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectFieldDef {
+    pub name: String,
+    /// Whether this field is included in FTS indexing.
+    pub fts: bool,
+    /// Whether this field is included in vector embedding generation.
+    pub vec: bool,
+}
+
+/// A user-defined object type (e.g. google_email, google_calendar_event).
+/// Mirrors the AI field pattern: name, short/long descriptions for the type
+/// itself, plus field definitions that specify which instance fields
+/// participate in FTS and vector search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectTypeDef {
+    pub name: String,
+    pub short_description: String,
+    pub long_description: String,
+    pub fields: Vec<ObjectFieldDef>,
+}
+
+impl ObjectTypeDef {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            short_description: String::new(),
+            long_description: String::new(),
+            fields: Vec::new(),
+        }
+    }
+}
+
+/// Maximum object type definitions per execution.
+pub const OBJECT_TYPE_MAX: usize = 64;
+
 /// Optional cron schedule attached to a skill.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CronSpec {
@@ -164,6 +202,8 @@ pub struct SkillDef {
     pub steps: Vec<SkillStep>,
     /// Optional cron schedule for periodic execution.
     pub cron: Option<CronSpec>,
+    /// Object types defined by this skill.
+    pub object_types: Vec<ObjectTypeDef>,
 }
 
 impl SkillDef {
@@ -174,6 +214,7 @@ impl SkillDef {
             long_description: String::new(),
             steps: Vec::new(),
             cron: None,
+            object_types: Vec::new(),
         }
     }
 }

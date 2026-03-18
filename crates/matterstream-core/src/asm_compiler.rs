@@ -957,6 +957,30 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
             let default_id = asm.def_string(&default);
             asm.skill_replaceable(name_id, default_id);
         }
+        "ObjectType" => {
+            let name = get_str_prop(&node.props, "name").unwrap_or_default();
+            let name_id = asm.def_string(&name);
+            asm.objtype_begin(name_id);
+            if let Some(short) = get_str_prop(&node.props, "shortDescription") {
+                let id = asm.def_string(&short);
+                asm.objtype_set_short_desc(id);
+            }
+            if let Some(long) = get_str_prop(&node.props, "longDescription") {
+                let id = asm.def_string(&long);
+                asm.objtype_set_long_desc(id);
+            }
+            emit_nodes(asm, &node.children);
+            asm.objtype_end();
+            return;
+        }
+        "TypeField" => {
+            let name = get_str_prop(&node.props, "name").unwrap_or_default();
+            let name_id = asm.def_string(&name);
+            let fts = get_str_prop(&node.props, "fts").map(|v| v == "true" || v == "1").unwrap_or(false);
+            let vec = get_str_prop(&node.props, "vec").map(|v| v == "true" || v == "1").unwrap_or(false);
+            let flags: u32 = (fts as u32) | ((vec as u32) << 1);
+            asm.objtype_field(name_id, flags);
+        }
         "Cron" => {
             if let Some(interval) = get_num_prop(&node.props, "interval") {
                 asm.skill_cron_interval(interval as u64);
