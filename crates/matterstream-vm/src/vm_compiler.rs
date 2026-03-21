@@ -41,7 +41,7 @@ pub fn ops_to_bytecode(compiled: &CompiledOps) -> Result<Vec<u8>, String> {
                 bc.extend_from_slice(&dx.to_le_bytes());
                 bc.push(RpnOp::Push32 as u8);
                 bc.extend_from_slice(&dy.to_le_bytes());
-                bc.push(RpnOp::UiSetOffset as u8);
+                bc.push(RpnOp::UiApplyOffset as u8);
             }
             Op::SetSize(size) => {
                 current_size = *size;

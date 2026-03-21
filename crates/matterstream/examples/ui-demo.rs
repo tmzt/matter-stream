@@ -104,7 +104,7 @@ fn main() {
     bc.push(RpnOp::UiSetColor as u8);
     bc.extend_from_slice(&encode_push32(400));
     bc.extend_from_slice(&encode_push32(250));
-    bc.push(RpnOp::UiSetOffset as u8);
+    bc.push(RpnOp::UiApplyOffset as u8);
     bc.extend_from_slice(&encode_push32(0));
     bc.extend_from_slice(&encode_push32(0));
     bc.extend_from_slice(&encode_push32(150));

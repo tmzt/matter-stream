@@ -157,14 +157,14 @@ fn test_ui_state_stack_underflow() {
 }
 
 #[test]
-fn test_ui_set_offset() {
+fn test_ui_apply_offset() {
     let bc = encode(&[
         (RpnOp::Push32, Some(&0xFFFFFFFFu32.to_le_bytes())),
         (RpnOp::UiSetColor, None),
-        // Set offset (10, 20)
+        // Apply offset (10, 20)
         (RpnOp::Push32, Some(&10u32.to_le_bytes())),
         (RpnOp::Push32, Some(&20u32.to_le_bytes())),
-        (RpnOp::UiSetOffset, None),
+        (RpnOp::UiApplyOffset, None),
         // Draw box at (5, 5) → should become (15, 25)
         (RpnOp::Push32, Some(&5u32.to_le_bytes())),
         (RpnOp::Push32, Some(&5u32.to_le_bytes())),

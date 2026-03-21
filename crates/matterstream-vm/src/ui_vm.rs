@@ -315,21 +315,65 @@ pub enum UiDrawCmd {
     },
 }
 
-/// UI draw state: current color and translation offset.
+/// UI draw state: current color (offsets moved to transform stack).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiDrawState {
     pub color: u32,
-    pub offset_x: i32,
-    pub offset_y: i32,
 }
 
 impl Default for UiDrawState {
     fn default() -> Self {
         Self {
             color: 0xFFFFFFFF, // white, fully opaque
-            offset_x: 0,
-            offset_y: 0,
         }
+    }
+}
+
+/// Identity 4x4 matrix (column-major, OpenGL convention).
+pub const MAT4_IDENTITY: [f32; 16] = [
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0,
+];
+
+/// Multiply two 4x4 matrices (column-major): result = a * b.
+pub fn mat4_multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    let mut out = [0.0f32; 16];
+    for col in 0..4 {
+        for row in 0..4 {
+            let mut sum = 0.0f32;
+            for k in 0..4 {
+                sum += a[k * 4 + row] * b[col * 4 + k];
+            }
+            out[col * 4 + row] = sum;
+        }
+    }
+    out
+}
+
+/// Apply the top transform matrix to a point, returning transformed (x, y).
+/// Fast path: if the matrix is identity-except-translation, use integer add.
+pub fn apply_transform(transform: &[f32; 16], x: i32, y: i32) -> (i32, i32) {
+    // Check if this is a pure translation matrix (identity + [12]/[13] offset)
+    let is_translation_only =
+        transform[0] == 1.0 && transform[1] == 0.0 && transform[2] == 0.0 && transform[3] == 0.0
+        && transform[4] == 0.0 && transform[5] == 1.0 && transform[6] == 0.0 && transform[7] == 0.0
+        && transform[8] == 0.0 && transform[9] == 0.0 && transform[10] == 1.0 && transform[11] == 0.0
+        && transform[15] == 1.0;
+
+    if is_translation_only {
+        // Fast path: integer translation
+        let dx = transform[12] as i32;
+        let dy = transform[13] as i32;
+        (x + dx, y + dy)
+    } else {
+        // General matrix transform
+        let fx = x as f32;
+        let fy = y as f32;
+        let rx = transform[0] * fx + transform[4] * fy + transform[12];
+        let ry = transform[1] * fx + transform[5] * fy + transform[13];
+        (rx as i32, ry as i32)
     }
 }
 

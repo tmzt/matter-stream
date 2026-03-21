@@ -21,6 +21,7 @@ use crate::ui_vm::{
     ObjectTypeDef, ObjectFieldDef, OBJECT_TYPE_MAX,
     CardDef, CARD_DEF_MAX,
     FOURCC_MTUI,
+    MAT4_IDENTITY, mat4_multiply, apply_transform,
 };
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -97,11 +98,15 @@ pub enum RpnOp {
     UiText = 0x44,
     UiPushState = 0x45,
     UiPopState = 0x46,
-    UiSetOffset = 0x47,
+    UiApplyOffset = 0x47,
     UiLine = 0x48,
     // Extended UI (v0.3.0)
     UiTextStr = 0x49,
     UiAction = 0x4A,
+    // Transform matrix ops (v0.6.0)
+    UiApplyMatrix = 0x4B,
+    UiReplaceOffset = 0x4C,
+    UiReplaceMatrix = 0x4D,
     // Event & runtime opcodes (v0.3.0)
     EvPoll = 0x50,
     EvHasEvent = 0x51,
@@ -209,10 +214,13 @@ impl RpnOp {
             0x44 => Some(RpnOp::UiText),
             0x45 => Some(RpnOp::UiPushState),
             0x46 => Some(RpnOp::UiPopState),
-            0x47 => Some(RpnOp::UiSetOffset),
+            0x47 => Some(RpnOp::UiApplyOffset),
             0x48 => Some(RpnOp::UiLine),
             0x49 => Some(RpnOp::UiTextStr),
             0x4A => Some(RpnOp::UiAction),
+            0x4B => Some(RpnOp::UiApplyMatrix),
+            0x4C => Some(RpnOp::UiReplaceOffset),
+            0x4D => Some(RpnOp::UiReplaceMatrix),
             0x50 => Some(RpnOp::EvPoll),
             0x51 => Some(RpnOp::EvHasEvent),
             0x52 => Some(RpnOp::FrameCount),
@@ -349,10 +357,13 @@ impl GasConfig {
             | RpnOp::UiText
             | RpnOp::UiPushState
             | RpnOp::UiPopState
-            | RpnOp::UiSetOffset
+            | RpnOp::UiApplyOffset
             | RpnOp::UiLine
             | RpnOp::UiTextStr
-            | RpnOp::UiAction => self.cost_ui,
+            | RpnOp::UiAction
+            | RpnOp::UiApplyMatrix
+            | RpnOp::UiReplaceOffset
+            | RpnOp::UiReplaceMatrix => self.cost_ui,
             RpnOp::SetCR => self.cost_cr,
             RpnOp::VqlBeginQuery
             | RpnOp::VqlEndQuery
@@ -565,6 +576,8 @@ pub struct RpnVm {
     pub ui_draws: Vec<UiDrawCmd>,
     pub ui_state: UiDrawState,
     pub ui_state_stack: Vec<UiDrawState>,
+    // Transform matrix stack (top = active transform)
+    pub transform_stack: Vec<[f32; 16]>,
     // Typed register banks (Tier 1) — persist between execute() calls
     pub scalar_bank: [f32; 16],
     pub int_bank: [i32; 16],
@@ -619,6 +632,7 @@ impl RpnVm {
             ui_draws: Vec::new(),
             ui_state: UiDrawState::default(),
             ui_state_stack: Vec::new(),
+            transform_stack: vec![MAT4_IDENTITY],
             scalar_bank: [0.0; 16],
             int_bank: [0; 16],
             vec3_bank: [[0.0; 3]; 16],
@@ -712,6 +726,16 @@ impl RpnVm {
     }
 
     /// Push a draw command to the active card (if capturing) or ui_draws.
+    /// Get the current (top) transform matrix.
+    fn current_transform(&self) -> &[f32; 16] {
+        self.transform_stack.last().unwrap_or(&MAT4_IDENTITY)
+    }
+
+    /// Apply the current transform to a point.
+    fn transform_point(&self, x: i32, y: i32) -> (i32, i32) {
+        apply_transform(self.current_transform(), x, y)
+    }
+
     fn push_draw(&mut self, cmd: UiDrawCmd) -> Result<(), RpnError> {
         if self.card_capturing {
             let card = self.card_active.as_mut().ok_or(RpnError::CardNoActiveDef)?;
@@ -1434,8 +1458,9 @@ impl RpnVm {
             RpnOp::UiBox => {
                 let h = self.pop_u32_coerce()?;
                 let w = self.pop_u32_coerce()?;
-                let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
                 self.push_draw(UiDrawCmd::Box { x, y, w, h, color: self.ui_state.color })?;
                 self.pc += 1;
             }
@@ -1443,31 +1468,35 @@ impl RpnVm {
                 let radius = self.pop_u32_coerce()?;
                 let h = self.pop_u32_coerce()?;
                 let w = self.pop_u32_coerce()?;
-                let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
                 self.push_draw(UiDrawCmd::Slab { x, y, w, h, radius, color: self.ui_state.color })?;
                 self.pc += 1;
             }
             RpnOp::UiCircle => {
                 let r = self.pop_u32_coerce()?;
-                let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
                 self.push_draw(UiDrawCmd::Circle { x, y, r, color: self.ui_state.color })?;
                 self.pc += 1;
             }
             RpnOp::UiText => {
                 let slot = self.pop_u32_coerce()?;
                 let size = self.pop_u32_coerce()?;
-                let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
                 self.push_draw(UiDrawCmd::Text { x, y, size, slot, color: self.ui_state.color })?;
                 self.pc += 1;
             }
             RpnOp::UiTextStr => {
                 let str_idx = self.pop_u32_coerce()?;
                 let size = self.pop_u32_coerce()?;
-                let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
                 self.push_draw(UiDrawCmd::TextStr { x, y, size, str_idx, color: self.ui_state.color })?;
                 self.pc += 1;
             }
@@ -1475,8 +1504,9 @@ impl RpnVm {
                 let str_idx = self.pop_u32_coerce()?;
                 let h = self.pop_u32_coerce()?;
                 let w = self.pop_u32_coerce()?;
-                let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
                 self.push_draw(UiDrawCmd::Action { x, y, w, h, str_idx })?;
                 self.pc += 1;
             }
@@ -1485,6 +1515,9 @@ impl RpnVm {
                     return Err(RpnError::UiStateStackOverflow);
                 }
                 self.ui_state_stack.push(self.ui_state);
+                // Push a copy of the current transform
+                let current = *self.current_transform();
+                self.transform_stack.push(current);
                 self.pc += 1;
             }
             RpnOp::UiPopState => {
@@ -1492,20 +1525,62 @@ impl RpnVm {
                     .ui_state_stack
                     .pop()
                     .ok_or(RpnError::UiStateStackUnderflow)?;
+                // Pop transform (but keep at least one)
+                if self.transform_stack.len() > 1 {
+                    self.transform_stack.pop();
+                }
                 self.pc += 1;
             }
-            RpnOp::UiSetOffset => {
+            RpnOp::UiApplyOffset => {
+                // Accumulate (dx, dy) into top transform's translation
                 let dy = self.pop_u32_coerce()? as i32;
                 let dx = self.pop_u32_coerce()? as i32;
-                self.ui_state.offset_x = dx;
-                self.ui_state.offset_y = dy;
+                if let Some(top) = self.transform_stack.last_mut() {
+                    top[12] += dx as f32;
+                    top[13] += dy as f32;
+                }
+                self.pc += 1;
+            }
+            RpnOp::UiApplyMatrix => {
+                // Pop 16 f32s from stack, multiply with top, replace top
+                let mut m = [0.0f32; 16];
+                for i in (0..16).rev() {
+                    m[i] = f32::from_bits(self.pop_u32_coerce()?);
+                }
+                if let Some(top) = self.transform_stack.last_mut() {
+                    *top = mat4_multiply(top, &m);
+                }
+                self.pc += 1;
+            }
+            RpnOp::UiReplaceOffset => {
+                // Replace top transform with identity + (dx, dy)
+                let dy = self.pop_u32_coerce()? as i32;
+                let dx = self.pop_u32_coerce()? as i32;
+                if let Some(top) = self.transform_stack.last_mut() {
+                    *top = MAT4_IDENTITY;
+                    top[12] = dx as f32;
+                    top[13] = dy as f32;
+                }
+                self.pc += 1;
+            }
+            RpnOp::UiReplaceMatrix => {
+                // Pop 16 f32s from stack, replace top (no multiply)
+                let mut m = [0.0f32; 16];
+                for i in (0..16).rev() {
+                    m[i] = f32::from_bits(self.pop_u32_coerce()?);
+                }
+                if let Some(top) = self.transform_stack.last_mut() {
+                    *top = m;
+                }
                 self.pc += 1;
             }
             RpnOp::UiLine => {
-                let y2 = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x2 = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
-                let y1 = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x1 = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                let raw_y2 = self.pop_u32_coerce()? as i32;
+                let raw_x2 = self.pop_u32_coerce()? as i32;
+                let raw_y1 = self.pop_u32_coerce()? as i32;
+                let raw_x1 = self.pop_u32_coerce()? as i32;
+                let (x1, y1) = self.transform_point(raw_x1, raw_y1);
+                let (x2, y2) = self.transform_point(raw_x2, raw_y2);
                 self.push_draw(UiDrawCmd::Line { x1, y1, x2, y2, color: self.ui_state.color })?;
                 self.pc += 1;
             }

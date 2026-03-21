@@ -48,21 +48,46 @@ pub enum UiDrawCmd {
     },
 }
 
-/// UI draw state: current color and translation offset.
+/// UI draw state: current color (offsets moved to transform stack).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiDrawState {
     pub color: u32,
-    pub offset_x: i32,
-    pub offset_y: i32,
 }
 
 impl Default for UiDrawState {
     fn default() -> Self {
         Self {
             color: 0xFFFFFFFF, // white, fully opaque
-            offset_x: 0,
-            offset_y: 0,
         }
+    }
+}
+
+/// Identity 4x4 matrix (column-major, OpenGL convention).
+pub const MAT4_IDENTITY: [f32; 16] = [
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0,
+];
+
+/// Apply the top transform matrix to a point, returning transformed (x, y).
+pub fn apply_transform(transform: &[f32; 16], x: i32, y: i32) -> (i32, i32) {
+    let is_translation_only =
+        transform[0] == 1.0 && transform[1] == 0.0 && transform[2] == 0.0 && transform[3] == 0.0
+        && transform[4] == 0.0 && transform[5] == 1.0 && transform[6] == 0.0 && transform[7] == 0.0
+        && transform[8] == 0.0 && transform[9] == 0.0 && transform[10] == 1.0 && transform[11] == 0.0
+        && transform[15] == 1.0;
+
+    if is_translation_only {
+        let dx = transform[12] as i32;
+        let dy = transform[13] as i32;
+        (x + dx, y + dy)
+    } else {
+        let fx = x as f32;
+        let fy = y as f32;
+        let rx = transform[0] * fx + transform[4] * fy + transform[12];
+        let ry = transform[1] * fx + transform[5] * fy + transform[13];
+        (rx as i32, ry as i32)
     }
 }
 

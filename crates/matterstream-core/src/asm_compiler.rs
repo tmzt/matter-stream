@@ -737,6 +737,135 @@ fn emit_nodes(asm: &mut Asm, nodes: &[JsxNode]) {
     }
 }
 
+/// Estimate text width for alignment: monospace approximation.
+fn text_width(label: &str, size: u32) -> i32 {
+    (label.len() as f32 * size as f32 * 0.6) as i32
+}
+
+/// Measure the child block size for a given layout mode.
+/// Returns (block_w, block_h).
+fn measure_children_block(children: &[JsxNode], layout: &str, gap: i32) -> (i32, i32) {
+    let mut block_w: i32 = 0;
+    let mut block_h: i32 = 0;
+
+    for (i, child) in children.iter().enumerate() {
+        let (cw, ch) = measure_node(child);
+        let gap_val = if i > 0 { gap } else { 0 };
+        match layout {
+            "vstack" => {
+                block_w = block_w.max(cw);
+                block_h += ch + gap_val;
+            }
+            "hstack" => {
+                block_w += cw + gap_val;
+                block_h = block_h.max(ch);
+            }
+            _ => {
+                // absolute / flat: bounding box
+                block_w = block_w.max(cw);
+                block_h = block_h.max(ch);
+            }
+        }
+    }
+    (block_w, block_h)
+}
+
+/// Measure a single node's (w, h) from its props. For Text, infer from label/size.
+fn measure_node(node: &JsxNode) -> (i32, i32) {
+    match node.tag.as_str() {
+        "Text" => {
+            let size = get_num_prop(&node.props, "size").unwrap_or(14) as u32;
+            let w = get_num_prop(&node.props, "w")
+                .map(|v| v as i32)
+                .unwrap_or_else(|| {
+                    let label = get_str_prop(&node.props, "label").unwrap_or_default();
+                    text_width(&label, size)
+                });
+            let h = get_num_prop(&node.props, "h")
+                .map(|v| v as i32)
+                .unwrap_or(size as i32);
+            (w, h)
+        }
+        _ => {
+            let w = get_num_prop(&node.props, "w").unwrap_or(0) as i32;
+            let h = get_num_prop(&node.props, "h").unwrap_or(0) as i32;
+            (w, h)
+        }
+    }
+}
+
+/// Emit children with layout, padding, gap, and alignment.
+fn emit_container_children(asm: &mut Asm, node: &JsxNode, parent_x: i32, parent_y: i32) {
+    if node.children.is_empty() {
+        return;
+    }
+    let layout = get_str_prop(&node.props, "layout").unwrap_or_default();
+    let layout = if layout.is_empty() { "absolute" } else { &layout };
+    let padding = get_num_prop(&node.props, "padding").unwrap_or(0) as i32;
+    let gap = get_num_prop(&node.props, "gap").unwrap_or(0) as i32;
+    let container_w = get_num_prop(&node.props, "w").unwrap_or(0) as i32;
+    let container_h = get_num_prop(&node.props, "h").unwrap_or(0) as i32;
+    let halign = get_str_prop(&node.props, "halign").unwrap_or_default();
+    let valign = get_str_prop(&node.props, "valign").unwrap_or_default();
+
+    // Compute child block size for alignment
+    let (block_w, block_h) = measure_children_block(&node.children, layout, gap);
+    let inner_w = container_w - 2 * padding;
+    let inner_h = container_h - 2 * padding;
+
+    let align_dx = match halign.as_str() {
+        "center" => (inner_w - block_w) / 2,
+        "right" => inner_w - block_w,
+        _ => 0,
+    };
+    let align_dy = match valign.as_str() {
+        "center" => (inner_h - block_h) / 2,
+        "bottom" => inner_h - block_h,
+        _ => 0,
+    };
+
+    asm.ui_push_state();
+    asm.ui_apply_offset(
+        parent_x + padding + align_dx,
+        parent_y + padding + align_dy,
+    );
+
+    match layout {
+        "vstack" => {
+            let mut cursor_y: i32 = 0;
+            for child in &node.children {
+                let (_, ch) = measure_node(child);
+                asm.ui_push_state();
+                asm.ui_apply_offset(0, cursor_y);
+                emit_node(asm, child);
+                asm.ui_pop_state();
+                cursor_y += ch + gap;
+            }
+        }
+        "hstack" => {
+            let mut cursor_x: i32 = 0;
+            for child in &node.children {
+                let (cw, _) = measure_node(child);
+                asm.ui_push_state();
+                asm.ui_apply_offset(cursor_x, 0);
+                emit_node(asm, child);
+                asm.ui_pop_state();
+                cursor_x += cw + gap;
+            }
+        }
+        "flat" => {
+            // All children at (0,0) — overlay
+            emit_nodes(asm, &node.children);
+        }
+        _ => {
+            // "absolute" — children use own x,y
+            emit_nodes(asm, &node.children);
+        }
+    }
+
+    asm.ui_pop_state();
+}
+
 fn emit_node(asm: &mut Asm, node: &JsxNode) {
     match node.tag.as_str() {
         "Box" => {
@@ -749,6 +878,10 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                 asm.set_color(r, g, b, a);
             }
             asm.draw_box(x, y, w, h);
+            if !node.children.is_empty() {
+                emit_container_children(asm, node, x, y);
+                return;
+            }
         }
         "Slab" => {
             let x = get_num_prop(&node.props, "x").unwrap_or(0) as i32;
@@ -765,6 +898,10 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                 let action_id = asm.def_string(&action);
                 asm.draw_action(x, y, w, h, action_id);
             }
+            if !node.children.is_empty() {
+                emit_container_children(asm, node, x, y);
+                return;
+            }
         }
         "Circle" => {
             let x = get_num_prop(&node.props, "x").unwrap_or(0) as i32;
@@ -776,9 +913,12 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
             }
             asm.draw_circle(x, y, r);
             if let Some(action) = get_str_prop(&node.props, "action") {
-                // Action region is a bounding box around the circle
                 let action_id = asm.def_string(&action);
                 asm.draw_action(x - r as i32, y - r as i32, r * 2, r * 2, action_id);
+            }
+            if !node.children.is_empty() {
+                emit_container_children(asm, node, x, y);
+                return;
             }
         }
         "Text" => {
@@ -1031,13 +1171,28 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
             asm.skill_add_to_system_prompt(id);
         }
         "VStack" => {
+            // VStack is sugar for Box layout="vstack" (no visual, just layout)
             let x = get_num_prop(&node.props, "x").unwrap_or(0) as i32;
             let y = get_num_prop(&node.props, "y").unwrap_or(0) as i32;
-            asm.ui_push_state();
-            asm.ui_set_offset(x, y);
-            emit_nodes(asm, &node.children);
-            asm.ui_pop_state();
+            // Create a synthetic node with layout="vstack" for emit_container_children
+            let mut vstack_node = node.clone();
+            // Ensure layout is set to vstack
+            if get_str_prop(&vstack_node.props, "layout").is_none() {
+                vstack_node.props.push(("layout".to_string(), PropValue::Str("vstack".to_string())));
+            }
+            emit_container_children(asm, &vstack_node, x, y);
             return; // children already emitted
+        }
+        "HStack" => {
+            // HStack is sugar for Box layout="hstack" (no visual, just layout)
+            let x = get_num_prop(&node.props, "x").unwrap_or(0) as i32;
+            let y = get_num_prop(&node.props, "y").unwrap_or(0) as i32;
+            let mut hstack_node = node.clone();
+            if get_str_prop(&hstack_node.props, "layout").is_none() {
+                hstack_node.props.push(("layout".to_string(), PropValue::Str("hstack".to_string())));
+            }
+            emit_container_children(asm, &hstack_node, x, y);
+            return;
         }
         _ => {
             // Unknown tag — emit children only

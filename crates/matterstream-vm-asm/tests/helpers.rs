@@ -191,10 +191,10 @@ fn test_ui_push_pop_state_helpers() {
 }
 
 #[test]
-fn test_ui_set_offset_helper() {
+fn test_ui_apply_offset_helper() {
     let mut asm = Asm::new();
     asm.set_color(255, 255, 255, 255);
-    asm.ui_set_offset(100, 200);
+    asm.ui_apply_offset(100, 200);
     asm.draw_box(0, 0, 50, 50);
     asm.halt();
 

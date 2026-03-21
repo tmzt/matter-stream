@@ -215,22 +215,24 @@ fn ui_push_pop_state_preserves_offset() {
     let mut arenas = TripleArena::new();
 
     let mut bc = Vec::new();
-    // Set offset to (10, 20)
+    // Apply offset (10, 20)
     bc.extend_from_slice(&encode_push32(10));
     bc.extend_from_slice(&encode_push32(20));
-    bc.push(RpnOp::UiSetOffset as u8);
-    // Push state
+    bc.push(RpnOp::UiApplyOffset as u8);
+    // Push state (copies transform)
     bc.push(RpnOp::UiPushState as u8);
-    // Set offset to (50, 60)
+    // Apply offset (50, 60) — accumulates on top of (10,20) => (60, 80)
     bc.extend_from_slice(&encode_push32(50));
     bc.extend_from_slice(&encode_push32(60));
-    bc.push(RpnOp::UiSetOffset as u8);
-    // Pop state — should restore (10, 20)
+    bc.push(RpnOp::UiApplyOffset as u8);
+    // Pop state — should restore transform to (10, 20)
     bc.push(RpnOp::UiPopState as u8);
 
     vm.execute(&bc, &mut arenas).unwrap();
-    assert_eq!(vm.ui_state.offset_x, 10);
-    assert_eq!(vm.ui_state.offset_y, 20);
+    // Transform stack top should be back to (10, 20)
+    let t = vm.transform_stack.last().unwrap();
+    assert_eq!(t[12] as i32, 10);
+    assert_eq!(t[13] as i32, 20);
 }
 
 #[test]
@@ -239,10 +241,10 @@ fn ui_offset_applied_to_draws() {
     let mut arenas = TripleArena::new();
 
     let mut bc = Vec::new();
-    // Set offset (100, 200)
+    // Apply offset (100, 200)
     bc.extend_from_slice(&encode_push32(100));
     bc.extend_from_slice(&encode_push32(200));
-    bc.push(RpnOp::UiSetOffset as u8);
+    bc.push(RpnOp::UiApplyOffset as u8);
     // Draw box at (10, 20, 30, 40) — should be offset to (110, 220)
     bc.extend_from_slice(&encode_push32(10));
     bc.extend_from_slice(&encode_push32(20));
@@ -384,7 +386,7 @@ fn encode_decode_ui_opcodes_roundtrip() {
         (RpnOp::UiText, None),
         (RpnOp::UiPushState, None),
         (RpnOp::UiPopState, None),
-        (RpnOp::UiSetOffset, None),
+        (RpnOp::UiApplyOffset, None),
         (RpnOp::UiLine, None),
     ];
 
@@ -399,7 +401,7 @@ fn encode_decode_ui_opcodes_roundtrip() {
     assert_eq!(decoded[4].0, RpnOp::UiText);
     assert_eq!(decoded[5].0, RpnOp::UiPushState);
     assert_eq!(decoded[6].0, RpnOp::UiPopState);
-    assert_eq!(decoded[7].0, RpnOp::UiSetOffset);
+    assert_eq!(decoded[7].0, RpnOp::UiApplyOffset);
     assert_eq!(decoded[8].0, RpnOp::UiLine);
 }
 

@@ -302,10 +302,30 @@ impl Asm {
     pub fn ui_push_state(&mut self) -> &mut Self { self.op(RpnOp::UiPushState) }
     pub fn ui_pop_state(&mut self) -> &mut Self { self.op(RpnOp::UiPopState) }
 
-    pub fn ui_set_offset(&mut self, dx: i32, dy: i32) -> &mut Self {
+    pub fn ui_apply_offset(&mut self, dx: i32, dy: i32) -> &mut Self {
         self.push32(dx as u32);
         self.push32(dy as u32);
-        self.op(RpnOp::UiSetOffset)
+        self.op(RpnOp::UiApplyOffset)
+    }
+
+    pub fn ui_apply_matrix(&mut self, m: &[f32; 16]) -> &mut Self {
+        for &val in m.iter() {
+            self.push32(f32::to_bits(val));
+        }
+        self.op(RpnOp::UiApplyMatrix)
+    }
+
+    pub fn ui_replace_offset(&mut self, dx: i32, dy: i32) -> &mut Self {
+        self.push32(dx as u32);
+        self.push32(dy as u32);
+        self.op(RpnOp::UiReplaceOffset)
+    }
+
+    pub fn ui_replace_matrix(&mut self, m: &[f32; 16]) -> &mut Self {
+        for &val in m.iter() {
+            self.push32(f32::to_bits(val));
+        }
+        self.op(RpnOp::UiReplaceMatrix)
     }
 
     pub fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) -> &mut Self {

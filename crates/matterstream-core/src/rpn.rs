@@ -10,7 +10,7 @@
 use matterstream_vm_arena::arena::TripleArena;
 use matterstream_vm_addressing::fqa::Fqa;
 use matterstream_vm_addressing::ova::Ova;
-use crate::ui_vm::{UiDrawCmd, UiDrawState, UI_DRAW_CMD_MAX, UI_STATE_STACK_MAX};
+use crate::ui_vm::{UiDrawCmd, UiDrawState, UI_DRAW_CMD_MAX, UI_STATE_STACK_MAX, MAT4_IDENTITY, apply_transform};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -53,8 +53,12 @@ pub enum RpnOp {
     UiText = 0x44,
     UiPushState = 0x45,
     UiPopState = 0x46,
-    UiSetOffset = 0x47,
+    UiApplyOffset = 0x47,
     UiLine = 0x48,
+    // Transform matrix ops (v0.6.0)
+    UiApplyMatrix = 0x4B,
+    UiReplaceOffset = 0x4C,
+    UiReplaceMatrix = 0x4D,
 }
 
 impl RpnOp {
@@ -93,8 +97,11 @@ impl RpnOp {
             0x44 => Some(RpnOp::UiText),
             0x45 => Some(RpnOp::UiPushState),
             0x46 => Some(RpnOp::UiPopState),
-            0x47 => Some(RpnOp::UiSetOffset),
+            0x47 => Some(RpnOp::UiApplyOffset),
             0x48 => Some(RpnOp::UiLine),
+            0x4B => Some(RpnOp::UiApplyMatrix),
+            0x4C => Some(RpnOp::UiReplaceOffset),
+            0x4D => Some(RpnOp::UiReplaceMatrix),
             _ => None,
         }
     }
@@ -163,7 +170,8 @@ impl GasConfig {
             RpnOp::CmpEq | RpnOp::CmpLt | RpnOp::CmpGt => self.cost_compare,
             RpnOp::UiSetColor | RpnOp::UiBox | RpnOp::UiSlab | RpnOp::UiCircle
             | RpnOp::UiText | RpnOp::UiPushState | RpnOp::UiPopState
-            | RpnOp::UiSetOffset | RpnOp::UiLine => self.cost_ui,
+            | RpnOp::UiApplyOffset | RpnOp::UiLine
+            | RpnOp::UiApplyMatrix | RpnOp::UiReplaceOffset | RpnOp::UiReplaceMatrix => self.cost_ui,
         }
     }
 }
@@ -275,6 +283,8 @@ pub struct RpnVm {
     pub ui_draws: Vec<UiDrawCmd>,
     pub ui_state: UiDrawState,
     pub ui_state_stack: Vec<UiDrawState>,
+    // Transform matrix stack (top = active transform)
+    pub transform_stack: Vec<[f32; 16]>,
 }
 
 impl RpnVm {
@@ -291,6 +301,7 @@ impl RpnVm {
             ui_draws: Vec::new(),
             ui_state: UiDrawState::default(),
             ui_state_stack: Vec::new(),
+            transform_stack: vec![MAT4_IDENTITY],
         }
     }
 
@@ -662,8 +673,10 @@ impl RpnVm {
                 }
                 let h = self.pop_u32_coerce()?;
                 let w = self.pop_u32_coerce()?;
-                let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let t = self.transform_stack.last().unwrap_or(&MAT4_IDENTITY);
+                let (x, y) = apply_transform(t, raw_x, raw_y);
                 self.ui_draws.push(UiDrawCmd::Box {
                     x, y, w, h,
                     color: self.ui_state.color,
@@ -677,8 +690,10 @@ impl RpnVm {
                 let radius = self.pop_u32_coerce()?;
                 let h = self.pop_u32_coerce()?;
                 let w = self.pop_u32_coerce()?;
-                let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let t = self.transform_stack.last().unwrap_or(&MAT4_IDENTITY);
+                let (x, y) = apply_transform(t, raw_x, raw_y);
                 self.ui_draws.push(UiDrawCmd::Slab {
                     x, y, w, h, radius,
                     color: self.ui_state.color,
@@ -690,8 +705,10 @@ impl RpnVm {
                     return Err(RpnError::UiDrawLimitExceeded);
                 }
                 let r = self.pop_u32_coerce()?;
-                let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let t = self.transform_stack.last().unwrap_or(&MAT4_IDENTITY);
+                let (x, y) = apply_transform(t, raw_x, raw_y);
                 self.ui_draws.push(UiDrawCmd::Circle {
                     x, y, r,
                     color: self.ui_state.color,
@@ -704,8 +721,10 @@ impl RpnVm {
                 }
                 let slot = self.pop_u32_coerce()?;
                 let size = self.pop_u32_coerce()?;
-                let y = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let t = self.transform_stack.last().unwrap_or(&MAT4_IDENTITY);
+                let (x, y) = apply_transform(t, raw_x, raw_y);
                 self.ui_draws.push(UiDrawCmd::Text {
                     x, y, size, slot,
                     color: self.ui_state.color,
@@ -717,28 +736,80 @@ impl RpnVm {
                     return Err(RpnError::UiStateStackOverflow);
                 }
                 self.ui_state_stack.push(self.ui_state);
+                let current = *self.transform_stack.last().unwrap_or(&MAT4_IDENTITY);
+                self.transform_stack.push(current);
                 self.pc += 1;
             }
             RpnOp::UiPopState => {
                 self.ui_state = self.ui_state_stack.pop()
                     .ok_or(RpnError::UiStateStackUnderflow)?;
+                if self.transform_stack.len() > 1 {
+                    self.transform_stack.pop();
+                }
                 self.pc += 1;
             }
-            RpnOp::UiSetOffset => {
+            RpnOp::UiApplyOffset => {
                 let dy = self.pop_u32_coerce()? as i32;
                 let dx = self.pop_u32_coerce()? as i32;
-                self.ui_state.offset_x = dx;
-                self.ui_state.offset_y = dy;
+                if let Some(top) = self.transform_stack.last_mut() {
+                    top[12] += dx as f32;
+                    top[13] += dy as f32;
+                }
+                self.pc += 1;
+            }
+            RpnOp::UiApplyMatrix => {
+                let mut m = [0.0f32; 16];
+                for i in (0..16).rev() {
+                    m[i] = f32::from_bits(self.pop_u32_coerce()?);
+                }
+                if let Some(top) = self.transform_stack.last_mut() {
+                    // Multiply: top = top * m
+                    let a = *top;
+                    let mut out = [0.0f32; 16];
+                    for col in 0..4 {
+                        for row in 0..4 {
+                            let mut sum = 0.0f32;
+                            for k in 0..4 {
+                                sum += a[k * 4 + row] * m[col * 4 + k];
+                            }
+                            out[col * 4 + row] = sum;
+                        }
+                    }
+                    *top = out;
+                }
+                self.pc += 1;
+            }
+            RpnOp::UiReplaceOffset => {
+                let dy = self.pop_u32_coerce()? as i32;
+                let dx = self.pop_u32_coerce()? as i32;
+                if let Some(top) = self.transform_stack.last_mut() {
+                    *top = MAT4_IDENTITY;
+                    top[12] = dx as f32;
+                    top[13] = dy as f32;
+                }
+                self.pc += 1;
+            }
+            RpnOp::UiReplaceMatrix => {
+                let mut m = [0.0f32; 16];
+                for i in (0..16).rev() {
+                    m[i] = f32::from_bits(self.pop_u32_coerce()?);
+                }
+                if let Some(top) = self.transform_stack.last_mut() {
+                    *top = m;
+                }
                 self.pc += 1;
             }
             RpnOp::UiLine => {
                 if self.ui_draws.len() >= UI_DRAW_CMD_MAX {
                     return Err(RpnError::UiDrawLimitExceeded);
                 }
-                let y2 = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x2 = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
-                let y1 = self.pop_u32_coerce()? as i32 + self.ui_state.offset_y;
-                let x1 = self.pop_u32_coerce()? as i32 + self.ui_state.offset_x;
+                let raw_y2 = self.pop_u32_coerce()? as i32;
+                let raw_x2 = self.pop_u32_coerce()? as i32;
+                let raw_y1 = self.pop_u32_coerce()? as i32;
+                let raw_x1 = self.pop_u32_coerce()? as i32;
+                let t = self.transform_stack.last().unwrap_or(&MAT4_IDENTITY);
+                let (x1, y1) = apply_transform(t, raw_x1, raw_y1);
+                let (x2, y2) = apply_transform(t, raw_x2, raw_y2);
                 self.ui_draws.push(UiDrawCmd::Line {
                     x1, y1, x2, y2,
                     color: self.ui_state.color,
@@ -812,7 +883,7 @@ impl RpnVm {
                 RpnOp::UiText => format!("{:04x}: UiText", pc),
                 RpnOp::UiPushState => format!("{:04x}: UiPushState", pc),
                 RpnOp::UiPopState => format!("{:04x}: UiPopState", pc),
-                RpnOp::UiSetOffset => format!("{:04x}: UiSetOffset", pc),
+                RpnOp::UiApplyOffset => format!("{:04x}: UiApplyOffset", pc),
                 RpnOp::UiLine => format!("{:04x}: UiLine", pc),
                 _ => format!("{:04x}: {:?}", pc, op),
             };
