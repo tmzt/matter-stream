@@ -2,14 +2,14 @@ const IconButton = ({ w, h, radius, color, action, label, labelColor }) => (
   <Slab w={w} h={h} radius={radius} color={color} action={action} halign="center" valign="center">
     <Text size={16} label={label} color={labelColor} />
   </Slab>
-)
+);
 
 const VoiceIndicator = ({ x, y }) => (
   <>
     <Circle x={x} y={y} r={10} color="#5566CCFF" />
     <Circle x={x} y={y} r={5} color="#7788EEFF" />
   </>
-)
+);
 
 <>
   <Slab x={0} y={0} w={1000} h={56} radius={28} color="#1E1E2EFF" layout="hstack" padding={4} gap={4} valign="center">
