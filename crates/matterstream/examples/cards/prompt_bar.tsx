@@ -9,9 +9,13 @@
   <Text x={56} y={18} size={16} label="Ask anything..." color="#555566FF" />
 
   {/* Pulsing voice indicator — concentric rings */}
-  <Circle x={28} y={28} r={16} color="#3A3A50FF" />
+  <Circle x={28} y={28} r={16} color="#3A3A50FF" action="toggle_listening" />
   <Circle x={28} y={28} r={10} color="#5566CCFF" />
   <Circle x={28} y={28} r={5} color="#7788EEFF" />
+
+  {/* Clear (x) button */}
+  <Slab x={892} y={12} w={32} h={32} radius={16} color="#3A3A50FF" action="prompt_clear" />
+  <Text x={901} y={17} size={14} label="x" color="#FF6666FF" />
 
   {/* Send button */}
   <Slab x={944} y={8} w={48} h={40} radius={20} color="#4466FFFF" action="prompt_send" />
