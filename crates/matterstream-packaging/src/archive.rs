@@ -1,6 +1,7 @@
 //! AR archive container: standard Unix ar format with Base60 ordinals + FourCC.
 
 use matterstream_vm_addressing::fqa::{FourCC, Ordinal, OrdinalError};
+use matterstream_vm_addressing::oid_index::{OidIndex, OidIndexError};
 use crate::tkv::{TkvDocument, TkvError};
 use std::fmt;
 
@@ -18,6 +19,7 @@ pub enum ArchiveError {
     MissingMeta,
     MissingAsym,
     Tkv(TkvError),
+    OidIndex(OidIndexError),
 }
 
 impl fmt::Display for ArchiveError {
@@ -31,7 +33,14 @@ impl fmt::Display for ArchiveError {
             ArchiveError::MissingMeta => write!(f, "missing .meta member at 00000000"),
             ArchiveError::MissingAsym => write!(f, "missing .asym member"),
             ArchiveError::Tkv(e) => write!(f, "TKV error: {}", e),
+            ArchiveError::OidIndex(e) => write!(f, "OID index error: {}", e),
         }
+    }
+}
+
+impl From<OidIndexError> for ArchiveError {
+    fn from(e: OidIndexError) -> Self {
+        ArchiveError::OidIndex(e)
     }
 }
 
@@ -221,6 +230,30 @@ impl MtsmArchive {
             .collect()
     }
 
+    /// Get the .osym member (OID symbol table), if present.
+    pub fn oid_index(&self) -> Option<&ArchiveMember> {
+        self.members.iter().find(|m| m.fourcc == FourCC::Osym)
+    }
+
+    /// Parse the .osym member as an OidIndex for binary search.
+    pub fn oid_index_parsed(&self) -> Result<Option<OidIndex<'_>>, ArchiveError> {
+        match self.oid_index() {
+            Some(member) => {
+                let idx = OidIndex::from_bytes(&member.data)?;
+                Ok(Some(idx))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Get all .odat (embedding data) members.
+    pub fn oid_data_members(&self) -> Vec<&ArchiveMember> {
+        self.members
+            .iter()
+            .filter(|m| m.fourcc == FourCC::Odat)
+            .collect()
+    }
+
     /// Validate the archive: check mandatory members and valid ordinals.
     pub fn validate(&self) -> Result<(), ArchiveError> {
         // Must have .meta at 00000000
@@ -236,6 +269,12 @@ impl MtsmArchive {
         let has_asym = self.members.iter().any(|m| m.fourcc == FourCC::Asym);
         if !has_asym {
             return Err(ArchiveError::MissingAsym);
+        }
+
+        // If .osym present, validate sorting invariant
+        if let Some(osym) = self.oid_index() {
+            let idx = OidIndex::from_bytes(&osym.data)?;
+            idx.validate_sorted()?;
         }
 
         Ok(())
