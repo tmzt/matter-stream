@@ -15,14 +15,32 @@ use matterstream_vm_arena::TripleArena;
 
 use crate::event::{VmEvent, VmEventType};
 use crate::ui_vm::{
-    UiDrawCmd, UiDrawState, UI_DRAW_CMD_MAX, UI_STATE_STACK_MAX,
     VqlOutput, VqlField, VQL_OUTPUT_MAX,
     SkillDef, SkillStep, SkillReplaceable, LlmUseCase, CronSpec, SKILL_OUTPUT_MAX,
     ObjectTypeDef, ObjectFieldDef, OBJECT_TYPE_MAX,
-    CardDef, CARD_DEF_MAX,
     FOURCC_MTUI,
+};
+#[cfg(feature = "ui")]
+use crate::ui_vm::{
+    UiDrawCmd, UiDrawState, UI_DRAW_CMD_MAX, UI_STATE_STACK_MAX,
+    CardDef, CARD_DEF_MAX,
     MAT4_IDENTITY, mat4_multiply, apply_transform,
 };
+
+/// NOP macro for UI opcodes. With `ui` feature: executes body. Without: discards
+/// `pops` values from the stack and advances PC past opcode + payload.
+macro_rules! ui_op {
+    ($self:expr, pops: $pops:expr, payload: $payload:expr, $body:block) => {{
+        #[cfg(feature = "ui")]
+        { $body }
+        #[cfg(not(feature = "ui"))]
+        {
+            let len = $self.stack.len();
+            $self.stack.truncate(len.saturating_sub($pops));
+        }
+        $self.pc += 1 + $payload;
+    }};
+}
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
@@ -564,6 +582,7 @@ pub const BANK_ZERO_PAGE: u32 = 4;
 
 /// The RPN stack machine.
 pub struct RpnVm {
+    // ── Core VM state ───────────────────────────────────────────────────
     pub stack: Vec<RpnValue>,
     pub call_stack: Vec<usize>,
     pub pc: usize,
@@ -572,12 +591,6 @@ pub struct RpnVm {
     pub synced: bool,
     pub gas: GasConfig,
     pub trace: ExecTrace,
-    // UI draw state
-    pub ui_draws: Vec<UiDrawCmd>,
-    pub ui_state: UiDrawState,
-    pub ui_state_stack: Vec<UiDrawState>,
-    // Transform matrix stack (top = active transform)
-    pub transform_stack: Vec<[f32; 16]>,
     // Typed register banks (Tier 1) — persist between execute() calls
     pub scalar_bank: [f32; 16],
     pub int_bank: [i32; 16],
@@ -601,9 +614,7 @@ pub struct RpnVm {
     // SKLL state
     pub skill_outputs: Vec<SkillDef>,
     skill_active: Option<SkillDef>,
-    /// Stack for nested skill definitions (parent pushed when child begins).
     skill_stack: Vec<SkillDef>,
-    /// Temporary storage for replaceables being added to the current LLM step
     skill_active_llm_prompt: Option<String>,
     skill_active_llm_replaceables: Vec<SkillReplaceable>,
     skill_active_llm_model: Option<String>,
@@ -611,10 +622,21 @@ pub struct RpnVm {
     // Object type state
     pub objtype_outputs: Vec<ObjectTypeDef>,
     objtype_active: Option<ObjectTypeDef>,
-    // Card state
+
+    // ── UI state (requires "ui" feature) ────────────────────────────────
+    #[cfg(feature = "ui")]
+    pub ui_draws: Vec<UiDrawCmd>,
+    #[cfg(feature = "ui")]
+    pub ui_state: UiDrawState,
+    #[cfg(feature = "ui")]
+    pub ui_state_stack: Vec<UiDrawState>,
+    #[cfg(feature = "ui")]
+    pub transform_stack: Vec<[f32; 16]>,
+    #[cfg(feature = "ui")]
     pub card_outputs: Vec<CardDef>,
+    #[cfg(feature = "ui")]
     card_active: Option<CardDef>,
-    /// When inside a CardBegin/CardEnd, UI draws go to the card instead of ui_draws.
+    #[cfg(feature = "ui")]
     card_capturing: bool,
 }
 
@@ -629,10 +651,6 @@ impl RpnVm {
             synced: false,
             gas: GasConfig::default(),
             trace: ExecTrace::default(),
-            ui_draws: Vec::new(),
-            ui_state: UiDrawState::default(),
-            ui_state_stack: Vec::new(),
-            transform_stack: vec![MAT4_IDENTITY],
             scalar_bank: [0.0; 16],
             int_bank: [0; 16],
             vec3_bank: [[0.0; 3]; 16],
@@ -654,8 +672,19 @@ impl RpnVm {
             skill_active_llm_use_case: LlmUseCase::General,
             objtype_outputs: Vec::new(),
             objtype_active: None,
+            #[cfg(feature = "ui")]
+            ui_draws: Vec::new(),
+            #[cfg(feature = "ui")]
+            ui_state: UiDrawState::default(),
+            #[cfg(feature = "ui")]
+            ui_state_stack: Vec::new(),
+            #[cfg(feature = "ui")]
+            transform_stack: vec![MAT4_IDENTITY],
+            #[cfg(feature = "ui")]
             card_outputs: Vec::new(),
+            #[cfg(feature = "ui")]
             card_active: None,
+            #[cfg(feature = "ui")]
             card_capturing: false,
         }
     }
@@ -725,17 +754,17 @@ impl RpnVm {
         Ok(())
     }
 
-    /// Push a draw command to the active card (if capturing) or ui_draws.
-    /// Get the current (top) transform matrix.
+    #[cfg(feature = "ui")]
     fn current_transform(&self) -> &[f32; 16] {
         self.transform_stack.last().unwrap_or(&MAT4_IDENTITY)
     }
 
-    /// Apply the current transform to a point.
+    #[cfg(feature = "ui")]
     fn transform_point(&self, x: i32, y: i32) -> (i32, i32) {
         apply_transform(self.current_transform(), x, y)
     }
 
+    #[cfg(feature = "ui")]
     fn push_draw(&mut self, cmd: UiDrawCmd) -> Result<(), RpnError> {
         if self.card_capturing {
             let card = self.card_active.as_mut().ok_or(RpnError::CardNoActiveDef)?;
@@ -993,9 +1022,6 @@ impl RpnVm {
         self.pc = 0;
         self.synced = false;
         self.trace = ExecTrace::default();
-        self.ui_draws.clear();
-        self.ui_state = UiDrawState::default();
-        self.ui_state_stack.clear();
         // Stack is cleared, but banks persist
         self.stack.clear();
         self.call_stack.clear();
@@ -1012,9 +1038,16 @@ impl RpnVm {
         self.skill_active_llm_use_case = LlmUseCase::General;
         self.objtype_outputs.clear();
         self.objtype_active = None;
-        self.card_outputs.clear();
-        self.card_active = None;
-        self.card_capturing = false;
+        // UI state reset
+        #[cfg(feature = "ui")]
+        {
+            self.ui_draws.clear();
+            self.ui_state = UiDrawState::default();
+            self.ui_state_stack.clear();
+            self.card_outputs.clear();
+            self.card_active = None;
+            self.card_capturing = false;
+        }
         let mut cycles = 0usize;
 
         while self.pc < bytecode.len() {

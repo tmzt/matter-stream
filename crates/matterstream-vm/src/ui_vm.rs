@@ -1,14 +1,27 @@
-//! UI draw commands, draw state, color helpers, CPU-side softbuffer rasterizer,
-//! VQL (Vesicle Query Language) output, and SKLL (Skill) definitions.
+//! UI types, VQL, Skill, ObjectType, and Card definitions.
+//!
+//! UI draw types (`UiDrawCmd`, `UiDrawState`, transforms, rasterizer) live in
+//! `matterstream-ui` and are re-exported here when the `ui` feature is enabled.
+//! Without `ui`, UI opcodes in the VM are NOPs.
 
-/// Maximum UI state stack depth.
-pub const UI_STATE_STACK_MAX: usize = 16;
+// ── Re-exports from matterstream-ui (feature-gated) ────────────────────
+
+#[cfg(feature = "ui")]
+pub use matterstream_ui::*;
+
+// ── Constants (always available) ────────────────────────────────────────
 
 /// Maximum VQL outputs per execution.
 pub const VQL_OUTPUT_MAX: usize = 256;
 
 /// Maximum SKLL outputs per execution.
 pub const SKILL_OUTPUT_MAX: usize = 64;
+
+/// Maximum object type definitions per execution.
+pub const OBJECT_TYPE_MAX: usize = 64;
+
+/// Maximum card definitions per execution.
+pub const CARD_DEF_MAX: usize = 64;
 
 // ── Control Register constants ──────────────────────────────────────────
 
@@ -65,21 +78,13 @@ impl Default for VqlOutput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum LlmUseCase {
-    /// General-purpose / unspecified.
     General = 0,
-    /// Fast routing / classification / triage.
     Routing = 1,
-    /// Extended thinking / chain-of-thought.
     Thinking = 2,
-    /// Deep research / multi-step investigation.
     DeepResearch = 3,
-    /// Summarization.
     Summarize = 4,
-    /// Code generation.
     CodeGen = 5,
-    /// Extraction / structured output.
     Extract = 6,
-    /// Validation / checking.
     Validate = 7,
 }
 
@@ -122,25 +127,16 @@ impl Default for LlmUseCase {
 /// A single step within a skill definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkillStep {
-    /// A deterministic step (name from string table).
     Deterministic { name: String },
-    /// An LLM step with a prompt template, optional model, and use-case.
     Llm {
         prompt: String,
         replaceables: Vec<SkillReplaceable>,
-        /// Optional model name (e.g. "claude-sonnet-4-20250514", "gpt-4o").
         model: Option<String>,
-        /// Use-case hint for routing.
         use_case: LlmUseCase,
     },
-    /// Invoke an action by name.
     InvokeAction { name: String },
-    /// Invoke an action by numeric symbol.
     InvokeSymbol { symbol: u32 },
-    /// Forward the user's original prompt to a destination (e.g. "thinker").
-    /// The skill captures the prompt and passes it through for LLM processing.
     ForwardPrompt { dest: String },
-    /// Inject text into the system prompt when this skill is invoked.
     AddToSystemPrompt { content: String },
 }
 
@@ -157,16 +153,11 @@ pub struct SkillReplaceable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectFieldDef {
     pub name: String,
-    /// Whether this field is included in FTS indexing.
     pub fts: bool,
-    /// Whether this field is included in vector embedding generation.
     pub vec: bool,
 }
 
-/// A user-defined object type (e.g. google_email, google_calendar_event).
-/// Mirrors the AI field pattern: name, short/long descriptions for the type
-/// itself, plus field definitions that specify which instance fields
-/// participate in FTS and vector search.
+/// A user-defined object type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectTypeDef {
     pub name: String,
@@ -186,15 +177,10 @@ impl ObjectTypeDef {
     }
 }
 
-/// Maximum object type definitions per execution.
-pub const OBJECT_TYPE_MAX: usize = 64;
-
 /// Optional cron schedule attached to a skill.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CronSpec {
-    /// Base interval in milliseconds.
     pub interval_ms: u64,
-    /// Random jitter added to interval (0..jitter_ms).
     pub jitter_ms: u64,
 }
 
@@ -205,11 +191,9 @@ pub struct SkillDef {
     pub short_description: String,
     pub long_description: String,
     pub steps: Vec<SkillStep>,
-    /// Optional cron schedule for periodic execution.
     pub cron: Option<CronSpec>,
-    /// Object types defined by this skill.
     pub object_types: Vec<ObjectTypeDef>,
-    /// Card definitions (UI templates) defined by this skill.
+    #[cfg(feature = "ui")]
     pub cards: Vec<CardDef>,
 }
 
@@ -222,28 +206,26 @@ impl SkillDef {
             steps: Vec::new(),
             cron: None,
             object_types: Vec::new(),
+            #[cfg(feature = "ui")]
             cards: Vec::new(),
         }
     }
 }
 
-/// Maximum card definitions per execution.
-pub const CARD_DEF_MAX: usize = 64;
-
 // ── Card definitions ────────────────────────────────────────────────────
 
 /// A named UI card definition with compiled draw commands.
+#[cfg(feature = "ui")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CardDef {
     pub name: String,
     pub short_description: String,
     pub long_description: String,
-    /// Compiled UI draw commands for this card.
     pub draws: Vec<UiDrawCmd>,
-    /// String table entries referenced by draw commands.
     pub string_table: Vec<String>,
 }
 
+#[cfg(feature = "ui")]
 impl CardDef {
     pub fn new(name: String) -> Self {
         Self {
@@ -252,483 +234,6 @@ impl CardDef {
             long_description: String::new(),
             draws: Vec::new(),
             string_table: Vec::new(),
-        }
-    }
-}
-
-/// Maximum draw commands per execution.
-pub const UI_DRAW_CMD_MAX: usize = 4096;
-
-/// A single UI draw command emitted by the RPN VM.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UiDrawCmd {
-    Box {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        color: u32,
-    },
-    Slab {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        radius: u32,
-        color: u32,
-    },
-    Circle {
-        x: i32,
-        y: i32,
-        r: u32,
-        color: u32,
-    },
-    Text {
-        x: i32,
-        y: i32,
-        size: u32,
-        slot: u32,
-        color: u32,
-    },
-    TextStr {
-        x: i32,
-        y: i32,
-        size: u32,
-        str_idx: u32,
-        color: u32,
-    },
-    Line {
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        color: u32,
-    },
-    /// Clickable action region (not rendered). `str_idx` indexes into
-    /// the string table to get the action name.
-    Action {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        str_idx: u32,
-    },
-}
-
-/// UI draw state: current color (offsets moved to transform stack).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UiDrawState {
-    pub color: u32,
-}
-
-impl Default for UiDrawState {
-    fn default() -> Self {
-        Self {
-            color: 0xFFFFFFFF, // white, fully opaque
-        }
-    }
-}
-
-/// Identity 4x4 matrix (column-major, OpenGL convention).
-pub const MAT4_IDENTITY: [f32; 16] = [
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 1.0, 0.0,
-    0.0, 0.0, 0.0, 1.0,
-];
-
-/// Multiply two 4x4 matrices (column-major): result = a * b.
-pub fn mat4_multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
-    let mut out = [0.0f32; 16];
-    for col in 0..4 {
-        for row in 0..4 {
-            let mut sum = 0.0f32;
-            for k in 0..4 {
-                sum += a[k * 4 + row] * b[col * 4 + k];
-            }
-            out[col * 4 + row] = sum;
-        }
-    }
-    out
-}
-
-/// Apply the top transform matrix to a point, returning transformed (x, y).
-/// Fast path: if the matrix is identity-except-translation, use integer add.
-pub fn apply_transform(transform: &[f32; 16], x: i32, y: i32) -> (i32, i32) {
-    // Check if this is a pure translation matrix (identity + [12]/[13] offset)
-    let is_translation_only =
-        transform[0] == 1.0 && transform[1] == 0.0 && transform[2] == 0.0 && transform[3] == 0.0
-        && transform[4] == 0.0 && transform[5] == 1.0 && transform[6] == 0.0 && transform[7] == 0.0
-        && transform[8] == 0.0 && transform[9] == 0.0 && transform[10] == 1.0 && transform[11] == 0.0
-        && transform[15] == 1.0;
-
-    if is_translation_only {
-        // Fast path: integer translation
-        let dx = transform[12] as i32;
-        let dy = transform[13] as i32;
-        (x + dx, y + dy)
-    } else {
-        // General matrix transform
-        let fx = x as f32;
-        let fy = y as f32;
-        let rx = transform[0] * fx + transform[4] * fy + transform[12];
-        let ry = transform[1] * fx + transform[5] * fy + transform[13];
-        (rx as i32, ry as i32)
-    }
-}
-
-/// Pack RGBA components into a u32 (0xRRGGBBAA).
-pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
-    (r as u32) << 24 | (g as u32) << 16 | (b as u32) << 8 | a as u32
-}
-
-/// Unpack a u32 RGBA into (r, g, b, a).
-pub fn rgba_unpack(c: u32) -> (u8, u8, u8, u8) {
-    ((c >> 24) as u8, (c >> 16) as u8, (c >> 8) as u8, c as u8)
-}
-
-/// Alpha-composite `src_rgba` (0xRRGGBBAA) over `dst` (0x00RRGGBB softbuffer format).
-/// Returns the blended pixel in 0x00RRGGBB format.
-pub fn blend_pixel(dst: u32, src_rgba: u32) -> u32 {
-    let (sr, sg, sb, sa) = rgba_unpack(src_rgba);
-    if sa == 0 {
-        return dst;
-    }
-    if sa == 255 {
-        return (sr as u32) << 16 | (sg as u32) << 8 | sb as u32;
-    }
-    let dr = (dst >> 16) as u8;
-    let dg = (dst >> 8) as u8;
-    let db = dst as u8;
-    let a = sa as u32;
-    let inv_a = 255 - a;
-    let r = (sr as u32 * a + dr as u32 * inv_a) / 255;
-    let g = (sg as u32 * a + dg as u32 * inv_a) / 255;
-    let b = (sb as u32 * a + db as u32 * inv_a) / 255;
-    (r << 16) | (g << 8) | b
-}
-
-/// Render a list of draw commands into a softbuffer pixel buffer.
-pub fn render_ui_draws(draws: &[UiDrawCmd], buf: &mut [u32], width: u32, height: u32) {
-    render_ui_draws_with_font(draws, buf, width, height, &[], None);
-}
-
-/// Render draw commands with font atlas support for actual text rendering.
-pub fn render_ui_draws_with_font(
-    draws: &[UiDrawCmd],
-    buf: &mut [u32],
-    width: u32,
-    height: u32,
-    string_table: &[String],
-    font: Option<&matterstream_packaging::fnta::FontAtlas>,
-) {
-    for cmd in draws {
-        match cmd {
-            UiDrawCmd::Box { x, y, w, h, color } => {
-                draw_filled_rect(buf, width, height, *x, *y, *w, *h, *color);
-            }
-            UiDrawCmd::Slab {
-                x,
-                y,
-                w,
-                h,
-                radius,
-                color,
-            } => {
-                draw_rounded_rect(buf, width, height, *x, *y, *w, *h, *radius, *color);
-            }
-            UiDrawCmd::Circle { x, y, r, color } => {
-                draw_filled_circle(buf, width, height, *x, *y, *r, *color);
-            }
-            UiDrawCmd::Text {
-                x,
-                y,
-                size,
-                slot: _,
-                color,
-            } => {
-                // Slot-based text has no string data — render placeholder
-                draw_filled_rect(buf, width, height, *x, *y, *size * 4, *size, *color);
-            }
-            UiDrawCmd::TextStr {
-                x,
-                y,
-                size,
-                str_idx,
-                color,
-            } => {
-                if let (Some(font), Some(text)) =
-                    (font, string_table.get(*str_idx as usize))
-                {
-                    draw_text_glyphs(buf, width, height, *x, *y, *size, text, *color, font);
-                } else {
-                    // Fallback: placeholder rectangle
-                    draw_filled_rect(buf, width, height, *x, *y, *size * 4, *size, *color);
-                }
-            }
-            UiDrawCmd::Line {
-                x1,
-                y1,
-                x2,
-                y2,
-                color,
-            } => {
-                draw_line(buf, width, height, *x1, *y1, *x2, *y2, *color);
-            }
-            UiDrawCmd::Action { .. } => {
-                // Action regions are metadata — not rendered visually.
-            }
-        }
-    }
-}
-
-/// An action event fired when a user clicks an action region.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActionEvent {
-    /// Action name from the string table (e.g. "passkey_login").
-    pub action: String,
-    /// Bounding box of the action region in logical coordinates.
-    pub x: i32,
-    pub y: i32,
-    pub w: u32,
-    pub h: u32,
-}
-
-/// Extract action regions from draw commands, resolving names from the string table.
-pub fn collect_actions(draws: &[UiDrawCmd], string_table: &[String]) -> Vec<ActionEvent> {
-    draws
-        .iter()
-        .filter_map(|cmd| {
-            if let UiDrawCmd::Action { x, y, w, h, str_idx } = cmd {
-                let action = string_table.get(*str_idx as usize)?.clone();
-                Some(ActionEvent {
-                    action,
-                    x: *x,
-                    y: *y,
-                    w: *w,
-                    h: *h,
-                })
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-/// Hit-test a point against action regions, returning the first matching action.
-pub fn hit_test_action(
-    actions: &[ActionEvent],
-    px: i32,
-    py: i32,
-) -> Option<&ActionEvent> {
-    actions.iter().rev().find(|a| {
-        px >= a.x && px < a.x + a.w as i32 && py >= a.y && py < a.y + a.h as i32
-    })
-}
-
-/// Render a text string using bitmap glyphs from a font atlas.
-/// Uses nearest-neighbor scaling: scale = max(1, size / glyph_h).
-#[allow(clippy::too_many_arguments)]
-fn draw_text_glyphs(
-    buf: &mut [u32],
-    width: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    size: u32,
-    text: &str,
-    color: u32,
-    font: &matterstream_packaging::fnta::FontAtlas,
-) {
-    let gw = font.glyph_w as u32;
-    let gh = font.glyph_h as u32;
-    if gw == 0 || gh == 0 {
-        return;
-    }
-    let scale = (size / gh).max(1);
-    let advance = (gw + 1) * scale; // 1px inter-character gap, scaled
-
-    let mut cursor_x = x;
-    for ch in text.bytes() {
-        let cp = if ch >= font.first_cp && ch <= font.last_cp {
-            ch
-        } else {
-            b'?' // fallback glyph
-        };
-        if let Some(rows) = font.glyph_rows(cp) {
-            for (row_idx, &row_byte) in rows.iter().enumerate() {
-                for col in 0..gw {
-                    let bit = gw - 1 - col;
-                    if row_byte & (1 << bit) != 0 {
-                        // Draw a scale×scale block for this pixel
-                        let px = cursor_x + (col * scale) as i32;
-                        let py = y + (row_idx as u32 * scale) as i32;
-                        for dy in 0..scale {
-                            for dx in 0..scale {
-                                let fx = px + dx as i32;
-                                let fy = py + dy as i32;
-                                if fx >= 0
-                                    && fy >= 0
-                                    && (fx as u32) < width
-                                    && (fy as u32) < height
-                                {
-                                    let idx = (fy as u32 * width + fx as u32) as usize;
-                                    buf[idx] = blend_pixel(buf[idx], color);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        cursor_x += advance as i32;
-    }
-}
-
-/// Draw a filled rectangle with alpha blending, bounds-clipped.
-#[allow(clippy::too_many_arguments)]
-pub fn draw_filled_rect(
-    buf: &mut [u32],
-    width: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    color: u32,
-) {
-    let x0 = x.max(0) as u32;
-    let y0 = y.max(0) as u32;
-    let x1 = ((x as i64 + w as i64) as u32).min(width);
-    let y1 = ((y as i64 + h as i64) as u32).min(height);
-    for py in y0..y1 {
-        for px in x0..x1 {
-            let idx = (py * width + px) as usize;
-            buf[idx] = blend_pixel(buf[idx], color);
-        }
-    }
-}
-
-/// Draw a rounded rectangle with alpha blending.
-#[allow(clippy::too_many_arguments)]
-pub fn draw_rounded_rect(
-    buf: &mut [u32],
-    width: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    radius: u32,
-    color: u32,
-) {
-    let x0 = x.max(0) as u32;
-    let y0 = y.max(0) as u32;
-    let x1 = ((x as i64 + w as i64) as u32).min(width);
-    let y1 = ((y as i64 + h as i64) as u32).min(height);
-    let r = radius.min(w / 2).min(h / 2);
-    let r_sq = (r * r) as i64;
-
-    for py in y0..y1 {
-        for px in x0..x1 {
-            let lx = (px as i32 - x) as i64;
-            let ly = (py as i32 - y) as i64;
-
-            let in_corner = {
-                let cx = if lx < r as i64 {
-                    r as i64 - lx
-                } else if lx >= (w - r) as i64 {
-                    lx - (w - r - 1) as i64
-                } else {
-                    0
-                };
-                let cy = if ly < r as i64 {
-                    r as i64 - ly
-                } else if ly >= (h - r) as i64 {
-                    ly - (h - r - 1) as i64
-                } else {
-                    0
-                };
-                if cx > 0 && cy > 0 {
-                    cx * cx + cy * cy > r_sq
-                } else {
-                    false
-                }
-            };
-
-            if !in_corner {
-                let idx = (py * width + px) as usize;
-                buf[idx] = blend_pixel(buf[idx], color);
-            }
-        }
-    }
-}
-
-/// Draw a filled circle with alpha blending.
-pub fn draw_filled_circle(
-    buf: &mut [u32],
-    width: u32,
-    height: u32,
-    cx: i32,
-    cy: i32,
-    r: u32,
-    color: u32,
-) {
-    let ri = r as i32;
-    let x0 = (cx - ri).max(0) as u32;
-    let y0 = (cy - ri).max(0) as u32;
-    let x1 = ((cx + ri + 1) as u32).min(width);
-    let y1 = ((cy + ri + 1) as u32).min(height);
-    let r_sq = (r * r) as i64;
-
-    for py in y0..y1 {
-        let dy = py as i64 - cy as i64;
-        for px in x0..x1 {
-            let dx = px as i64 - cx as i64;
-            if dx * dx + dy * dy <= r_sq {
-                let idx = (py * width + px) as usize;
-                buf[idx] = blend_pixel(buf[idx], color);
-            }
-        }
-    }
-}
-
-/// Draw a line segment using Bresenham's algorithm with alpha blending.
-#[allow(clippy::too_many_arguments)]
-pub fn draw_line(
-    buf: &mut [u32],
-    width: u32,
-    height: u32,
-    x1: i32,
-    y1: i32,
-    x2: i32,
-    y2: i32,
-    color: u32,
-) {
-    let mut x = x1 as i64;
-    let mut y = y1 as i64;
-    let dx = (x2 as i64 - x1 as i64).abs();
-    let dy = -(y2 as i64 - y1 as i64).abs();
-    let sx: i64 = if x1 < x2 { 1 } else { -1 };
-    let sy: i64 = if y1 < y2 { 1 } else { -1 };
-    let mut err = dx + dy;
-
-    loop {
-        if x >= 0 && y >= 0 && (x as u32) < width && (y as u32) < height {
-            let idx = (y as u32 * width + x as u32) as usize;
-            buf[idx] = blend_pixel(buf[idx], color);
-        }
-        if x == x2 as i64 && y == y2 as i64 {
-            break;
-        }
-        let e2 = 2 * err;
-        if e2 >= dy {
-            err += dy;
-            x += sx;
-        }
-        if e2 <= dx {
-            err += dx;
-            y += sy;
         }
     }
 }
