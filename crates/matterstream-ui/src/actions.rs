@@ -1,6 +1,6 @@
 //! Action event extraction and hit testing for UiDrawCmd::Action regions.
 
-use matterstream_vm::ui_vm::UiDrawCmd;
+use crate::types::UiDrawCmd;
 
 /// An action event fired when a user clicks an action region.
 #[derive(Debug, Clone, PartialEq, Eq)]

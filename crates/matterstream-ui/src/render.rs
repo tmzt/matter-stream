@@ -1,6 +1,6 @@
 //! CPU-side softbuffer rasterizer for UiDrawCmd.
 
-use matterstream_vm::ui_vm::UiDrawCmd;
+use crate::types::UiDrawCmd;
 
 /// Unpack a u32 RGBA into (r, g, b, a).
 pub fn rgba_unpack(c: u32) -> (u8, u8, u8, u8) {

@@ -7,7 +7,12 @@ edition = "2021"
 matterstream-vm-addressing = { path = "../matterstream-vm-addressing" }
 matterstream-vm-arena = { path = "../matterstream-vm-arena" }
 matterstream-packaging = { path = "../matterstream-packaging" }
+matterstream-ui = { path = "../matterstream-ui", optional = true }
 bytemuck = { version = "1", features = ["derive"] }
+
+[features]
+default = ["ui"]
+ui = ["dep:matterstream-ui"]
 
 [dev-dependencies]
 matterstream-vm-asm = { path = "../matterstream-vm-asm" }
