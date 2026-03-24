@@ -2,7 +2,7 @@
 name = "matterstream-core"
 version = "0.1.0"
 edition = "2021"
-description = "UI ISA core — ops, registers, tiers, stream executor, RPN VM, UI draw commands"
+description = "UI ISA core — ops, registers, tiers, stream executor"
 license = "Apache-2.0"
 
 [dependencies]
@@ -10,10 +10,11 @@ matterstream-vm-addressing = { path = "../matterstream-vm-addressing" }
 matterstream-vm-arena = { path = "../matterstream-vm-arena" }
 matterstream-vm-scl = { path = "../matterstream-vm-scl" }
 matterstream-packaging = { path = "../matterstream-packaging" }
+matterstream-vm = { path = "../matterstream-vm" }
 futures = "0.3"
 
 [features]
-compiler = ["dep:oxc_parser", "dep:oxc_allocator", "dep:oxc_ast", "dep:oxc_span", "dep:matterstream-vm-asm", "dep:matterstream-vm"]
+compiler = ["dep:oxc_parser", "dep:oxc_allocator", "dep:oxc_ast", "dep:oxc_span", "dep:matterstream-vm-asm"]
 
 [dependencies.oxc_parser]
 version = "0.13"
@@ -33,10 +34,6 @@ optional = true
 
 [dependencies.matterstream-vm-asm]
 path = "../matterstream-vm-asm"
-optional = true
-
-[dependencies.matterstream-vm]
-path = "../matterstream-vm"
 optional = true
 
 [dev-dependencies]

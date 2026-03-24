@@ -1,0 +1,10 @@
+[package]
+name = "matterstream-ui"
+version = "0.1.0"
+edition = "2021"
+description = "CPU-side UI rasterizer — softbuffer rendering, hit testing, and action collection"
+license = "Apache-2.0"
+
+[dependencies]
+matterstream-vm = { path = "../matterstream-vm" }
+matterstream-packaging = { path = "../matterstream-packaging" }

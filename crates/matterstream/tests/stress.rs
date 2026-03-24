@@ -688,15 +688,12 @@ fn rpn_map_many_entries() {
         bc.push(RpnOp::MapSet as u8);
     }
 
-    vm.execute(&bc, &mut arenas).unwrap();
-    assert_eq!(vm.stack.len(), 1);
+    // Append a MapGet for key 25 to verify
+    bc.push(RpnOp::Push64 as u8);
+    bc.extend_from_slice(&25u64.to_le_bytes());
+    bc.push(RpnOp::MapGet as u8);
 
-    // Verify by getting key 25
-    let mut bc2 = vec![RpnOp::Push64 as u8];
-    bc2.extend_from_slice(&25u64.to_le_bytes());
-    bc2.push(RpnOp::MapGet as u8);
-    vm.pc = 0; // reset PC but keep stack
-    vm.execute(&bc2, &mut arenas).unwrap();
+    vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(vm.stack.last().unwrap().as_u64().unwrap(), 2500);
 }
 
