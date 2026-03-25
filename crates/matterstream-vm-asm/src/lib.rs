@@ -1,4 +1,4 @@
-//! Token-based bytecode assembler for the MTSM RPN VM.
+//! Token-based bytecode assembler for the msm1 RPN VM.
 //!
 //! Two-phase system:
 //! 1. Emission: append typed `AsmToken` variants to an IR buffer.
@@ -7,6 +7,11 @@
 
 use matterstream_vm::hooks::StateSlot;
 use matterstream_vm::rpn::RpnOp;
+// FourCC constants imported but only used by callers via the sub-op modules
+#[allow(unused_imports)]
+use matterstream_vm::ui_vm::{FOURCC_MTUI, FOURCC_VQL0, FOURCC_SKLL};
+#[allow(unused_imports)]
+use matterstream_vm::rpn::{FOURCC_OBJT, FOURCC_CARD};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -22,40 +27,130 @@ pub struct GlobalId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StringId(pub u32);
 
+// ── OR page sub-opcodes ────────────────────────────────────────────────
+
+/// MTUI OR page sub-opcodes (emitted as 0x80 + offset).
+pub mod mtui {
+    pub const SET_COLOR: u8 = 0x80;
+    pub const BOX: u8 = 0x81;
+    pub const SLAB: u8 = 0x82;
+    pub const CIRCLE: u8 = 0x83;
+    pub const TEXT: u8 = 0x84;
+    pub const PUSH_STATE: u8 = 0x85;
+    pub const POP_STATE: u8 = 0x86;
+    pub const APPLY_OFFSET: u8 = 0x87;
+    pub const LINE: u8 = 0x88;
+    pub const TEXT_STR: u8 = 0x89;
+    pub const ACTION: u8 = 0x8A;
+    pub const APPLY_MATRIX: u8 = 0x8B;
+    pub const REPLACE_OFFSET: u8 = 0x8C;
+    pub const REPLACE_MATRIX: u8 = 0x8D;
+}
+
+pub mod vql {
+    pub const BEGIN_QUERY: u8 = 0x80;
+    pub const END_QUERY: u8 = 0x81;
+    pub const BIND: u8 = 0x82;
+    pub const SET_FIELD: u8 = 0x83;
+    pub const SET_FIELD_STR: u8 = 0x84;
+    pub const FILTER: u8 = 0x85;
+    pub const PROJECT: u8 = 0x86;
+    pub const PARAM: u8 = 0x87;
+}
+
+pub mod skll {
+    pub const BEGIN: u8 = 0x80;
+    pub const END: u8 = 0x81;
+    pub const STEP: u8 = 0x82;
+    pub const LLM_STEP: u8 = 0x83;
+    pub const REPLACEABLE: u8 = 0x84;
+    pub const INVOKE: u8 = 0x85;
+    pub const INVOKE_SYMBOL: u8 = 0x86;
+    pub const LLM_MODEL: u8 = 0x87;
+    pub const LLM_USE_CASE: u8 = 0x88;
+    pub const SET_SHORT_DESC: u8 = 0x89;
+    pub const SET_LONG_DESC: u8 = 0x8A;
+    pub const CRON_INTERVAL: u8 = 0x8B;
+    pub const CRON_JITTER: u8 = 0x8C;
+    pub const FORWARD_PROMPT: u8 = 0x8D;
+    pub const ADD_TO_SYSTEM_PROMPT: u8 = 0x8E;
+}
+
+pub mod objt {
+    pub const BEGIN: u8 = 0x80;
+    pub const END: u8 = 0x81;
+    pub const SET_SHORT_DESC: u8 = 0x82;
+    pub const SET_LONG_DESC: u8 = 0x83;
+    pub const FIELD: u8 = 0x84;
+}
+
+pub mod card {
+    pub const BEGIN: u8 = 0x80;
+    pub const END: u8 = 0x81;
+    pub const SET_SHORT_DESC: u8 = 0x82;
+    pub const SET_LONG_DESC: u8 = 0x83;
+}
+
+// ── UserCall sub-op IDs ────────────────────────────────────────────────
+
+pub mod user_call {
+    pub const EV_POLL: u64 = 0x00;
+    pub const EV_HAS_EVENT: u64 = 0x01;
+    pub const FRAME_COUNT: u64 = 0x02;
+    pub const RAND: u64 = 0x03;
+    pub const OID_IMPORT: u64 = 0x10;
+    pub const OID_CALL: u64 = 0x11;
+    pub const OID_COSINE_MATCH: u64 = 0x12;
+}
+
+// ── SystemCall sub-op IDs ──────────────────────────────────────────────
+
+pub mod system_call {
+    pub const SYNC: u64 = 0x05;
+    pub const SET_OUTPUT_MODE: u64 = 0x07;
+}
+
 /// A single token in the assembler IR.
 #[derive(Debug, Clone)]
 enum AsmToken {
     Op(RpnOp),
+    /// Raw byte (for OR page opcodes that aren't in the RpnOp enum).
+    RawByte(u8),
     Push32(u32),
     Push64(u64),
-    PushFqa(u128),
+    Push128(u128),
     Label(LabelId),
     Jmp(LabelId),
     JmpIf(LabelId),
     LoadBank(StateSlot),
     StoreBank(StateSlot),
-    UiTextStr(StringId),
-    UiAction(StringId),
-    /// Push a string table index as u32 (generic, used by VQL/SKLL ops).
+    /// Push a string table index as u32 (generic, used by VQL/SKLL/UI ops).
     StrRef(StringId),
+    /// SetCR: [opcode][u8 cr_idx][u64 value] — 10 bytes total.
+    SetCR(u8, u64),
+    /// UserCall: [opcode][u64 action_op][u64 data] — 17 bytes total.
+    UserCall(u64, u64),
+    /// SystemCall: [opcode][u64 action_op][u64 data] — 17 bytes total.
+    SystemCall(u64, u64),
 }
 
 impl AsmToken {
-    /// Byte size this token will occupy in the final bytecode.
     fn byte_size(&self) -> usize {
         match self {
             AsmToken::Op(op) => 1 + op.payload_size(),
-            AsmToken::Push32(_) => 5,  // opcode + 4 bytes
-            AsmToken::Push64(_) => 9,  // opcode + 8 bytes
-            AsmToken::PushFqa(_) => 17, // opcode + 16 bytes
-            AsmToken::Label(_) => 0,   // labels are zero-width markers
-            AsmToken::Jmp(_) => 9,     // opcode + 8-byte target
-            AsmToken::JmpIf(_) => 9,   // opcode + 8-byte target
-            AsmToken::LoadBank(_) => 5 + 5 + 1, // Push32(bank) + Push32(index) + LoadBank
-            AsmToken::StoreBank(_) => 5 + 5 + 1, // Push32(bank) + Push32(index) + StoreBank
-            AsmToken::UiTextStr(_) => 5, // Push32(str_idx)
-            AsmToken::UiAction(_) => 5,  // Push32(str_idx)
-            AsmToken::StrRef(_) => 5,    // Push32(str_idx)
+            AsmToken::RawByte(_) => 1,
+            AsmToken::Push32(_) => 5,
+            AsmToken::Push64(_) => 9,
+            AsmToken::Push128(_) => 17,
+            AsmToken::Label(_) => 0,
+            AsmToken::Jmp(_) => 9,
+            AsmToken::JmpIf(_) => 9,
+            AsmToken::LoadBank(_) => 11,  // Push32(bank) + Push32(index) + LoadBank
+            AsmToken::StoreBank(_) => 11,
+            AsmToken::StrRef(_) => 5,     // Push32(str_idx)
+            AsmToken::SetCR(_, _) => 10,  // opcode + u8 + u64
+            AsmToken::UserCall(_, _) => 17,   // opcode + u64 + u64
+            AsmToken::SystemCall(_, _) => 17,
         }
     }
 }
@@ -163,15 +258,29 @@ impl Asm {
         self
     }
 
-    pub fn push_fqa(&mut self, val: u128) -> &mut Self {
-        self.tokens.push(AsmToken::PushFqa(val));
+    pub fn push128(&mut self, val: u128) -> &mut Self {
+        self.tokens.push(AsmToken::Push128(val));
         self
+    }
+
+    /// Backward compatibility alias.
+    pub fn push_fqa(&mut self, val: u128) -> &mut Self {
+        self.push128(val)
+    }
+
+    pub fn push_f32(&mut self, val: f32) -> &mut Self {
+        self.push32(f32::to_bits(val))
     }
 
     // ── Raw opcodes ──
 
     pub fn op(&mut self, op: RpnOp) -> &mut Self {
         self.tokens.push(AsmToken::Op(op));
+        self
+    }
+
+    fn raw(&mut self, byte: u8) -> &mut Self {
+        self.tokens.push(AsmToken::RawByte(byte));
         self
     }
 
@@ -198,13 +307,6 @@ impl Asm {
     pub fn halt(&mut self) -> &mut Self { self.op(RpnOp::Halt) }
     pub fn nop(&mut self) -> &mut Self { self.op(RpnOp::Nop) }
     pub fn ret(&mut self) -> &mut Self { self.op(RpnOp::Ret) }
-    pub fn sync(&mut self) -> &mut Self { self.op(RpnOp::Sync) }
-    pub fn ev_poll(&mut self) -> &mut Self { self.op(RpnOp::EvPoll) }
-    pub fn ev_has_event(&mut self) -> &mut Self { self.op(RpnOp::EvHasEvent) }
-    pub fn frame_count(&mut self) -> &mut Self { self.op(RpnOp::FrameCount) }
-    pub fn rand(&mut self) -> &mut Self { self.op(RpnOp::Rand) }
-
-    // ── Float arithmetic helpers ──
 
     pub fn fadd(&mut self) -> &mut Self { self.op(RpnOp::FAdd) }
     pub fn fsub(&mut self) -> &mut Self { self.op(RpnOp::FSub) }
@@ -218,21 +320,52 @@ impl Asm {
     pub fn i2f(&mut self) -> &mut Self { self.op(RpnOp::I2F) }
     pub fn f2i(&mut self) -> &mut Self { self.op(RpnOp::F2I) }
 
-    /// Push an f32 value as its bit representation (u32 pushed via Push32).
-    pub fn push_f32(&mut self, val: f32) -> &mut Self {
-        self.push32(f32::to_bits(val))
+    // ── UserCall helpers (0x60) ──
+
+    pub fn ev_poll(&mut self) -> &mut Self {
+        self.tokens.push(AsmToken::UserCall(user_call::EV_POLL, 0));
+        self
+    }
+    pub fn ev_has_event(&mut self) -> &mut Self {
+        self.tokens.push(AsmToken::UserCall(user_call::EV_HAS_EVENT, 0));
+        self
+    }
+    pub fn frame_count(&mut self) -> &mut Self {
+        self.tokens.push(AsmToken::UserCall(user_call::FRAME_COUNT, 0));
+        self
+    }
+    pub fn rand(&mut self) -> &mut Self {
+        self.tokens.push(AsmToken::UserCall(user_call::RAND, 0));
+        self
+    }
+
+    // ── SystemCall helpers (0x71) ──
+
+    pub fn sync(&mut self) -> &mut Self {
+        self.tokens.push(AsmToken::SystemCall(system_call::SYNC, 0));
+        self
+    }
+
+    // ── SetCR (0x70) ──
+
+    pub fn set_cr(&mut self, cr_index: u8, value: u64) -> &mut Self {
+        self.tokens.push(AsmToken::SetCR(cr_index, value));
+        self
+    }
+
+    /// Set output mode (CR[0]) via SystemCall.
+    pub fn set_output_mode(&mut self, fourcc: u32) -> &mut Self {
+        self.tokens.push(AsmToken::SystemCall(system_call::SET_OUTPUT_MODE, fourcc as u64));
+        self
     }
 
     // ── ZeroPage i32 helpers ──
 
-    /// Load a 4-byte i32 from ZeroPage at a constant address.
     pub fn load_zp_i32(&mut self, addr: u32) -> &mut Self {
         self.push32(addr);
         self.op(RpnOp::LoadZpI32)
     }
 
-    /// Store a 4-byte i32 to ZeroPage at a constant address.
-    /// Expects the value to store already on the stack.
     pub fn store_zp_i32(&mut self, addr: u32) -> &mut Self {
         self.push32(addr);
         self.op(RpnOp::StoreZpI32)
@@ -240,7 +373,6 @@ impl Asm {
 
     // ── Component-aware bank helpers ──
 
-    /// Load a specific component from a bank slot.
     pub fn load_bank_comp(&mut self, slot: StateSlot, component: u32) -> &mut Self {
         let bank_id = slot.bank as u32;
         self.push32(bank_id);
@@ -249,8 +381,6 @@ impl Asm {
         self.op(RpnOp::LoadBankComp)
     }
 
-    /// Store a value to a specific component of a bank slot.
-    /// Expects the value to store already on the stack.
     pub fn store_bank_comp(&mut self, slot: StateSlot, component: u32) -> &mut Self {
         let bank_id = slot.bank as u32;
         self.push32(bank_id);
@@ -259,262 +389,227 @@ impl Asm {
         self.op(RpnOp::StoreBankComp)
     }
 
-    // ── UI draw helpers ──
+    // ── UI draw helpers (MTUI OR page) ──
 
     pub fn set_color(&mut self, r: u8, g: u8, b: u8, a: u8) -> &mut Self {
         let rgba = (r as u32) << 24 | (g as u32) << 16 | (b as u32) << 8 | a as u32;
         self.push32(rgba);
-        self.op(RpnOp::UiSetColor)
+        self.raw(mtui::SET_COLOR)
     }
 
     pub fn draw_box(&mut self, x: i32, y: i32, w: u32, h: u32) -> &mut Self {
-        self.push32(x as u32);
-        self.push32(y as u32);
-        self.push32(w);
-        self.push32(h);
-        self.op(RpnOp::UiBox)
+        self.push32(x as u32).push32(y as u32).push32(w).push32(h);
+        self.raw(mtui::BOX)
     }
 
     pub fn draw_slab(&mut self, x: i32, y: i32, w: u32, h: u32, radius: u32) -> &mut Self {
-        self.push32(x as u32);
-        self.push32(y as u32);
-        self.push32(w);
-        self.push32(h);
-        self.push32(radius);
-        self.op(RpnOp::UiSlab)
+        self.push32(x as u32).push32(y as u32).push32(w).push32(h).push32(radius);
+        self.raw(mtui::SLAB)
     }
 
     pub fn draw_circle(&mut self, cx: i32, cy: i32, r: u32) -> &mut Self {
-        self.push32(cx as u32);
-        self.push32(cy as u32);
-        self.push32(r);
-        self.op(RpnOp::UiCircle)
+        self.push32(cx as u32).push32(cy as u32).push32(r);
+        self.raw(mtui::CIRCLE)
     }
 
     pub fn draw_text_str(&mut self, x: i32, y: i32, size: u32, id: StringId) -> &mut Self {
-        self.push32(x as u32);
-        self.push32(y as u32);
-        self.push32(size);
-        self.tokens.push(AsmToken::UiTextStr(id));
-        self.op(RpnOp::UiTextStr)
+        self.push32(x as u32).push32(y as u32).push32(size);
+        self.tokens.push(AsmToken::StrRef(id));
+        self.raw(mtui::TEXT_STR)
     }
 
-    pub fn ui_push_state(&mut self) -> &mut Self { self.op(RpnOp::UiPushState) }
-    pub fn ui_pop_state(&mut self) -> &mut Self { self.op(RpnOp::UiPopState) }
+    pub fn ui_push_state(&mut self) -> &mut Self { self.raw(mtui::PUSH_STATE) }
+    pub fn ui_pop_state(&mut self) -> &mut Self { self.raw(mtui::POP_STATE) }
 
     pub fn ui_apply_offset(&mut self, dx: i32, dy: i32) -> &mut Self {
-        self.push32(dx as u32);
-        self.push32(dy as u32);
-        self.op(RpnOp::UiApplyOffset)
+        self.push32(dx as u32).push32(dy as u32);
+        self.raw(mtui::APPLY_OFFSET)
     }
 
     pub fn ui_apply_matrix(&mut self, m: &[f32; 16]) -> &mut Self {
-        for &val in m.iter() {
-            self.push32(f32::to_bits(val));
-        }
-        self.op(RpnOp::UiApplyMatrix)
+        for &val in m.iter() { self.push32(f32::to_bits(val)); }
+        self.raw(mtui::APPLY_MATRIX)
     }
 
     pub fn ui_replace_offset(&mut self, dx: i32, dy: i32) -> &mut Self {
-        self.push32(dx as u32);
-        self.push32(dy as u32);
-        self.op(RpnOp::UiReplaceOffset)
+        self.push32(dx as u32).push32(dy as u32);
+        self.raw(mtui::REPLACE_OFFSET)
     }
 
     pub fn ui_replace_matrix(&mut self, m: &[f32; 16]) -> &mut Self {
-        for &val in m.iter() {
-            self.push32(f32::to_bits(val));
-        }
-        self.op(RpnOp::UiReplaceMatrix)
+        for &val in m.iter() { self.push32(f32::to_bits(val)); }
+        self.raw(mtui::REPLACE_MATRIX)
     }
 
     pub fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) -> &mut Self {
-        self.push32(x1 as u32);
-        self.push32(y1 as u32);
-        self.push32(x2 as u32);
-        self.push32(y2 as u32);
-        self.op(RpnOp::UiLine)
+        self.push32(x1 as u32).push32(y1 as u32).push32(x2 as u32).push32(y2 as u32);
+        self.raw(mtui::LINE)
     }
 
     pub fn draw_action(&mut self, x: i32, y: i32, w: u32, h: u32, id: StringId) -> &mut Self {
-        self.push32(x as u32);
-        self.push32(y as u32);
-        self.push32(w);
-        self.push32(h);
-        self.tokens.push(AsmToken::UiAction(id));
-        self.op(RpnOp::UiAction)
+        self.push32(x as u32).push32(y as u32).push32(w).push32(h);
+        self.tokens.push(AsmToken::StrRef(id));
+        self.raw(mtui::ACTION)
     }
 
-    // ── Control register helpers ──
+    // ── VQL helpers (VQL0 OR page) ──
 
-    /// Set a control register: push cr_index, push value, SetCR.
-    pub fn set_cr(&mut self, cr_index: u32, value: u32) -> &mut Self {
-        self.push32(cr_index);
-        self.push32(value);
-        self.op(RpnOp::SetCR)
-    }
-
-    // ── VQL helpers ──
-
-    pub fn vql_begin_query(&mut self) -> &mut Self { self.op(RpnOp::VqlBeginQuery) }
-    pub fn vql_end_query(&mut self) -> &mut Self { self.op(RpnOp::VqlEndQuery) }
+    pub fn vql_begin_query(&mut self) -> &mut Self { self.raw(vql::BEGIN_QUERY) }
+    pub fn vql_end_query(&mut self) -> &mut Self { self.raw(vql::END_QUERY) }
 
     pub fn vql_bind(&mut self, key: StringId, value: StringId) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(key));
         self.tokens.push(AsmToken::StrRef(value));
-        self.op(RpnOp::VqlBind)
+        self.raw(vql::BIND)
     }
 
     pub fn vql_set_field(&mut self, name: StringId, value: u64) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(name));
         self.push64(value);
-        self.op(RpnOp::VqlSetField)
+        self.raw(vql::SET_FIELD)
     }
 
     pub fn vql_set_field_str(&mut self, name: StringId, value: StringId) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(name));
         self.tokens.push(AsmToken::StrRef(value));
-        self.op(RpnOp::VqlSetFieldStr)
+        self.raw(vql::SET_FIELD_STR)
     }
 
     pub fn vql_filter(&mut self, name: StringId) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(name));
-        self.op(RpnOp::VqlFilter)
+        self.raw(vql::FILTER)
     }
 
     pub fn vql_project(&mut self, name: StringId) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(name));
-        self.op(RpnOp::VqlProject)
+        self.raw(vql::PROJECT)
     }
 
     pub fn vql_param(&mut self, key: StringId, value: StringId) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(key));
         self.tokens.push(AsmToken::StrRef(value));
-        self.op(RpnOp::VqlParam)
+        self.raw(vql::PARAM)
     }
 
-    // ── SKLL helpers ──
+    // ── SKLL helpers (SKLL OR page) ──
 
     pub fn skill_begin(&mut self, name: StringId) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(name));
-        self.op(RpnOp::SkillBegin)
+        self.raw(skll::BEGIN)
     }
 
-    pub fn skill_end(&mut self) -> &mut Self { self.op(RpnOp::SkillEnd) }
+    pub fn skill_end(&mut self) -> &mut Self { self.raw(skll::END) }
 
     pub fn skill_step(&mut self, name: StringId) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(name));
-        self.op(RpnOp::SkillStep)
+        self.raw(skll::STEP)
     }
 
     pub fn skill_llm_step(&mut self, prompt: StringId) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(prompt));
-        self.op(RpnOp::SkillLlmStep)
+        self.raw(skll::LLM_STEP)
     }
 
     pub fn skill_replaceable(&mut self, name: StringId, default: StringId) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(name));
         self.tokens.push(AsmToken::StrRef(default));
-        self.op(RpnOp::SkillReplaceable)
+        self.raw(skll::REPLACEABLE)
     }
 
     pub fn skill_llm_model(&mut self, model: StringId) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(model));
-        self.op(RpnOp::SkillLlmModel)
+        self.raw(skll::LLM_MODEL)
     }
 
     pub fn skill_llm_use_case(&mut self, use_case: u8) -> &mut Self {
         self.push32(use_case as u32);
-        self.op(RpnOp::SkillLlmUseCase)
+        self.raw(skll::LLM_USE_CASE)
     }
 
     pub fn skill_invoke(&mut self, name: StringId) -> &mut Self {
         self.tokens.push(AsmToken::StrRef(name));
-        self.op(RpnOp::SkillInvoke)
-    }
-
-    pub fn skill_forward_prompt(&mut self, dest: StringId) -> &mut Self {
-        self.tokens.push(AsmToken::StrRef(dest));
-        self.op(RpnOp::SkillForwardPrompt)
-    }
-
-    pub fn skill_add_to_system_prompt(&mut self, content: StringId) -> &mut Self {
-        self.tokens.push(AsmToken::StrRef(content));
-        self.op(RpnOp::SkillAddToSystemPrompt)
-    }
-
-    pub fn skill_set_short_desc(&mut self, desc: StringId) -> &mut Self {
-        self.tokens.push(AsmToken::StrRef(desc));
-        self.op(RpnOp::SkillSetShortDesc)
-    }
-
-    pub fn skill_set_long_desc(&mut self, desc: StringId) -> &mut Self {
-        self.tokens.push(AsmToken::StrRef(desc));
-        self.op(RpnOp::SkillSetLongDesc)
-    }
-
-    /// Set cron interval (u64 split as lo/hi u32 pushes).
-    pub fn skill_cron_interval(&mut self, interval_ms: u64) -> &mut Self {
-        self.push32(interval_ms as u32);          // lo
-        self.push32((interval_ms >> 32) as u32);  // hi
-        self.op(RpnOp::SkillCronInterval)
-    }
-
-    /// Set cron jitter (u64 split as lo/hi u32 pushes).
-    pub fn skill_cron_jitter(&mut self, jitter_ms: u64) -> &mut Self {
-        self.push32(jitter_ms as u32);
-        self.push32((jitter_ms >> 32) as u32);
-        self.op(RpnOp::SkillCronJitter)
-    }
-
-    // ── Card helpers ──
-
-    pub fn card_begin(&mut self, name: StringId) -> &mut Self {
-        self.tokens.push(AsmToken::StrRef(name));
-        self.op(RpnOp::CardBegin)
-    }
-
-    pub fn card_end(&mut self) -> &mut Self { self.op(RpnOp::CardEnd) }
-
-    pub fn card_set_short_desc(&mut self, desc: StringId) -> &mut Self {
-        self.tokens.push(AsmToken::StrRef(desc));
-        self.op(RpnOp::CardSetShortDesc)
-    }
-
-    pub fn card_set_long_desc(&mut self, desc: StringId) -> &mut Self {
-        self.tokens.push(AsmToken::StrRef(desc));
-        self.op(RpnOp::CardSetLongDesc)
-    }
-
-    // ── Object type helpers ──
-
-    pub fn objtype_begin(&mut self, name: StringId) -> &mut Self {
-        self.tokens.push(AsmToken::StrRef(name));
-        self.op(RpnOp::ObjTypeBegin)
-    }
-
-    pub fn objtype_end(&mut self) -> &mut Self { self.op(RpnOp::ObjTypeEnd) }
-
-    pub fn objtype_set_short_desc(&mut self, desc: StringId) -> &mut Self {
-        self.tokens.push(AsmToken::StrRef(desc));
-        self.op(RpnOp::ObjTypeSetShortDesc)
-    }
-
-    pub fn objtype_set_long_desc(&mut self, desc: StringId) -> &mut Self {
-        self.tokens.push(AsmToken::StrRef(desc));
-        self.op(RpnOp::ObjTypeSetLongDesc)
-    }
-
-    /// Add a field definition. flags: bit0=fts, bit1=vec.
-    pub fn objtype_field(&mut self, name: StringId, flags: u32) -> &mut Self {
-        self.tokens.push(AsmToken::StrRef(name));
-        self.push32(flags);
-        self.op(RpnOp::ObjTypeField)
+        self.raw(skll::INVOKE)
     }
 
     pub fn skill_invoke_symbol(&mut self, symbol: u32) -> &mut Self {
         self.push32(symbol);
-        self.op(RpnOp::SkillInvokeSymbol)
+        self.raw(skll::INVOKE_SYMBOL)
+    }
+
+    pub fn skill_forward_prompt(&mut self, dest: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(dest));
+        self.raw(skll::FORWARD_PROMPT)
+    }
+
+    pub fn skill_add_to_system_prompt(&mut self, content: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(content));
+        self.raw(skll::ADD_TO_SYSTEM_PROMPT)
+    }
+
+    pub fn skill_set_short_desc(&mut self, desc: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(desc));
+        self.raw(skll::SET_SHORT_DESC)
+    }
+
+    pub fn skill_set_long_desc(&mut self, desc: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(desc));
+        self.raw(skll::SET_LONG_DESC)
+    }
+
+    pub fn skill_cron_interval(&mut self, interval_ms: u64) -> &mut Self {
+        self.push32(interval_ms as u32);
+        self.push32((interval_ms >> 32) as u32);
+        self.raw(skll::CRON_INTERVAL)
+    }
+
+    pub fn skill_cron_jitter(&mut self, jitter_ms: u64) -> &mut Self {
+        self.push32(jitter_ms as u32);
+        self.push32((jitter_ms >> 32) as u32);
+        self.raw(skll::CRON_JITTER)
+    }
+
+    // ── Card helpers (CARD OR page) ──
+
+    pub fn card_begin(&mut self, name: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.raw(card::BEGIN)
+    }
+
+    pub fn card_end(&mut self) -> &mut Self { self.raw(card::END) }
+
+    pub fn card_set_short_desc(&mut self, desc: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(desc));
+        self.raw(card::SET_SHORT_DESC)
+    }
+
+    pub fn card_set_long_desc(&mut self, desc: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(desc));
+        self.raw(card::SET_LONG_DESC)
+    }
+
+    // ── Object type helpers (OBJT OR page) ──
+
+    pub fn objtype_begin(&mut self, name: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.raw(objt::BEGIN)
+    }
+
+    pub fn objtype_end(&mut self) -> &mut Self { self.raw(objt::END) }
+
+    pub fn objtype_set_short_desc(&mut self, desc: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(desc));
+        self.raw(objt::SET_SHORT_DESC)
+    }
+
+    pub fn objtype_set_long_desc(&mut self, desc: StringId) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(desc));
+        self.raw(objt::SET_LONG_DESC)
+    }
+
+    pub fn objtype_field(&mut self, name: StringId, flags: u32) -> &mut Self {
+        self.tokens.push(AsmToken::StrRef(name));
+        self.push32(flags);
+        self.raw(objt::FIELD)
     }
 
     // ── Finalization ──
@@ -522,7 +617,6 @@ impl Asm {
     pub fn finish(self) -> Result<AsmOutput, AsmError> {
         // Pass 1: compute byte offsets and collect label positions
         let mut label_offsets: HashMap<LabelId, usize> = HashMap::new();
-        let mut defined_labels: Vec<LabelId> = Vec::new();
         let mut offset = 0usize;
 
         for token in &self.tokens {
@@ -531,7 +625,6 @@ impl Asm {
                     return Err(AsmError::DuplicateLabel(*id));
                 }
                 label_offsets.insert(*id, offset);
-                defined_labels.push(*id);
             }
             offset += token.byte_size();
         }
@@ -544,6 +637,9 @@ impl Asm {
                 AsmToken::Op(op) => {
                     bytecode.push(*op as u8);
                 }
+                AsmToken::RawByte(b) => {
+                    bytecode.push(*b);
+                }
                 AsmToken::Push32(val) => {
                     bytecode.push(RpnOp::Push32 as u8);
                     bytecode.extend_from_slice(&val.to_le_bytes());
@@ -552,24 +648,18 @@ impl Asm {
                     bytecode.push(RpnOp::Push64 as u8);
                     bytecode.extend_from_slice(&val.to_le_bytes());
                 }
-                AsmToken::PushFqa(val) => {
-                    bytecode.push(RpnOp::PushFqa as u8);
+                AsmToken::Push128(val) => {
+                    bytecode.push(RpnOp::Push128 as u8);
                     bytecode.extend_from_slice(&val.to_le_bytes());
                 }
-                AsmToken::Label(_) => {
-                    // Zero-width marker, no bytes emitted
-                }
+                AsmToken::Label(_) => {}
                 AsmToken::Jmp(id) => {
-                    let target = *label_offsets
-                        .get(id)
-                        .ok_or(AsmError::UnresolvedLabel(*id))?;
+                    let target = *label_offsets.get(id).ok_or(AsmError::UnresolvedLabel(*id))?;
                     bytecode.push(RpnOp::Jmp as u8);
                     bytecode.extend_from_slice(&(target as u64).to_le_bytes());
                 }
                 AsmToken::JmpIf(id) => {
-                    let target = *label_offsets
-                        .get(id)
-                        .ok_or(AsmError::UnresolvedLabel(*id))?;
+                    let target = *label_offsets.get(id).ok_or(AsmError::UnresolvedLabel(*id))?;
                     bytecode.push(RpnOp::JmpIf as u8);
                     bytecode.extend_from_slice(&(target as u64).to_le_bytes());
                 }
@@ -589,17 +679,24 @@ impl Asm {
                     bytecode.extend_from_slice(&slot.index.to_le_bytes());
                     bytecode.push(RpnOp::StoreBank as u8);
                 }
-                AsmToken::UiTextStr(id) => {
-                    bytecode.push(RpnOp::Push32 as u8);
-                    bytecode.extend_from_slice(&id.0.to_le_bytes());
-                }
-                AsmToken::UiAction(id) => {
-                    bytecode.push(RpnOp::Push32 as u8);
-                    bytecode.extend_from_slice(&id.0.to_le_bytes());
-                }
                 AsmToken::StrRef(id) => {
                     bytecode.push(RpnOp::Push32 as u8);
                     bytecode.extend_from_slice(&id.0.to_le_bytes());
+                }
+                AsmToken::SetCR(cr_idx, value) => {
+                    bytecode.push(RpnOp::SetCR as u8);
+                    bytecode.push(*cr_idx);
+                    bytecode.extend_from_slice(&value.to_le_bytes());
+                }
+                AsmToken::UserCall(action_op, data) => {
+                    bytecode.push(RpnOp::UserCall as u8);
+                    bytecode.extend_from_slice(&action_op.to_le_bytes());
+                    bytecode.extend_from_slice(&data.to_le_bytes());
+                }
+                AsmToken::SystemCall(action_op, data) => {
+                    bytecode.push(RpnOp::SystemCall as u8);
+                    bytecode.extend_from_slice(&action_op.to_le_bytes());
+                    bytecode.extend_from_slice(&data.to_le_bytes());
                 }
             }
         }
