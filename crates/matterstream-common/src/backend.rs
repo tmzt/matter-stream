@@ -2,7 +2,7 @@
 
 /// Render backend for pixel-level drawing operations.
 /// Implementations are monomorphized at compile time via generics.
-pub trait RenderBackend {
+pub trait Rasterizer {
     /// Alpha-composite `src_rgba` (0xRRGGBBAA) over `dst` (backend-specific format).
     fn blend_pixel(dst: u32, src_rgba: u32) -> u32;
 

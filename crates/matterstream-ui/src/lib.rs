@@ -1,6 +1,6 @@
 //! MatterStream UI — draw command types, render dispatch, and action handling.
 //!
-//! Pixel-level rendering is pluggable via `RenderBackend` from `matterstream-common`.
+//! Pixel-level rendering is pluggable via `Rasterizer` from `matterstream-common`.
 //! The softbuffer implementation lives in `matterstream-ui-soft`.
 
 pub mod types;

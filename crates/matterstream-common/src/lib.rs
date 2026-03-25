@@ -4,4 +4,4 @@ pub mod gfx_utils;
 pub mod backend;
 
 pub use gfx_utils::{rgba, rgba_unpack};
-pub use backend::RenderBackend;
+pub use backend::Rasterizer;

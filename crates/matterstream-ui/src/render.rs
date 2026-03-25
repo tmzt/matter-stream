@@ -1,13 +1,13 @@
 //! UI draw command dispatch and font glyph layout.
 //!
-//! Generic over `RenderBackend` — pixel-level drawing is pluggable.
+//! Generic over `Rasterizer` — pixel-level drawing is pluggable.
 //! The softbuffer implementation lives in `matterstream-ui-soft`.
 
-use matterstream_common::RenderBackend;
+use matterstream_common::Rasterizer;
 use crate::types::UiDrawCmd;
 
 /// Render draw commands using backend `R`, without font support.
-pub fn render_ui_draws<R: RenderBackend>(
+pub fn render_ui_draws<R: Rasterizer>(
     draws: &[UiDrawCmd],
     buf: &mut [u32],
     width: u32,
@@ -17,7 +17,7 @@ pub fn render_ui_draws<R: RenderBackend>(
 }
 
 /// Render draw commands using backend `R`, with optional font atlas for text.
-pub fn render_ui_draws_with_font<R: RenderBackend>(
+pub fn render_ui_draws_with_font<R: Rasterizer>(
     draws: &[UiDrawCmd],
     buf: &mut [u32],
     width: u32,
@@ -70,7 +70,7 @@ pub fn render_ui_draws_with_font<R: RenderBackend>(
 /// Render a text string using bitmap glyphs from a font atlas.
 /// Glyph layout stays here; pixel blitting uses `R::blend_pixel`.
 #[allow(clippy::too_many_arguments)]
-fn draw_text_glyphs<R: RenderBackend>(
+fn draw_text_glyphs<R: Rasterizer>(
     buf: &mut [u32],
     width: u32,
     height: u32,

@@ -1,16 +1,16 @@
-//! Softbuffer CPU rasterizer — `RenderBackend` implementation for `&mut [u32]` buffers.
+//! Softbuffer CPU rasterizer — `Rasterizer` implementation for `&mut [u32]` buffers.
 //!
 //! Pixel format: `0x00RRGGBB` (softbuffer convention).
 //! Input colors: `0xRRGGBBAA` (MatterStream RGBA convention).
 //!
 //! Usage: `render_ui_draws_with_font::<SoftRenderer>(...)`
 
-use matterstream_common::{RenderBackend, rgba_unpack};
+use matterstream_common::{Rasterizer, rgba_unpack};
 
 /// Softbuffer CPU rasterizer. Zero-sized type — all methods are static.
 pub struct SoftRenderer;
 
-impl RenderBackend for SoftRenderer {
+impl Rasterizer for SoftRenderer {
     fn blend_pixel(dst: u32, src_rgba: u32) -> u32 {
         blend_pixel(dst, src_rgba)
     }
