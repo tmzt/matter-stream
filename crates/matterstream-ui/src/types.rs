@@ -118,7 +118,4 @@ pub fn apply_transform(transform: &[f32; 16], x: i32, y: i32) -> (i32, i32) {
     }
 }
 
-/// Pack RGBA components into a u32 (0xRRGGBBAA).
-pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
-    (r as u32) << 24 | (g as u32) << 16 | (b as u32) << 8 | a as u32
-}
+// rgba() and rgba_unpack() live in gfx_utils.rs

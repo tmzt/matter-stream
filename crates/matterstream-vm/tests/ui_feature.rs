@@ -19,7 +19,7 @@ mod with_ui {
         let mut arenas = TripleArena::new();
 
         // SetColor(blue) + Slab(0, 0, 200, 100, 12) + Halt
-        let blue = matterstream_ui::rgba(50, 100, 255, 255);
+        let blue = matterstream_common::rgba(50, 100, 255, 255);
         let mut bc = Vec::new();
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&blue.to_le_bytes());
@@ -76,7 +76,7 @@ mod with_ui {
         bc.push(RpnOp::CardBegin as u8);
 
         // Draw a slab inside the card
-        let color = matterstream_ui::rgba(0x33, 0x66, 0x99, 0xFF);
+        let color = matterstream_common::rgba(0x33, 0x66, 0x99, 0xFF);
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&color.to_le_bytes());
         bc.push(RpnOp::UiSetColor as u8);
@@ -146,8 +146,8 @@ mod with_ui {
         let mut arenas = TripleArena::new();
         let mut bc = Vec::new();
 
-        let white = matterstream_ui::rgba(255, 255, 255, 255);
-        let red = matterstream_ui::rgba(255, 0, 0, 255);
+        let white = matterstream_common::rgba(255, 255, 255, 255);
+        let red = matterstream_common::rgba(255, 0, 0, 255);
 
         // Draw a box
         bc.push(RpnOp::Push32 as u8);
@@ -193,7 +193,7 @@ mod with_ui {
         let mut arenas = TripleArena::new();
         let mut bc = Vec::new();
 
-        let color = matterstream_ui::rgba(255, 255, 255, 255);
+        let color = matterstream_common::rgba(255, 255, 255, 255);
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&color.to_le_bytes());
         bc.push(RpnOp::UiSetColor as u8);
@@ -249,7 +249,7 @@ mod with_ui {
         let mut vm = RpnVm::new();
         let mut arenas = TripleArena::new();
 
-        let color = matterstream_ui::rgba(255, 0, 0, 255);
+        let color = matterstream_common::rgba(255, 0, 0, 255);
         let mut bc = Vec::new();
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&color.to_le_bytes());

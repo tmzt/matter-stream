@@ -52,7 +52,7 @@ fn main() {
     // ══════════════════════════════════════════════════════════════════════
     let lib_bytecode = {
         let mut bc = Vec::new();
-        let blue = matterstream_ui::rgba(50, 100, 255, 255);
+        let blue = matterstream_common::rgba(50, 100, 255, 255);
         push32(&mut bc, blue);
         bc.push(RpnOp::UiSetColor as u8);
         for val in [0u32, 0, 200, 100, 12] {

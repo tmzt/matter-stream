@@ -35,4 +35,4 @@ pub use tier0::GlobalUniforms;
 pub use tier1::{IntBank, Mat4Bank, ScalarBank, Vec3Bank, Vec4Bank};
 pub use tier2::ZeroPage;
 pub use tier3::{ResourceHandle, ResourceTable};
-pub use ui_vm::{render_ui_draws, rgba, UiDrawCmd, UiDrawState};
+pub use ui_vm::{UiDrawCmd, UiDrawState};

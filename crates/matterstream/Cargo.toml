@@ -14,30 +14,17 @@ matterstream-vm-arena = { path = "../matterstream-vm-arena" }
 matterstream-packaging = { path = "../matterstream-packaging" }
 matterstream-vm-scl = { path = "../matterstream-vm-scl" }
 
+[dependencies.matterstream-ui-soft]
+path = "../matterstream-ui-soft"
+optional = true
+
 [features]
 compiler = ["matterstream-core/compiler"]
+ui-softbuffer = ["dep:matterstream-ui-soft"]
 
-[[example]]
-name = "rpn-arena"
-
-[[example]]
-name = "vm-pipeline"
-
-[[example]]
-name = "ui-demo"
-
-[[example]]
-name = "run-tsx"
-required-features = ["compiler"]
-
-[[example]]
-name = "run-cards"
-required-features = ["compiler"]
-
-[[example]]
-name = "oid-import-ui"
 
 [dev-dependencies]
+matterstream-common = { path = "../matterstream-common" }
 matterstream-ui = { path = "../matterstream-ui" }
 async-io = "2.6.0"
 smol = "2"

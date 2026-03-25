@@ -7,7 +7,7 @@ use matterstream_compiler::Compiler;
 use matterstream_core::ops::{CompiledOps, Op, Primitive};
 
 use crate::rpn::RpnOp;
-use crate::ui_vm::rgba;
+use matterstream_common::rgba;
 
 /// Compile TSX source to RPN bytecode (static layout only).
 pub fn compile_to_bytecode(source: &str) -> Result<Vec<u8>, String> {

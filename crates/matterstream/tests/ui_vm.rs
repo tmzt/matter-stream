@@ -3,9 +3,9 @@
 use matterstream::arena::TripleArena;
 use matterstream::rpn::{RpnError, RpnOp, RpnVm};
 use matterstream::ui_vm::{
-    blend_pixel, render_ui_draws, rgba, rgba_unpack, UiDrawCmd, UI_DRAW_CMD_MAX,
-    UI_STATE_STACK_MAX,
+    UiDrawCmd, UI_DRAW_CMD_MAX, UI_STATE_STACK_MAX,
 };
+use matterstream_common::rgba;
 
 fn encode_push32(val: u32) -> Vec<u8> {
     let mut buf = vec![RpnOp::Push32 as u8];
@@ -427,94 +427,5 @@ fn disassemble_ui_opcodes() {
     assert!(disasm.contains("UiLine"));
 }
 
-// ============================================================
-// Pixel-level render tests
-// ============================================================
-
-#[test]
-fn render_box_pixels() {
-    let draws = vec![UiDrawCmd::Box {
-        x: 1,
-        y: 1,
-        w: 2,
-        h: 2,
-        color: rgba(255, 0, 0, 255),
-    }];
-
-    let (w, h) = (4, 4);
-    let mut buf = vec![0u32; (w * h) as usize];
-    render_ui_draws(&draws, &mut buf, w, h);
-
-    // Red = 0x00FF0000 in softbuffer format
-    let red_pixel = 0x00FF0000;
-    assert_eq!(buf[(w + 1) as usize], red_pixel);
-    assert_eq!(buf[(w + 2) as usize], red_pixel);
-    assert_eq!(buf[(2 * w + 1) as usize], red_pixel);
-    assert_eq!(buf[(2 * w + 2) as usize], red_pixel);
-    // Outside the box should be 0
-    assert_eq!(buf[0], 0);
-    assert_eq!(buf[(3 * w + 3) as usize], 0);
-}
-
-#[test]
-fn render_circle_pixels() {
-    let draws = vec![UiDrawCmd::Circle {
-        x: 5,
-        y: 5,
-        r: 2,
-        color: rgba(0, 255, 0, 255),
-    }];
-
-    let (w, h) = (11, 11);
-    let mut buf = vec![0u32; (w * h) as usize];
-    render_ui_draws(&draws, &mut buf, w, h);
-
-    // Center should be green
-    let green_pixel = 0x0000FF00;
-    assert_eq!(buf[(5 * w + 5) as usize], green_pixel);
-    // Points at distance 2 on axis should be green (5+2=7, 5-2=3)
-    assert_eq!(buf[(5 * w + 7) as usize], green_pixel);
-    assert_eq!(buf[(5 * w + 3) as usize], green_pixel);
-    // Point clearly outside (distance > 2)
-    assert_eq!(buf[0], 0);
-}
-
-#[test]
-fn alpha_blending() {
-    // Semi-transparent red over white background
-    let dst = 0x00FFFFFF; // white in softbuffer
-    let src = rgba(255, 0, 0, 128); // 50% red
-    let blended = blend_pixel(dst, src);
-
-    let r = (blended >> 16) as u8;
-    let g = (blended >> 8) as u8;
-    let b = blended as u8;
-
-    // Red should be high (close to 255), green and blue reduced
-    assert!(r > 200);
-    assert!(g < 130 && g > 100);
-    assert!(b < 130 && b > 100);
-}
-
-#[test]
-fn rgba_pack_unpack_roundtrip() {
-    let (r, g, b, a) = (0x12, 0x34, 0x56, 0x78);
-    let packed = rgba(r, g, b, a);
-    assert_eq!(packed, 0x12345678);
-    let (ur, ug, ub, ua) = rgba_unpack(packed);
-    assert_eq!((ur, ug, ub, ua), (r, g, b, a));
-}
-
-#[test]
-fn blend_pixel_fully_transparent() {
-    let dst = 0x00AABBCC;
-    let src = rgba(255, 0, 0, 0); // fully transparent
-    assert_eq!(blend_pixel(dst, src), dst);
-}
-
-#[test]
-fn blend_pixel_fully_opaque() {
-    let dst = 0x00AABBCC;
-    let src = rgba(0x11, 0x22, 0x33, 255); // fully opaque
-    assert_eq!(blend_pixel(dst, src), 0x00112233);
-}
+// Pixel-level render tests moved to matterstream-ui-soft
+// Color math tests moved to matterstream-common

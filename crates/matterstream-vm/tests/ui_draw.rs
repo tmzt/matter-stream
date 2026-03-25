@@ -1,10 +1,8 @@
 //! Tests for UI draw opcodes, state stack, and draw limits.
 
 use matterstream_vm::rpn::{RpnError, RpnOp, RpnVm};
-use matterstream_vm::ui_vm::{
-    self, UiDrawCmd, UI_STATE_STACK_MAX,
-    rgba, rgba_unpack, blend_pixel,
-};
+use matterstream_vm::ui_vm::{UiDrawCmd, UI_STATE_STACK_MAX};
+use matterstream_common::rgba;
 use matterstream_vm_arena::TripleArena;
 
 fn encode(instructions: &[(RpnOp, Option<&[u8]>)]) -> Vec<u8> {
@@ -205,61 +203,7 @@ fn test_ui_text_str() {
     }
 }
 
-// ── Color helpers ──
-
-#[test]
-fn test_rgba_pack_unpack() {
-    let packed = rgba(255, 128, 0, 200);
-    let (r, g, b, a) = rgba_unpack(packed);
-    assert_eq!((r, g, b, a), (255, 128, 0, 200));
-}
-
-#[test]
-fn test_blend_pixel_opaque() {
-    let result = blend_pixel(0x00FF00, rgba(255, 0, 0, 255));
-    assert_eq!(result, 0xFF0000); // fully opaque red
-}
-
-#[test]
-fn test_blend_pixel_transparent() {
-    let result = blend_pixel(0x00FF00, rgba(255, 0, 0, 0));
-    assert_eq!(result, 0x00FF00); // fully transparent, background unchanged
-}
-
-// ── Softbuffer rasterizer ──
-
-#[test]
-fn test_render_ui_draws_box() {
-    let draws = vec![UiDrawCmd::Box {
-        x: 0,
-        y: 0,
-        w: 10,
-        h: 10,
-        color: rgba(255, 0, 0, 255),
-    }];
-    let mut buf = vec![0u32; 100];
-    ui_vm::render_ui_draws(&draws, &mut buf, 10, 10);
-    // Every pixel should be red (0x00RRGGBB format)
-    for p in &buf {
-        assert_eq!(*p, 0xFF0000);
-    }
-}
-
-#[test]
-fn test_render_ui_draws_circle() {
-    let draws = vec![UiDrawCmd::Circle {
-        x: 5,
-        y: 5,
-        r: 3,
-        color: rgba(0, 255, 0, 255),
-    }];
-    let mut buf = vec![0u32; 100];
-    ui_vm::render_ui_draws(&draws, &mut buf, 10, 10);
-    // Center pixel should be green
-    assert_eq!(buf[5 * 10 + 5], 0x00FF00);
-    // Corner pixel should be untouched
-    assert_eq!(buf[0], 0);
-}
+// Pixel-level tests (rgba, blend_pixel, render_*) moved to matterstream-ui-soft
 
 fn run(bytecode: &[u8]) -> RpnVm {
     let mut vm = RpnVm::new();

@@ -7,6 +7,7 @@ edition = "2021"
 matterstream-vm-addressing = { path = "../matterstream-vm-addressing" }
 matterstream-vm-arena = { path = "../matterstream-vm-arena" }
 matterstream-packaging = { path = "../matterstream-packaging" }
+matterstream-common = { path = "../matterstream-common" }
 matterstream-ui = { path = "../matterstream-ui", optional = true }
 bytemuck = { version = "1", features = ["derive"] }
 
@@ -16,18 +17,5 @@ ui = ["dep:matterstream-ui"]
 
 [dev-dependencies]
 matterstream-vm-asm = { path = "../matterstream-vm-asm" }
+matterstream-common = { path = "../matterstream-common" }
 
-[[example]]
-name = "connect4"
-
-[[example]]
-name = "game2048"
-
-[[example]]
-name = "flappy_bird"
-
-[[example]]
-name = "package_demo"
-
-[[example]]
-name = "oid_import_demo"

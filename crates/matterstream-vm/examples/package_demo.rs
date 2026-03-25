@@ -11,7 +11,8 @@
 use matterstream_packaging::archive::{ArchiveMember, MtsmArchive};
 use matterstream_packaging::tkv::{TkvDocument, TkvValue};
 use matterstream_vm::rpn::{RpnOp, RpnVm};
-use matterstream_vm::ui_vm::{rgba, UiDrawCmd};
+use matterstream_common::rgba;
+use matterstream_vm::ui_vm::UiDrawCmd;
 use matterstream_vm_addressing::fqa::{FourCC, Ordinal};
 use matterstream_vm_arena::TripleArena;
 
