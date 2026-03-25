@@ -34,7 +34,11 @@ required-features = ["compiler"]
 name = "run-cards"
 required-features = ["compiler"]
 
+[[example]]
+name = "oid-import-ui"
+
 [dev-dependencies]
+matterstream-ui = { path = "../matterstream-ui" }
 async-io = "2.6.0"
 smol = "2"
 tempfile = "3"
