@@ -1,4 +1,4 @@
-//! Modified RPN stack language VM (MTSM-RPN-Bincode).
+//! msm1 RPN stack language VM.
 //!
 //! Features:
 //! - Per-opcode gas metering with configurable budgets
@@ -6,8 +6,10 @@
 //! - Execution trace/profiling
 //! - Control flow: Jmp, JmpIf, Halt, comparisons
 //! - Bitwise ops, typed bank access, event polling
-//! - UI draw opcodes (0x40–0x49) for 2D rendering
+//! - OR page (0x80+) dispatched by CR[0] for UI/VQL/SKLL/OBJT/CARD
 //! - Persistent typed register banks (Tier 1/2 memory)
+//! - UserCall (0x60) / CoprocessorCall (0x61) escape hatches
+//! - SystemCall (0x71) privileged ops, SetCR (0x70)
 
 use matterstream_vm_addressing::fqa::Fqa;
 use matterstream_vm_addressing::ova::Ova;
@@ -23,7 +25,7 @@ use crate::ui_vm::{
     VqlOutput, VqlField, VQL_OUTPUT_MAX,
     SkillDef, SkillStep, SkillReplaceable, LlmUseCase, CronSpec, SKILL_OUTPUT_MAX,
     ObjectTypeDef, ObjectFieldDef, OBJECT_TYPE_MAX,
-    FOURCC_MTUI,
+    FOURCC_MTUI, FOURCC_VQL0, FOURCC_SKLL,
 };
 #[cfg(feature = "ui")]
 use crate::ui_vm::{
@@ -50,133 +52,112 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
 
-/// RPN opcodes (u8 repr).
+// ── FourCC constants for OR page dispatch (OBJT, CARD) ─────────────────
+/// FourCC: Object type definitions.
+pub const FOURCC_OBJT: u32 = 0x4F424A54;
+/// FourCC: Card definitions.
+pub const FOURCC_CARD: u32 = 0x43415244;
+
+// ── Security register constants ────────────────────────────────────────
+pub const SECURITY_SANDBOXED: u64 = 0x01;
+pub const SECURITY_INTERNAL: u64 = 0x02;
+pub const SECURITY_SYSTEM: u64 = 0x03;
+
+/// msm1 RPN opcodes (u8 repr).
+///
+/// Layout:
+///   0x00-0x0D  Stack, memory, control
+///   0x10-0x1A  Integer arithmetic + bitwise
+///   0x20-0x28  Comparison (int + float)
+///   0x30-0x37  Float arithmetic
+///   0x40-0x4D  Data: banks, dict, destructure
+///   0x50-0x55  Blocks + components (stubs)
+///   0x60       UserCall [u64 action_op] [u64 data]
+///   0x61       CoprocessorCall [u64 action] [u64 length] [u64 data]
+///   0x70       SetCR [u8 cr_idx] [u64 value]
+///   0x71       SystemCall [u64 action_op] [u64 data]
+///   0x80+      OR page — dispatched by CR[0] FourCC
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum RpnOp {
-    Nop = 0x00,
-    Push32 = 0x01,
-    Push64 = 0x02,
-    PushFqa = 0x03,
-    Dup = 0x04,
-    Drop = 0x05,
-    Swap = 0x06,
-    Add = 0x07,
-    Sub = 0x08,
-    Mul = 0x09,
-    Div = 0x0A,
-    Load = 0x0B,
-    Store = 0x0C,
-    Call = 0x0D,
-    Ret = 0x0E,
-    Sync = 0x0F,
-    MapNew = 0x10,
-    MapSet = 0x11,
-    MapGet = 0x12,
-    // Control flow & comparison opcodes (v0.1.1)
-    Jmp = 0x13,
-    JmpIf = 0x14,
-    Halt = 0x15,
-    Mod = 0x16,
-    CmpEq = 0x17,
-    CmpLt = 0x18,
-    CmpGt = 0x19,
-    // Bitwise opcodes (v0.3.0)
-    And = 0x1A,
-    Or = 0x1B,
-    Xor = 0x1C,
-    Shl = 0x1D,
-    Shr = 0x1E,
-    Not = 0x1F,
-    // Typed bank access (v0.3.0)
-    LoadBank = 0x20,
-    StoreBank = 0x21,
-    // Extended comparisons (v0.3.0)
-    CmpGe = 0x22,
-    CmpLe = 0x23,
-    CmpNe = 0x24,
-    // ZeroPage i32 load/store (v0.4.0)
-    LoadZpI32 = 0x25,
-    StoreZpI32 = 0x26,
-    // Component-aware bank access (v0.4.0)
-    LoadBankComp = 0x27,
-    StoreBankComp = 0x28,
-    // Float arithmetic opcodes (v0.4.0)
-    FAdd = 0x30,
-    FSub = 0x31,
-    FMul = 0x32,
-    FDiv = 0x33,
-    FCmpGt = 0x34,
-    FCmpLt = 0x35,
-    FCmpEq = 0x36,
-    FNeg = 0x37,
-    FAbs = 0x38,
-    I2F = 0x39,
-    F2I = 0x3A,
-    // UI draw opcodes (v0.2.0)
-    UiSetColor = 0x40,
-    UiBox = 0x41,
-    UiSlab = 0x42,
-    UiCircle = 0x43,
-    UiText = 0x44,
-    UiPushState = 0x45,
-    UiPopState = 0x46,
-    UiApplyOffset = 0x47,
-    UiLine = 0x48,
-    // Extended UI (v0.3.0)
-    UiTextStr = 0x49,
-    UiAction = 0x4A,
-    // Transform matrix ops (v0.6.0)
-    UiApplyMatrix = 0x4B,
-    UiReplaceOffset = 0x4C,
-    UiReplaceMatrix = 0x4D,
-    // Event & runtime opcodes (v0.3.0)
-    EvPoll = 0x50,
-    EvHasEvent = 0x51,
-    FrameCount = 0x52,
-    Rand = 0x53,
-    // Control register (v0.5.0)
-    SetCR = 0x60,
-    // OID import opcodes (v0.7.0)
-    OidPush = 0x69,
-    OidImport = 0x6A,
-    OidCall = 0x6B,
-    // VQL0 — Vesicle Query Language (v0.5.0)
-    VqlBeginQuery = 0x61,
-    VqlEndQuery = 0x62,
-    VqlBind = 0x63,
-    VqlSetField = 0x64,
-    VqlSetFieldStr = 0x65,
-    VqlFilter = 0x66,
-    VqlProject = 0x67,
-    VqlParam = 0x68,
-    // SKLL — Skill / invocable logic (v0.5.0)
-    SkillBegin = 0x70,
-    SkillEnd = 0x71,
-    SkillStep = 0x72,
-    SkillLlmStep = 0x73,
-    SkillReplaceable = 0x74,
-    SkillInvoke = 0x75,
-    SkillInvokeSymbol = 0x76,
-    SkillLlmModel = 0x77,
-    SkillLlmUseCase = 0x78,
-    SkillSetShortDesc = 0x79,
-    SkillSetLongDesc = 0x7A,
-    SkillCronInterval = 0x7B,
-    SkillCronJitter = 0x7C,
-    // Card definition (v0.5.0)
-    CardBegin = 0x82,
-    CardEnd = 0x83,
-    CardSetShortDesc = 0x84,
-    CardSetLongDesc = 0x85,
-    SkillForwardPrompt = 0x86,
-    SkillAddToSystemPrompt = 0x87,
-    // Object type definition (v0.5.0)
-    ObjTypeBegin = 0x7D,
-    ObjTypeEnd = 0x7E,
-    ObjTypeSetShortDesc = 0x7F,
-    ObjTypeSetLongDesc = 0x80,
-    ObjTypeField = 0x81,
+    // ── Stack, memory, control (0x00-0x0D) ──
+    Nop         = 0x00,
+    Push32      = 0x01,
+    Push64      = 0x02,
+    Push128     = 0x03,
+    Dup         = 0x04,
+    Drop        = 0x05,
+    Swap        = 0x06,
+    Load        = 0x07,
+    Store       = 0x08,
+    Call        = 0x09,
+    Ret         = 0x0A,
+    Jmp         = 0x0B,
+    JmpIf       = 0x0C,
+    Halt        = 0x0D,
+
+    // ── Integer arithmetic + bitwise (0x10-0x1A) ──
+    Add         = 0x10,
+    Sub         = 0x11,
+    Mul         = 0x12,
+    Div         = 0x13,
+    Mod         = 0x14,
+    And         = 0x15,
+    Or          = 0x16,
+    Xor         = 0x17,
+    Shl         = 0x18,
+    Shr         = 0x19,
+    Not         = 0x1A,
+
+    // ── Comparison (0x20-0x28) ──
+    CmpEq       = 0x20,
+    CmpLt       = 0x21,
+    CmpGt       = 0x22,
+    CmpGe       = 0x23,
+    CmpLe       = 0x24,
+    CmpNe       = 0x25,
+    FCmpGt      = 0x26,
+    FCmpLt      = 0x27,
+    FCmpEq      = 0x28,
+
+    // ── Float arithmetic (0x30-0x37) ──
+    FAdd        = 0x30,
+    FSub        = 0x31,
+    FMul        = 0x32,
+    FDiv        = 0x33,
+    FNeg        = 0x34,
+    FAbs        = 0x35,
+    I2F         = 0x36,
+    F2I         = 0x37,
+
+    // ── Data: banks, dict, destructure (0x40-0x4D) ──
+    LoadBank      = 0x40,
+    StoreBank     = 0x41,
+    LoadZpI32     = 0x42,
+    StoreZpI32    = 0x43,
+    LoadBankComp  = 0x44,
+    StoreBankComp = 0x45,
+    DictNew       = 0x48,
+    DictSet       = 0x49,
+    DictGet       = 0x4A,
+    Explode       = 0x4C,
+    ExplodeMapped = 0x4D,
+
+    // ── Blocks + components (0x50-0x55, stubs) ──
+    DefineBlock     = 0x50,
+    CallBlock       = 0x51,
+    LoopOver        = 0x52,
+    MapOver         = 0x53,
+    DefineComponent = 0x54,
+    ExecComponent   = 0x55,
+
+    // ── User escape (0x60-0x6F) ──
+    UserCall        = 0x60,
+    CoprocessorCall = 0x61,
+
+    // ── System escape (0x70-0x7F) ──
+    SetCR       = 0x70,
+    SystemCall  = 0x71,
 }
 
 impl RpnOp {
@@ -185,109 +166,66 @@ impl RpnOp {
             0x00 => Some(RpnOp::Nop),
             0x01 => Some(RpnOp::Push32),
             0x02 => Some(RpnOp::Push64),
-            0x03 => Some(RpnOp::PushFqa),
+            0x03 => Some(RpnOp::Push128),
             0x04 => Some(RpnOp::Dup),
             0x05 => Some(RpnOp::Drop),
             0x06 => Some(RpnOp::Swap),
-            0x07 => Some(RpnOp::Add),
-            0x08 => Some(RpnOp::Sub),
-            0x09 => Some(RpnOp::Mul),
-            0x0A => Some(RpnOp::Div),
-            0x0B => Some(RpnOp::Load),
-            0x0C => Some(RpnOp::Store),
-            0x0D => Some(RpnOp::Call),
-            0x0E => Some(RpnOp::Ret),
-            0x0F => Some(RpnOp::Sync),
-            0x10 => Some(RpnOp::MapNew),
-            0x11 => Some(RpnOp::MapSet),
-            0x12 => Some(RpnOp::MapGet),
-            0x13 => Some(RpnOp::Jmp),
-            0x14 => Some(RpnOp::JmpIf),
-            0x15 => Some(RpnOp::Halt),
-            0x16 => Some(RpnOp::Mod),
-            0x17 => Some(RpnOp::CmpEq),
-            0x18 => Some(RpnOp::CmpLt),
-            0x19 => Some(RpnOp::CmpGt),
-            0x1A => Some(RpnOp::And),
-            0x1B => Some(RpnOp::Or),
-            0x1C => Some(RpnOp::Xor),
-            0x1D => Some(RpnOp::Shl),
-            0x1E => Some(RpnOp::Shr),
-            0x1F => Some(RpnOp::Not),
-            0x20 => Some(RpnOp::LoadBank),
-            0x21 => Some(RpnOp::StoreBank),
-            0x22 => Some(RpnOp::CmpGe),
-            0x23 => Some(RpnOp::CmpLe),
-            0x24 => Some(RpnOp::CmpNe),
-            0x25 => Some(RpnOp::LoadZpI32),
-            0x26 => Some(RpnOp::StoreZpI32),
-            0x27 => Some(RpnOp::LoadBankComp),
-            0x28 => Some(RpnOp::StoreBankComp),
+            0x07 => Some(RpnOp::Load),
+            0x08 => Some(RpnOp::Store),
+            0x09 => Some(RpnOp::Call),
+            0x0A => Some(RpnOp::Ret),
+            0x0B => Some(RpnOp::Jmp),
+            0x0C => Some(RpnOp::JmpIf),
+            0x0D => Some(RpnOp::Halt),
+            0x10 => Some(RpnOp::Add),
+            0x11 => Some(RpnOp::Sub),
+            0x12 => Some(RpnOp::Mul),
+            0x13 => Some(RpnOp::Div),
+            0x14 => Some(RpnOp::Mod),
+            0x15 => Some(RpnOp::And),
+            0x16 => Some(RpnOp::Or),
+            0x17 => Some(RpnOp::Xor),
+            0x18 => Some(RpnOp::Shl),
+            0x19 => Some(RpnOp::Shr),
+            0x1A => Some(RpnOp::Not),
+            0x20 => Some(RpnOp::CmpEq),
+            0x21 => Some(RpnOp::CmpLt),
+            0x22 => Some(RpnOp::CmpGt),
+            0x23 => Some(RpnOp::CmpGe),
+            0x24 => Some(RpnOp::CmpLe),
+            0x25 => Some(RpnOp::CmpNe),
+            0x26 => Some(RpnOp::FCmpGt),
+            0x27 => Some(RpnOp::FCmpLt),
+            0x28 => Some(RpnOp::FCmpEq),
             0x30 => Some(RpnOp::FAdd),
             0x31 => Some(RpnOp::FSub),
             0x32 => Some(RpnOp::FMul),
             0x33 => Some(RpnOp::FDiv),
-            0x34 => Some(RpnOp::FCmpGt),
-            0x35 => Some(RpnOp::FCmpLt),
-            0x36 => Some(RpnOp::FCmpEq),
-            0x37 => Some(RpnOp::FNeg),
-            0x38 => Some(RpnOp::FAbs),
-            0x39 => Some(RpnOp::I2F),
-            0x3A => Some(RpnOp::F2I),
-            0x40 => Some(RpnOp::UiSetColor),
-            0x41 => Some(RpnOp::UiBox),
-            0x42 => Some(RpnOp::UiSlab),
-            0x43 => Some(RpnOp::UiCircle),
-            0x44 => Some(RpnOp::UiText),
-            0x45 => Some(RpnOp::UiPushState),
-            0x46 => Some(RpnOp::UiPopState),
-            0x47 => Some(RpnOp::UiApplyOffset),
-            0x48 => Some(RpnOp::UiLine),
-            0x49 => Some(RpnOp::UiTextStr),
-            0x4A => Some(RpnOp::UiAction),
-            0x4B => Some(RpnOp::UiApplyMatrix),
-            0x4C => Some(RpnOp::UiReplaceOffset),
-            0x4D => Some(RpnOp::UiReplaceMatrix),
-            0x50 => Some(RpnOp::EvPoll),
-            0x51 => Some(RpnOp::EvHasEvent),
-            0x52 => Some(RpnOp::FrameCount),
-            0x53 => Some(RpnOp::Rand),
-            0x60 => Some(RpnOp::SetCR),
-            0x69 => Some(RpnOp::OidPush),
-            0x6A => Some(RpnOp::OidImport),
-            0x6B => Some(RpnOp::OidCall),
-            0x61 => Some(RpnOp::VqlBeginQuery),
-            0x62 => Some(RpnOp::VqlEndQuery),
-            0x63 => Some(RpnOp::VqlBind),
-            0x64 => Some(RpnOp::VqlSetField),
-            0x65 => Some(RpnOp::VqlSetFieldStr),
-            0x66 => Some(RpnOp::VqlFilter),
-            0x67 => Some(RpnOp::VqlProject),
-            0x68 => Some(RpnOp::VqlParam),
-            0x70 => Some(RpnOp::SkillBegin),
-            0x71 => Some(RpnOp::SkillEnd),
-            0x72 => Some(RpnOp::SkillStep),
-            0x73 => Some(RpnOp::SkillLlmStep),
-            0x74 => Some(RpnOp::SkillReplaceable),
-            0x75 => Some(RpnOp::SkillInvoke),
-            0x76 => Some(RpnOp::SkillInvokeSymbol),
-            0x77 => Some(RpnOp::SkillLlmModel),
-            0x78 => Some(RpnOp::SkillLlmUseCase),
-            0x79 => Some(RpnOp::SkillSetShortDesc),
-            0x7A => Some(RpnOp::SkillSetLongDesc),
-            0x7B => Some(RpnOp::SkillCronInterval),
-            0x7C => Some(RpnOp::SkillCronJitter),
-            0x7D => Some(RpnOp::ObjTypeBegin),
-            0x7E => Some(RpnOp::ObjTypeEnd),
-            0x7F => Some(RpnOp::ObjTypeSetShortDesc),
-            0x80 => Some(RpnOp::ObjTypeSetLongDesc),
-            0x81 => Some(RpnOp::ObjTypeField),
-            0x82 => Some(RpnOp::CardBegin),
-            0x83 => Some(RpnOp::CardEnd),
-            0x84 => Some(RpnOp::CardSetShortDesc),
-            0x85 => Some(RpnOp::CardSetLongDesc),
-            0x86 => Some(RpnOp::SkillForwardPrompt),
-            0x87 => Some(RpnOp::SkillAddToSystemPrompt),
+            0x34 => Some(RpnOp::FNeg),
+            0x35 => Some(RpnOp::FAbs),
+            0x36 => Some(RpnOp::I2F),
+            0x37 => Some(RpnOp::F2I),
+            0x40 => Some(RpnOp::LoadBank),
+            0x41 => Some(RpnOp::StoreBank),
+            0x42 => Some(RpnOp::LoadZpI32),
+            0x43 => Some(RpnOp::StoreZpI32),
+            0x44 => Some(RpnOp::LoadBankComp),
+            0x45 => Some(RpnOp::StoreBankComp),
+            0x48 => Some(RpnOp::DictNew),
+            0x49 => Some(RpnOp::DictSet),
+            0x4A => Some(RpnOp::DictGet),
+            0x4C => Some(RpnOp::Explode),
+            0x4D => Some(RpnOp::ExplodeMapped),
+            0x50 => Some(RpnOp::DefineBlock),
+            0x51 => Some(RpnOp::CallBlock),
+            0x52 => Some(RpnOp::LoopOver),
+            0x53 => Some(RpnOp::MapOver),
+            0x54 => Some(RpnOp::DefineComponent),
+            0x55 => Some(RpnOp::ExecComponent),
+            0x60 => Some(RpnOp::UserCall),
+            0x61 => Some(RpnOp::CoprocessorCall),
+            0x70 => Some(RpnOp::SetCR),
+            0x71 => Some(RpnOp::SystemCall),
             _ => None,
         }
     }
@@ -297,7 +235,11 @@ impl RpnOp {
         match self {
             RpnOp::Push32 => 4,
             RpnOp::Push64 | RpnOp::Jmp | RpnOp::JmpIf => 8,
-            RpnOp::PushFqa | RpnOp::OidPush => 16,
+            RpnOp::Push128 => 16,
+            RpnOp::UserCall => 16,        // [u64 action_op] [u64 data]
+            RpnOp::CoprocessorCall => 24,  // [u64 action] [u64 length] [u64 data]
+            RpnOp::SetCR => 9,            // [u8 cr_idx] [u64 value]
+            RpnOp::SystemCall => 16,       // [u64 action_op] [u64 data]
             _ => 0,
         }
     }
@@ -315,7 +257,7 @@ pub struct GasConfig {
     pub cost_memory: u64,
     pub cost_call: u64,
     pub cost_sync: u64,
-    pub cost_map: u64,
+    pub cost_dict: u64,
     pub cost_jump: u64,
     pub cost_compare: u64,
     pub cost_ui: u64,
@@ -325,6 +267,9 @@ pub struct GasConfig {
     pub cost_cr: u64,
     pub cost_vql: u64,
     pub cost_skill: u64,
+    pub cost_user_call: u64,
+    pub cost_system_call: u64,
+    pub cost_block: u64,
 }
 
 impl GasConfig {
@@ -339,7 +284,7 @@ impl GasConfig {
             cost_memory: 10,
             cost_call: 5,
             cost_sync: 100,
-            cost_map: 5,
+            cost_dict: 5,
             cost_jump: 2,
             cost_compare: 2,
             cost_ui: 5,
@@ -349,6 +294,9 @@ impl GasConfig {
             cost_cr: 2,
             cost_vql: 5,
             cost_skill: 5,
+            cost_user_call: 10,
+            cost_system_call: 20,
+            cost_block: 5,
         }
     }
 
@@ -356,79 +304,45 @@ impl GasConfig {
     pub fn cost_of(&self, op: RpnOp) -> u64 {
         match op {
             RpnOp::Nop | RpnOp::Halt => self.cost_nop,
-            RpnOp::Push32 | RpnOp::Push64 | RpnOp::PushFqa => self.cost_push,
+            RpnOp::Push32 | RpnOp::Push64 | RpnOp::Push128 => self.cost_push,
             RpnOp::Dup | RpnOp::Drop | RpnOp::Swap => self.cost_stack_op,
             RpnOp::Add | RpnOp::Sub | RpnOp::Mul | RpnOp::Div | RpnOp::Mod
             | RpnOp::FAdd | RpnOp::FSub | RpnOp::FMul | RpnOp::FDiv
             | RpnOp::FNeg | RpnOp::FAbs | RpnOp::I2F | RpnOp::F2I => {
                 self.cost_arithmetic
             }
-            RpnOp::FCmpGt | RpnOp::FCmpLt | RpnOp::FCmpEq => self.cost_compare,
+            RpnOp::CmpEq | RpnOp::CmpLt | RpnOp::CmpGt | RpnOp::CmpGe | RpnOp::CmpLe
+            | RpnOp::CmpNe | RpnOp::FCmpGt | RpnOp::FCmpLt | RpnOp::FCmpEq => {
+                self.cost_compare
+            }
             RpnOp::Load | RpnOp::Store => self.cost_memory,
             RpnOp::Call | RpnOp::Ret => self.cost_call,
-            RpnOp::Sync => self.cost_sync,
-            RpnOp::MapNew | RpnOp::MapSet | RpnOp::MapGet => self.cost_map,
             RpnOp::Jmp | RpnOp::JmpIf => self.cost_jump,
-            RpnOp::CmpEq | RpnOp::CmpLt | RpnOp::CmpGt | RpnOp::CmpGe | RpnOp::CmpLe
-            | RpnOp::CmpNe => self.cost_compare,
             RpnOp::And | RpnOp::Or | RpnOp::Xor | RpnOp::Shl | RpnOp::Shr | RpnOp::Not => {
                 self.cost_bitwise
             }
             RpnOp::LoadBank | RpnOp::StoreBank
             | RpnOp::LoadZpI32 | RpnOp::StoreZpI32
             | RpnOp::LoadBankComp | RpnOp::StoreBankComp => self.cost_bank,
-            RpnOp::EvPoll | RpnOp::EvHasEvent | RpnOp::FrameCount | RpnOp::Rand => {
-                self.cost_event
-            }
-            RpnOp::UiSetColor
-            | RpnOp::UiBox
-            | RpnOp::UiSlab
-            | RpnOp::UiCircle
-            | RpnOp::UiText
-            | RpnOp::UiPushState
-            | RpnOp::UiPopState
-            | RpnOp::UiApplyOffset
-            | RpnOp::UiLine
-            | RpnOp::UiTextStr
-            | RpnOp::UiAction
-            | RpnOp::UiApplyMatrix
-            | RpnOp::UiReplaceOffset
-            | RpnOp::UiReplaceMatrix => self.cost_ui,
+            RpnOp::DictNew | RpnOp::DictSet | RpnOp::DictGet => self.cost_dict,
+            RpnOp::Explode | RpnOp::ExplodeMapped => self.cost_dict,
+            RpnOp::DefineBlock | RpnOp::CallBlock | RpnOp::LoopOver | RpnOp::MapOver
+            | RpnOp::DefineComponent | RpnOp::ExecComponent => self.cost_block,
+            RpnOp::UserCall | RpnOp::CoprocessorCall => self.cost_user_call,
             RpnOp::SetCR => self.cost_cr,
-            RpnOp::OidPush => self.cost_push,
-            RpnOp::OidImport | RpnOp::OidCall => self.cost_call,
-            RpnOp::VqlBeginQuery
-            | RpnOp::VqlEndQuery
-            | RpnOp::VqlBind
-            | RpnOp::VqlSetField
-            | RpnOp::VqlSetFieldStr
-            | RpnOp::VqlFilter
-            | RpnOp::VqlProject
-            | RpnOp::VqlParam => self.cost_vql,
-            RpnOp::SkillBegin
-            | RpnOp::SkillEnd
-            | RpnOp::SkillStep
-            | RpnOp::SkillLlmStep
-            | RpnOp::SkillReplaceable
-            | RpnOp::SkillInvoke
-            | RpnOp::SkillInvokeSymbol
-            | RpnOp::SkillLlmModel
-            | RpnOp::SkillLlmUseCase
-            | RpnOp::SkillForwardPrompt
-            | RpnOp::SkillAddToSystemPrompt
-            | RpnOp::SkillSetShortDesc
-            | RpnOp::SkillSetLongDesc
-            | RpnOp::SkillCronInterval
-            | RpnOp::SkillCronJitter
-            | RpnOp::ObjTypeBegin
-            | RpnOp::ObjTypeEnd
-            | RpnOp::ObjTypeSetShortDesc
-            | RpnOp::ObjTypeSetLongDesc
-            | RpnOp::ObjTypeField
-            | RpnOp::CardBegin
-            | RpnOp::CardEnd
-            | RpnOp::CardSetShortDesc
-            | RpnOp::CardSetLongDesc => self.cost_skill,
+            RpnOp::SystemCall => self.cost_system_call,
+        }
+    }
+
+    /// Gas cost for an OR page opcode, based on CR[0].
+    pub fn cost_of_or_page(&self, cr0: u32) -> u64 {
+        match cr0 {
+            FOURCC_MTUI => self.cost_ui,
+            FOURCC_VQL0 => self.cost_vql,
+            FOURCC_SKLL => self.cost_skill,
+            FOURCC_OBJT => self.cost_skill,
+            FOURCC_CARD => self.cost_ui,
+            _ => self.cost_ui,
         }
     }
 }
@@ -513,6 +427,10 @@ pub enum RpnError {
     OidSecurityViolation { hi: u64, lo: u64, required: &'static str, actual: &'static str },
     OidNoIndicesLoaded,
     OidInvalidNativeHook(u32),
+    SecurityViolation(&'static str),
+    InvalidOrPage(u32),
+    InvalidUserCallAction(u64),
+    InvalidSystemCallAction(u64),
 }
 
 impl fmt::Display for RpnError {
@@ -566,6 +484,10 @@ impl fmt::Display for RpnError {
             }
             RpnError::OidNoIndicesLoaded => write!(f, "RPN no OID indices loaded"),
             RpnError::OidInvalidNativeHook(id) => write!(f, "RPN invalid native hook dispatch_id: {}", id),
+            RpnError::SecurityViolation(msg) => write!(f, "RPN security violation: {}", msg),
+            RpnError::InvalidOrPage(fourcc) => write!(f, "RPN invalid OR page FourCC: {:#010x}", fourcc),
+            RpnError::InvalidUserCallAction(action) => write!(f, "RPN invalid UserCall action: {:#x}", action),
+            RpnError::InvalidSystemCallAction(action) => write!(f, "RPN invalid SystemCall action: {:#x}", action),
         }
     }
 }
@@ -876,6 +798,19 @@ impl RpnVm {
         Ok(())
     }
 
+    /// Consume gas for an OR page opcode (cost depends on CR[0]).
+    fn consume_gas_or_page(&mut self) -> Result<(), RpnError> {
+        let cost = self.gas.cost_of_or_page(self.cr_bank[0]);
+        self.trace.gas_consumed += cost;
+        if self.trace.gas_consumed > self.gas.gas_budget {
+            return Err(RpnError::GasExhausted {
+                used: self.trace.gas_consumed,
+                budget: self.gas.gas_budget,
+            });
+        }
+        Ok(())
+    }
+
     /// Track a jump and check backward-jump limits.
     fn track_jump(&mut self, from_pc: usize, to_pc: usize) -> Result<(), RpnError> {
         if to_pc <= from_pc {
@@ -908,7 +843,6 @@ impl RpnVm {
                 Ok(self.int_bank[slot as usize] as u32 as u64)
             }
             BANK_VEC3 => {
-                // Return packed: just the first component as a float → u32
                 if slot >= 16 {
                     return Err(RpnError::InvalidBankSlot { bank, slot });
                 }
@@ -1132,6 +1066,14 @@ impl RpnVm {
         arenas: &mut TripleArena,
     ) -> Result<(), RpnError> {
         let op_byte = Self::read_u8(bytecode, self.pc)?;
+
+        // ── OR page dispatch (0x80+) ─────────────────────────────────
+        if op_byte >= 0x80 {
+            self.consume_gas_or_page()?;
+            self.trace.opcodes_executed += 1;
+            return self.dispatch_or_page(op_byte, bytecode, arenas);
+        }
+
         let op = RpnOp::from_u8(op_byte).ok_or(RpnError::InvalidOpcode(op_byte))?;
 
         // Gas metering
@@ -1152,7 +1094,7 @@ impl RpnVm {
                 self.push(RpnValue::U64(val))?;
                 self.pc += 9;
             }
-            RpnOp::PushFqa => {
+            RpnOp::Push128 => {
                 let val = Self::read_u128(bytecode, self.pc + 1)?;
                 self.push(RpnValue::Fqa(Fqa::new(val)))?;
                 self.pc += 17;
@@ -1172,42 +1114,6 @@ impl RpnVm {
                 let a = self.pop()?;
                 self.push(b)?;
                 self.push(a)?;
-                self.pc += 1;
-            }
-            RpnOp::Add => {
-                let b = self.pop_u64()?;
-                let a = self.pop_u64()?;
-                self.push(RpnValue::U64(a.wrapping_add(b)))?;
-                self.pc += 1;
-            }
-            RpnOp::Sub => {
-                let b = self.pop_u64()?;
-                let a = self.pop_u64()?;
-                self.push(RpnValue::U64(a.wrapping_sub(b)))?;
-                self.pc += 1;
-            }
-            RpnOp::Mul => {
-                let b = self.pop_u64()?;
-                let a = self.pop_u64()?;
-                self.push(RpnValue::U64(a.wrapping_mul(b)))?;
-                self.pc += 1;
-            }
-            RpnOp::Div => {
-                let b = self.pop_u64()?;
-                if b == 0 {
-                    return Err(RpnError::DivisionByZero);
-                }
-                let a = self.pop_u64()?;
-                self.push(RpnValue::U64(a / b))?;
-                self.pc += 1;
-            }
-            RpnOp::Mod => {
-                let b = self.pop_u64()?;
-                if b == 0 {
-                    return Err(RpnError::DivisionByZero);
-                }
-                let a = self.pop_u64()?;
-                self.push(RpnValue::U64(a % b))?;
                 self.pc += 1;
             }
             RpnOp::Load => {
@@ -1260,42 +1166,6 @@ impl RpnVm {
                     self.pc = bytecode.len();
                 }
             }
-            RpnOp::Sync => {
-                arenas.sync();
-                self.synced = true;
-                self.trace.syncs += 1;
-                self.pc += 1;
-            }
-            RpnOp::MapNew => {
-                self.push(RpnValue::Map(HashMap::new()))?;
-                self.pc += 1;
-            }
-            RpnOp::MapSet => {
-                let val = self.pop()?;
-                let key = self.pop_u64()?;
-                let mut map_val = self.pop()?;
-                if let RpnValue::Map(ref mut map) = map_val {
-                    map.insert(key, val);
-                    self.push(map_val)?;
-                } else {
-                    return Err(RpnError::TypeMismatch);
-                }
-                self.pc += 1;
-            }
-            RpnOp::MapGet => {
-                let key = self.pop_u64()?;
-                let map_val = self.pop()?;
-                if let RpnValue::Map(ref map) = map_val {
-                    if let Some(val) = map.get(&key) {
-                        self.push(val.clone())?;
-                    } else {
-                        self.push(RpnValue::U32(0))?;
-                    }
-                } else {
-                    return Err(RpnError::TypeMismatch);
-                }
-                self.pc += 1;
-            }
             RpnOp::Jmp => {
                 let target = Self::read_u64(bytecode, self.pc + 1)? as usize;
                 if target > bytecode.len() {
@@ -1323,6 +1193,80 @@ impl RpnVm {
                 self.trace.halted = true;
                 self.pc = bytecode.len();
             }
+            // ── Integer arithmetic ──
+            RpnOp::Add => {
+                let b = self.pop_u64()?;
+                let a = self.pop_u64()?;
+                self.push(RpnValue::U64(a.wrapping_add(b)))?;
+                self.pc += 1;
+            }
+            RpnOp::Sub => {
+                let b = self.pop_u64()?;
+                let a = self.pop_u64()?;
+                self.push(RpnValue::U64(a.wrapping_sub(b)))?;
+                self.pc += 1;
+            }
+            RpnOp::Mul => {
+                let b = self.pop_u64()?;
+                let a = self.pop_u64()?;
+                self.push(RpnValue::U64(a.wrapping_mul(b)))?;
+                self.pc += 1;
+            }
+            RpnOp::Div => {
+                let b = self.pop_u64()?;
+                if b == 0 {
+                    return Err(RpnError::DivisionByZero);
+                }
+                let a = self.pop_u64()?;
+                self.push(RpnValue::U64(a / b))?;
+                self.pc += 1;
+            }
+            RpnOp::Mod => {
+                let b = self.pop_u64()?;
+                if b == 0 {
+                    return Err(RpnError::DivisionByZero);
+                }
+                let a = self.pop_u64()?;
+                self.push(RpnValue::U64(a % b))?;
+                self.pc += 1;
+            }
+            // ── Bitwise ──
+            RpnOp::And => {
+                let b = self.pop_u64()?;
+                let a = self.pop_u64()?;
+                self.push(RpnValue::U64(a & b))?;
+                self.pc += 1;
+            }
+            RpnOp::Or => {
+                let b = self.pop_u64()?;
+                let a = self.pop_u64()?;
+                self.push(RpnValue::U64(a | b))?;
+                self.pc += 1;
+            }
+            RpnOp::Xor => {
+                let b = self.pop_u64()?;
+                let a = self.pop_u64()?;
+                self.push(RpnValue::U64(a ^ b))?;
+                self.pc += 1;
+            }
+            RpnOp::Shl => {
+                let n = self.pop_u64()?;
+                let a = self.pop_u64()?;
+                self.push(RpnValue::U64(a.wrapping_shl(n as u32)))?;
+                self.pc += 1;
+            }
+            RpnOp::Shr => {
+                let n = self.pop_u64()?;
+                let a = self.pop_u64()?;
+                self.push(RpnValue::U64(a.wrapping_shr(n as u32)))?;
+                self.pc += 1;
+            }
+            RpnOp::Not => {
+                let a = self.pop_u64()?;
+                self.push(RpnValue::U64(if a == 0 { 1 } else { 0 }))?;
+                self.pc += 1;
+            }
+            // ── Comparison ──
             RpnOp::CmpEq => {
                 let b = self.pop_u64()?;
                 let a = self.pop_u64()?;
@@ -1359,103 +1303,28 @@ impl RpnVm {
                 self.push(RpnValue::U64(if a != b { 1 } else { 0 }))?;
                 self.pc += 1;
             }
-            // --- Bitwise opcodes ---
-            RpnOp::And => {
-                let b = self.pop_u64()?;
-                let a = self.pop_u64()?;
-                self.push(RpnValue::U64(a & b))?;
+            RpnOp::FCmpGt => {
+                let b_bits = self.pop_u64()? as u32;
+                let a_bits = self.pop_u64()? as u32;
+                let result = if f32::from_bits(a_bits) > f32::from_bits(b_bits) { 1u64 } else { 0 };
+                self.push(RpnValue::U64(result))?;
                 self.pc += 1;
             }
-            RpnOp::Or => {
-                let b = self.pop_u64()?;
-                let a = self.pop_u64()?;
-                self.push(RpnValue::U64(a | b))?;
+            RpnOp::FCmpLt => {
+                let b_bits = self.pop_u64()? as u32;
+                let a_bits = self.pop_u64()? as u32;
+                let result = if f32::from_bits(a_bits) < f32::from_bits(b_bits) { 1u64 } else { 0 };
+                self.push(RpnValue::U64(result))?;
                 self.pc += 1;
             }
-            RpnOp::Xor => {
-                let b = self.pop_u64()?;
-                let a = self.pop_u64()?;
-                self.push(RpnValue::U64(a ^ b))?;
+            RpnOp::FCmpEq => {
+                let b_bits = self.pop_u64()? as u32;
+                let a_bits = self.pop_u64()? as u32;
+                let result = if f32::from_bits(a_bits) == f32::from_bits(b_bits) { 1u64 } else { 0 };
+                self.push(RpnValue::U64(result))?;
                 self.pc += 1;
             }
-            RpnOp::Shl => {
-                let n = self.pop_u64()?;
-                let a = self.pop_u64()?;
-                self.push(RpnValue::U64(a.wrapping_shl(n as u32)))?;
-                self.pc += 1;
-            }
-            RpnOp::Shr => {
-                let n = self.pop_u64()?;
-                let a = self.pop_u64()?;
-                self.push(RpnValue::U64(a.wrapping_shr(n as u32)))?;
-                self.pc += 1;
-            }
-            RpnOp::Not => {
-                let a = self.pop_u64()?;
-                self.push(RpnValue::U64(if a == 0 { 1 } else { 0 }))?;
-                self.pc += 1;
-            }
-            // --- Typed bank access ---
-            RpnOp::LoadBank => {
-                let slot = self.pop_u32_coerce()?;
-                let bank = self.pop_u32_coerce()?;
-                let value = self.load_bank(bank, slot)?;
-                self.push(RpnValue::U64(value))?;
-                self.pc += 1;
-            }
-            RpnOp::StoreBank => {
-                let slot = self.pop_u32_coerce()?;
-                let bank = self.pop_u32_coerce()?;
-                let value = self.pop_u64()?;
-                self.store_bank(value, bank, slot)?;
-                self.pc += 1;
-            }
-            // --- ZeroPage i32 load/store ---
-            RpnOp::LoadZpI32 => {
-                let addr = self.pop_u32_coerce()? as usize;
-                if addr + 3 >= 256 {
-                    return Err(RpnError::InvalidBankSlot { bank: BANK_ZERO_PAGE, slot: addr as u32 });
-                }
-                let val = i32::from_le_bytes([
-                    self.zero_page[addr],
-                    self.zero_page[addr + 1],
-                    self.zero_page[addr + 2],
-                    self.zero_page[addr + 3],
-                ]);
-                self.push(RpnValue::U64(val as u32 as u64))?;
-                self.pc += 1;
-            }
-            RpnOp::StoreZpI32 => {
-                let addr = self.pop_u32_coerce()? as usize;
-                let value = self.pop_u32_coerce()? as i32;
-                if addr + 3 >= 256 {
-                    return Err(RpnError::InvalidBankSlot { bank: BANK_ZERO_PAGE, slot: addr as u32 });
-                }
-                let bytes = value.to_le_bytes();
-                self.zero_page[addr] = bytes[0];
-                self.zero_page[addr + 1] = bytes[1];
-                self.zero_page[addr + 2] = bytes[2];
-                self.zero_page[addr + 3] = bytes[3];
-                self.pc += 1;
-            }
-            // --- Component-aware bank access ---
-            RpnOp::LoadBankComp => {
-                let comp = self.pop_u32_coerce()?;
-                let slot = self.pop_u32_coerce()?;
-                let bank = self.pop_u32_coerce()?;
-                let value = self.load_bank_comp(bank, slot, comp)?;
-                self.push(RpnValue::U64(value))?;
-                self.pc += 1;
-            }
-            RpnOp::StoreBankComp => {
-                let comp = self.pop_u32_coerce()?;
-                let slot = self.pop_u32_coerce()?;
-                let bank = self.pop_u32_coerce()?;
-                let value = self.pop_u64()?;
-                self.store_bank_comp(value, bank, slot, comp)?;
-                self.pc += 1;
-            }
-            // --- Float arithmetic opcodes ---
+            // ── Float arithmetic ──
             RpnOp::FAdd => {
                 let b_bits = self.pop_u64()? as u32;
                 let a_bits = self.pop_u64()? as u32;
@@ -1488,27 +1357,6 @@ impl RpnVm {
                 self.push(RpnValue::U64(f32::to_bits(result) as u64))?;
                 self.pc += 1;
             }
-            RpnOp::FCmpGt => {
-                let b_bits = self.pop_u64()? as u32;
-                let a_bits = self.pop_u64()? as u32;
-                let result = if f32::from_bits(a_bits) > f32::from_bits(b_bits) { 1u64 } else { 0 };
-                self.push(RpnValue::U64(result))?;
-                self.pc += 1;
-            }
-            RpnOp::FCmpLt => {
-                let b_bits = self.pop_u64()? as u32;
-                let a_bits = self.pop_u64()? as u32;
-                let result = if f32::from_bits(a_bits) < f32::from_bits(b_bits) { 1u64 } else { 0 };
-                self.push(RpnValue::U64(result))?;
-                self.pc += 1;
-            }
-            RpnOp::FCmpEq => {
-                let b_bits = self.pop_u64()? as u32;
-                let a_bits = self.pop_u64()? as u32;
-                let result = if f32::from_bits(a_bits) == f32::from_bits(b_bits) { 1u64 } else { 0 };
-                self.push(RpnValue::U64(result))?;
-                self.pc += 1;
-            }
             RpnOp::FNeg => {
                 let a_bits = self.pop_u64()? as u32;
                 let result = -f32::from_bits(a_bits);
@@ -1533,121 +1381,183 @@ impl RpnVm {
                 self.push(RpnValue::U64(result as u32 as u64))?;
                 self.pc += 1;
             }
-            // --- UI draw opcodes (feature-gated via ui_op! macro) ---
-            RpnOp::UiSetColor => ui_op!(self, pops: 1, payload: 0, {
-                let rgba = self.pop_u32_coerce()?;
-                self.ui_state.color = rgba;
-            }),
-            RpnOp::UiBox => ui_op!(self, pops: 4, payload: 0, {
-                let h = self.pop_u32_coerce()?;
-                let w = self.pop_u32_coerce()?;
-                let raw_y = self.pop_u32_coerce()? as i32;
-                let raw_x = self.pop_u32_coerce()? as i32;
-                let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_draw(UiDrawCmd::Box { x, y, w, h, color: self.ui_state.color })?;
-            }),
-            RpnOp::UiSlab => ui_op!(self, pops: 5, payload: 0, {
-                let radius = self.pop_u32_coerce()?;
-                let h = self.pop_u32_coerce()?;
-                let w = self.pop_u32_coerce()?;
-                let raw_y = self.pop_u32_coerce()? as i32;
-                let raw_x = self.pop_u32_coerce()? as i32;
-                let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_draw(UiDrawCmd::Slab { x, y, w, h, radius, color: self.ui_state.color })?;
-            }),
-            RpnOp::UiCircle => ui_op!(self, pops: 3, payload: 0, {
-                let r = self.pop_u32_coerce()?;
-                let raw_y = self.pop_u32_coerce()? as i32;
-                let raw_x = self.pop_u32_coerce()? as i32;
-                let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_draw(UiDrawCmd::Circle { x, y, r, color: self.ui_state.color })?;
-            }),
-            RpnOp::UiText => ui_op!(self, pops: 4, payload: 0, {
+            // ── Typed bank access ──
+            RpnOp::LoadBank => {
                 let slot = self.pop_u32_coerce()?;
-                let size = self.pop_u32_coerce()?;
-                let raw_y = self.pop_u32_coerce()? as i32;
-                let raw_x = self.pop_u32_coerce()? as i32;
-                let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_draw(UiDrawCmd::Text { x, y, size, slot, color: self.ui_state.color })?;
-            }),
-            RpnOp::UiTextStr => ui_op!(self, pops: 4, payload: 0, {
-                let str_idx = self.pop_u32_coerce()?;
-                let size = self.pop_u32_coerce()?;
-                let raw_y = self.pop_u32_coerce()? as i32;
-                let raw_x = self.pop_u32_coerce()? as i32;
-                let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_draw(UiDrawCmd::TextStr { x, y, size, str_idx, color: self.ui_state.color })?;
-            }),
-            RpnOp::UiAction => ui_op!(self, pops: 5, payload: 0, {
-                let str_idx = self.pop_u32_coerce()?;
-                let h = self.pop_u32_coerce()?;
-                let w = self.pop_u32_coerce()?;
-                let raw_y = self.pop_u32_coerce()? as i32;
-                let raw_x = self.pop_u32_coerce()? as i32;
-                let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_draw(UiDrawCmd::Action { x, y, w, h, str_idx })?;
-            }),
-            RpnOp::UiPushState => ui_op!(self, pops: 0, payload: 0, {
-                if self.ui_state_stack.len() >= UI_STATE_STACK_MAX {
-                    return Err(RpnError::UiStateStackOverflow);
+                let bank = self.pop_u32_coerce()?;
+                let value = self.load_bank(bank, slot)?;
+                self.push(RpnValue::U64(value))?;
+                self.pc += 1;
+            }
+            RpnOp::StoreBank => {
+                let slot = self.pop_u32_coerce()?;
+                let bank = self.pop_u32_coerce()?;
+                let value = self.pop_u64()?;
+                self.store_bank(value, bank, slot)?;
+                self.pc += 1;
+            }
+            RpnOp::LoadZpI32 => {
+                let addr = self.pop_u32_coerce()? as usize;
+                if addr + 3 >= 256 {
+                    return Err(RpnError::InvalidBankSlot { bank: BANK_ZERO_PAGE, slot: addr as u32 });
                 }
-                self.ui_state_stack.push(self.ui_state);
-                let current = *self.current_transform();
-                self.transform_stack.push(current);
-            }),
-            RpnOp::UiPopState => ui_op!(self, pops: 0, payload: 0, {
-                self.ui_state = self.ui_state_stack.pop()
-                    .ok_or(RpnError::UiStateStackUnderflow)?;
-                if self.transform_stack.len() > 1 {
-                    self.transform_stack.pop();
+                let val = i32::from_le_bytes([
+                    self.zero_page[addr],
+                    self.zero_page[addr + 1],
+                    self.zero_page[addr + 2],
+                    self.zero_page[addr + 3],
+                ]);
+                self.push(RpnValue::U64(val as u32 as u64))?;
+                self.pc += 1;
+            }
+            RpnOp::StoreZpI32 => {
+                let addr = self.pop_u32_coerce()? as usize;
+                let value = self.pop_u32_coerce()? as i32;
+                if addr + 3 >= 256 {
+                    return Err(RpnError::InvalidBankSlot { bank: BANK_ZERO_PAGE, slot: addr as u32 });
                 }
-            }),
-            RpnOp::UiApplyOffset => ui_op!(self, pops: 2, payload: 0, {
-                let dy = self.pop_u32_coerce()? as i32;
-                let dx = self.pop_u32_coerce()? as i32;
-                if let Some(top) = self.transform_stack.last_mut() {
-                    top[12] += dx as f32;
-                    top[13] += dy as f32;
+                let bytes = value.to_le_bytes();
+                self.zero_page[addr] = bytes[0];
+                self.zero_page[addr + 1] = bytes[1];
+                self.zero_page[addr + 2] = bytes[2];
+                self.zero_page[addr + 3] = bytes[3];
+                self.pc += 1;
+            }
+            RpnOp::LoadBankComp => {
+                let comp = self.pop_u32_coerce()?;
+                let slot = self.pop_u32_coerce()?;
+                let bank = self.pop_u32_coerce()?;
+                let value = self.load_bank_comp(bank, slot, comp)?;
+                self.push(RpnValue::U64(value))?;
+                self.pc += 1;
+            }
+            RpnOp::StoreBankComp => {
+                let comp = self.pop_u32_coerce()?;
+                let slot = self.pop_u32_coerce()?;
+                let bank = self.pop_u32_coerce()?;
+                let value = self.pop_u64()?;
+                self.store_bank_comp(value, bank, slot, comp)?;
+                self.pc += 1;
+            }
+            // ── Dict (renamed from Map) ──
+            RpnOp::DictNew => {
+                self.push(RpnValue::Map(HashMap::new()))?;
+                self.pc += 1;
+            }
+            RpnOp::DictSet => {
+                let val = self.pop()?;
+                let key = self.pop_u64()?;
+                let mut map_val = self.pop()?;
+                if let RpnValue::Map(ref mut map) = map_val {
+                    map.insert(key, val);
+                    self.push(map_val)?;
+                } else {
+                    return Err(RpnError::TypeMismatch);
                 }
-            }),
-            RpnOp::UiApplyMatrix => ui_op!(self, pops: 16, payload: 0, {
-                let mut m = [0.0f32; 16];
-                for i in (0..16).rev() {
-                    m[i] = f32::from_bits(self.pop_u32_coerce()?);
+                self.pc += 1;
+            }
+            RpnOp::DictGet => {
+                let key = self.pop_u64()?;
+                let map_val = self.pop()?;
+                if let RpnValue::Map(ref map) = map_val {
+                    if let Some(val) = map.get(&key) {
+                        self.push(val.clone())?;
+                    } else {
+                        self.push(RpnValue::U32(0))?;
+                    }
+                } else {
+                    return Err(RpnError::TypeMismatch);
                 }
-                if let Some(top) = self.transform_stack.last_mut() {
-                    *top = mat4_multiply(top, &m);
+                self.pc += 1;
+            }
+            // ── Explode/ExplodeMapped (stubs) ──
+            RpnOp::Explode => {
+                // Stub: pop count, push nothing
+                let _count = self.pop_u32_coerce()?;
+                self.pc += 1;
+            }
+            RpnOp::ExplodeMapped => {
+                // Stub: pop count, push nothing
+                let _count = self.pop_u32_coerce()?;
+                self.pc += 1;
+            }
+            // ── Blocks + components (stubs) ──
+            RpnOp::DefineBlock => {
+                // Stub: register callable block at PC offset
+                self.pc += 1;
+            }
+            RpnOp::CallBlock => {
+                // Stub: call a defined block
+                self.pc += 1;
+            }
+            RpnOp::LoopOver => {
+                // Stub: [n, block_idx] — call block for each
+                self.pc += 1;
+            }
+            RpnOp::MapOver => {
+                // Stub: [n, block_idx] — call block for each, push results
+                self.pc += 1;
+            }
+            RpnOp::DefineComponent => {
+                // Stub: creates subpackage
+                self.pc += 1;
+            }
+            RpnOp::ExecComponent => {
+                // Stub: enter component's ordinal scope
+                self.pc += 1;
+            }
+            // ── UserCall (0x60): unprivileged escape ──
+            RpnOp::UserCall => {
+                let action_op = Self::read_u64(bytecode, self.pc + 1)?;
+                let data = Self::read_u64(bytecode, self.pc + 9)?;
+                self.dispatch_user_call(action_op, data, bytecode, arenas)?;
+                self.pc += 17; // 1 + 8 + 8
+            }
+            // ── CoprocessorCall (0x61): reserved ──
+            RpnOp::CoprocessorCall => {
+                // Reserved — coprocessor system TBD
+                // Format: [u64 action] [u64 length] [u64 data]
+                // For now, just advance past the payload
+                self.pc += 25; // 1 + 8 + 8 + 8
+            }
+            // ── SetCR (0x70): privileged control register write ──
+            RpnOp::SetCR => {
+                let cr_idx = Self::read_u8(bytecode, self.pc + 1)?;
+                let value = Self::read_u64(bytecode, self.pc + 2)?;
+                if cr_idx as usize >= self.cr_bank.len() {
+                    return Err(RpnError::InvalidCRIndex(cr_idx as u32));
                 }
-            }),
-            RpnOp::UiReplaceOffset => ui_op!(self, pops: 2, payload: 0, {
-                let dy = self.pop_u32_coerce()? as i32;
-                let dx = self.pop_u32_coerce()? as i32;
-                if let Some(top) = self.transform_stack.last_mut() {
-                    *top = MAT4_IDENTITY;
-                    top[12] = dx as f32;
-                    top[13] = dy as f32;
+                // CR[1] write is security-sensitive (would check $EXEC_PKG in production)
+                self.cr_bank[cr_idx as usize] = value as u32;
+                self.pc += 10; // 1 + 1 + 8
+            }
+            // ── SystemCall (0x71): privileged escape ──
+            RpnOp::SystemCall => {
+                // Requires CR[1] >= INTERNAL
+                if (self.cr_bank[1] as u64) < SECURITY_INTERNAL {
+                    return Err(RpnError::SecurityViolation("SystemCall requires CR[1] >= INTERNAL"));
                 }
-            }),
-            RpnOp::UiReplaceMatrix => ui_op!(self, pops: 16, payload: 0, {
-                let mut m = [0.0f32; 16];
-                for i in (0..16).rev() {
-                    m[i] = f32::from_bits(self.pop_u32_coerce()?);
-                }
-                if let Some(top) = self.transform_stack.last_mut() {
-                    *top = m;
-                }
-            }),
-            RpnOp::UiLine => ui_op!(self, pops: 4, payload: 0, {
-                let raw_y2 = self.pop_u32_coerce()? as i32;
-                let raw_x2 = self.pop_u32_coerce()? as i32;
-                let raw_y1 = self.pop_u32_coerce()? as i32;
-                let raw_x1 = self.pop_u32_coerce()? as i32;
-                let (x1, y1) = self.transform_point(raw_x1, raw_y1);
-                let (x2, y2) = self.transform_point(raw_x2, raw_y2);
-                self.push_draw(UiDrawCmd::Line { x1, y1, x2, y2, color: self.ui_state.color })?;
-            }),
-            // --- Event & runtime opcodes ---
-            RpnOp::EvPoll => {
+                let action_op = Self::read_u64(bytecode, self.pc + 1)?;
+                let data = Self::read_u64(bytecode, self.pc + 9)?;
+                self.dispatch_system_call(action_op, data, bytecode, arenas)?;
+                self.pc += 17; // 1 + 8 + 8
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Dispatch UserCall sub-operations (0x60).
+    fn dispatch_user_call(
+        &mut self,
+        action_op: u64,
+        _data: u64,
+        _bytecode: &[u8],
+        arenas: &mut TripleArena,
+    ) -> Result<(), RpnError> {
+        match action_op {
+            // 0x00 EvPoll
+            0x00 => {
                 if let Some(ev) = self.event_queue.pop_front() {
                     self.push(RpnValue::U64(ev.data))?;
                     self.push(RpnValue::U32(ev.etype as u32))?;
@@ -1655,50 +1565,29 @@ impl RpnVm {
                     self.push(RpnValue::U64(0))?;
                     self.push(RpnValue::U32(VmEventType::None as u32))?;
                 }
-                self.pc += 1;
             }
-            RpnOp::EvHasEvent => {
+            // 0x01 EvHasEvent
+            0x01 => {
                 let flag = if self.event_queue.is_empty() { 0u64 } else { 1 };
                 self.push(RpnValue::U64(flag))?;
-                self.pc += 1;
             }
-            RpnOp::FrameCount => {
+            // 0x02 FrameCount
+            0x02 => {
                 self.push(RpnValue::U64(self.frame_count))?;
-                self.pc += 1;
             }
-            RpnOp::Rand => {
+            // 0x03 Rand
+            0x03 => {
                 let max = self.pop_u32_coerce()?;
                 let value = self.rng.next_bounded(max);
                 self.push(RpnValue::U32(value))?;
-                self.pc += 1;
             }
-            // --- Control register ---
-            RpnOp::SetCR => {
-                let value = self.pop_u32_coerce()?;
-                let cr_idx = self.pop_u32_coerce()?;
-                if cr_idx as usize >= self.cr_bank.len() {
-                    return Err(RpnError::InvalidCRIndex(cr_idx));
-                }
-                self.cr_bank[cr_idx as usize] = value;
-                self.pc += 1;
-            }
-            // --- OID import opcodes ---
-            RpnOp::OidPush => {
-                // Push 16-byte inline OID as two u64s (hi, lo)
-                let lo = Self::read_u64(bytecode, self.pc + 1)?;
-                let hi = Self::read_u64(bytecode, self.pc + 9)?;
-                self.push(RpnValue::U64(hi))?;
-                self.push(RpnValue::U64(lo))?;
-                self.pc += 17;
-            }
-            RpnOp::OidImport => {
-                // Pop OID (lo, hi), resolve to FQA via .osym binary search
+            // 0x10 OidImport
+            0x10 => {
                 let lo = self.pop_u64()?;
                 let hi = self.pop_u64()?;
                 let oid = Oid::new(hi, lo);
                 let entry = self.resolve_oid(oid)?;
 
-                // Security check
                 let mode = oid.security_mode();
                 if entry.kind == ImportKind::NativeHook && mode == SecurityMode::Sandboxed {
                     return Err(RpnError::OidSecurityViolation {
@@ -1708,13 +1597,11 @@ impl RpnVm {
                     });
                 }
 
-                // Push the resolved FQA
                 let fqa = entry.fqa();
                 self.push(RpnValue::Fqa(fqa))?;
-                self.pc += 1;
             }
-            RpnOp::OidCall => {
-                // Pop OID (lo, hi), resolve to FQA, dispatch
+            // 0x11 OidCall
+            0x11 => {
                 let lo = self.pop_u64()?;
                 let hi = self.pop_u64()?;
                 let oid = Oid::new(hi, lo);
@@ -1734,33 +1621,265 @@ impl RpnVm {
                         if dispatch_id as usize >= self.native_hooks.len() {
                             return Err(RpnError::OidInvalidNativeHook(dispatch_id));
                         }
-                        // VM-escape: call the native hook function
                         let hook = self.native_hooks[dispatch_id as usize];
                         hook(self, arenas)?;
-                        self.pc += 1;
                     }
                     _ => {
-                        // Push FQA for caller to use (full FQA→OVA dispatch is future work)
                         let fqa = entry.fqa();
                         self.push(RpnValue::Fqa(fqa))?;
-                        self.pc += 1;
                     }
                 }
             }
-            // --- VQL0 opcodes ---
-            RpnOp::VqlBeginQuery => {
+            // 0x12 OidCosineMatch (stub)
+            0x12 => {
+                // Stub: push 0 as match score
+                self.push(RpnValue::U64(0))?;
+            }
+            _ => {
+                return Err(RpnError::InvalidUserCallAction(action_op));
+            }
+        }
+        Ok(())
+    }
+
+    /// Dispatch SystemCall sub-operations (0x71).
+    fn dispatch_system_call(
+        &mut self,
+        action_op: u64,
+        _data: u64,
+        _bytecode: &[u8],
+        arenas: &mut TripleArena,
+    ) -> Result<(), RpnError> {
+        match action_op {
+            // 0x00 AtomicRead (stub)
+            0x00 => {
+                self.push(RpnValue::U64(0))?;
+            }
+            // 0x01 AtomicWrite (stub)
+            0x01 => {
+                let _val = self.pop_u64()?;
+            }
+            // 0x02 AtomicRmw (stub)
+            0x02 => {
+                self.push(RpnValue::U64(0))?;
+            }
+            // 0x03 NativeHook
+            0x03 => {
+                let dispatch_id = self.pop_u32_coerce()?;
+                if dispatch_id as usize >= self.native_hooks.len() {
+                    return Err(RpnError::OidInvalidNativeHook(dispatch_id));
+                }
+                let hook = self.native_hooks[dispatch_id as usize];
+                hook(self, arenas)?;
+            }
+            // 0x04 CopyList (stub)
+            0x04 => {}
+            // 0x05 Sync
+            0x05 => {
+                arenas.sync();
+                self.synced = true;
+                self.trace.syncs += 1;
+            }
+            // 0x06 DefineBlock (privileged variant, stub)
+            0x06 => {}
+            // 0x07 SetOutputMode (stub)
+            0x07 => {}
+            // 0x10 OidExec (stub)
+            0x10 => {
+                self.push(RpnValue::U64(0))?;
+            }
+            _ => {
+                return Err(RpnError::InvalidSystemCallAction(action_op));
+            }
+        }
+        Ok(())
+    }
+
+    /// Dispatch OR page opcodes (0x80+). The sub-op byte is the raw opcode.
+    /// Routing depends on CR[0] FourCC.
+    fn dispatch_or_page(
+        &mut self,
+        op_byte: u8,
+        _bytecode: &[u8],
+        _arenas: &mut TripleArena,
+    ) -> Result<(), RpnError> {
+        let sub_op = op_byte - 0x80;
+        let cr0 = self.cr_bank[0];
+
+        match cr0 {
+            FOURCC_MTUI => self.dispatch_or_mtui(sub_op),
+            FOURCC_VQL0 => self.dispatch_or_vql(sub_op),
+            FOURCC_SKLL => self.dispatch_or_skll(sub_op),
+            FOURCC_OBJT => self.dispatch_or_objt(sub_op),
+            FOURCC_CARD => self.dispatch_or_card(sub_op),
+            _ => Err(RpnError::InvalidOrPage(cr0)),
+        }
+    }
+
+    /// OR page: MTUI sub-ops
+    /// 0x00 SetColor, 0x01 Box, 0x02 Slab, 0x03 Circle,
+    /// 0x04 Text, 0x05 PushState, 0x06 PopState,
+    /// 0x07 ApplyOffset, 0x08 Line, 0x09 TextStr,
+    /// 0x0A Action, 0x0B ApplyMatrix, 0x0C ReplaceOffset,
+    /// 0x0D ReplaceMatrix
+    fn dispatch_or_mtui(&mut self, sub_op: u8) -> Result<(), RpnError> {
+        match sub_op {
+            // 0x00 SetColor
+            0x00 => ui_op!(self, pops: 1, payload: 0, {
+                let rgba = self.pop_u32_coerce()?;
+                self.ui_state.color = rgba;
+            }),
+            // 0x01 Box
+            0x01 => ui_op!(self, pops: 4, payload: 0, {
+                let h = self.pop_u32_coerce()?;
+                let w = self.pop_u32_coerce()?;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
+                self.push_draw(UiDrawCmd::Box { x, y, w, h, color: self.ui_state.color })?;
+            }),
+            // 0x02 Slab
+            0x02 => ui_op!(self, pops: 5, payload: 0, {
+                let radius = self.pop_u32_coerce()?;
+                let h = self.pop_u32_coerce()?;
+                let w = self.pop_u32_coerce()?;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
+                self.push_draw(UiDrawCmd::Slab { x, y, w, h, radius, color: self.ui_state.color })?;
+            }),
+            // 0x03 Circle
+            0x03 => ui_op!(self, pops: 3, payload: 0, {
+                let r = self.pop_u32_coerce()?;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
+                self.push_draw(UiDrawCmd::Circle { x, y, r, color: self.ui_state.color })?;
+            }),
+            // 0x04 Text
+            0x04 => ui_op!(self, pops: 4, payload: 0, {
+                let slot = self.pop_u32_coerce()?;
+                let size = self.pop_u32_coerce()?;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
+                self.push_draw(UiDrawCmd::Text { x, y, size, slot, color: self.ui_state.color })?;
+            }),
+            // 0x05 PushState
+            0x05 => ui_op!(self, pops: 0, payload: 0, {
+                if self.ui_state_stack.len() >= UI_STATE_STACK_MAX {
+                    return Err(RpnError::UiStateStackOverflow);
+                }
+                self.ui_state_stack.push(self.ui_state);
+                let current = *self.current_transform();
+                self.transform_stack.push(current);
+            }),
+            // 0x06 PopState
+            0x06 => ui_op!(self, pops: 0, payload: 0, {
+                self.ui_state = self.ui_state_stack.pop()
+                    .ok_or(RpnError::UiStateStackUnderflow)?;
+                if self.transform_stack.len() > 1 {
+                    self.transform_stack.pop();
+                }
+            }),
+            // 0x07 ApplyOffset
+            0x07 => ui_op!(self, pops: 2, payload: 0, {
+                let dy = self.pop_u32_coerce()? as i32;
+                let dx = self.pop_u32_coerce()? as i32;
+                if let Some(top) = self.transform_stack.last_mut() {
+                    top[12] += dx as f32;
+                    top[13] += dy as f32;
+                }
+            }),
+            // 0x08 Line
+            0x08 => ui_op!(self, pops: 4, payload: 0, {
+                let raw_y2 = self.pop_u32_coerce()? as i32;
+                let raw_x2 = self.pop_u32_coerce()? as i32;
+                let raw_y1 = self.pop_u32_coerce()? as i32;
+                let raw_x1 = self.pop_u32_coerce()? as i32;
+                let (x1, y1) = self.transform_point(raw_x1, raw_y1);
+                let (x2, y2) = self.transform_point(raw_x2, raw_y2);
+                self.push_draw(UiDrawCmd::Line { x1, y1, x2, y2, color: self.ui_state.color })?;
+            }),
+            // 0x09 TextStr
+            0x09 => ui_op!(self, pops: 4, payload: 0, {
+                let str_idx = self.pop_u32_coerce()?;
+                let size = self.pop_u32_coerce()?;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
+                self.push_draw(UiDrawCmd::TextStr { x, y, size, str_idx, color: self.ui_state.color })?;
+            }),
+            // 0x0A Action
+            0x0A => ui_op!(self, pops: 5, payload: 0, {
+                let str_idx = self.pop_u32_coerce()?;
+                let h = self.pop_u32_coerce()?;
+                let w = self.pop_u32_coerce()?;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
+                self.push_draw(UiDrawCmd::Action { x, y, w, h, str_idx })?;
+            }),
+            // 0x0B ApplyMatrix
+            0x0B => ui_op!(self, pops: 16, payload: 0, {
+                let mut m = [0.0f32; 16];
+                for i in (0..16).rev() {
+                    m[i] = f32::from_bits(self.pop_u32_coerce()?);
+                }
+                if let Some(top) = self.transform_stack.last_mut() {
+                    *top = mat4_multiply(top, &m);
+                }
+            }),
+            // 0x0C ReplaceOffset
+            0x0C => ui_op!(self, pops: 2, payload: 0, {
+                let dy = self.pop_u32_coerce()? as i32;
+                let dx = self.pop_u32_coerce()? as i32;
+                if let Some(top) = self.transform_stack.last_mut() {
+                    *top = MAT4_IDENTITY;
+                    top[12] = dx as f32;
+                    top[13] = dy as f32;
+                }
+            }),
+            // 0x0D ReplaceMatrix
+            0x0D => ui_op!(self, pops: 16, payload: 0, {
+                let mut m = [0.0f32; 16];
+                for i in (0..16).rev() {
+                    m[i] = f32::from_bits(self.pop_u32_coerce()?);
+                }
+                if let Some(top) = self.transform_stack.last_mut() {
+                    *top = m;
+                }
+            }),
+            _ => {
+                // Unknown MTUI sub-op: skip
+                self.pc += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// OR page: VQL0 sub-ops
+    /// 0x00 BeginQuery, 0x01 EndQuery, 0x02 Bind,
+    /// 0x03 SetField, 0x04 SetFieldStr, 0x05 Filter,
+    /// 0x06 Project, 0x07 Param
+    fn dispatch_or_vql(&mut self, sub_op: u8) -> Result<(), RpnError> {
+        match sub_op {
+            // 0x00 BeginQuery
+            0x00 => {
                 if self.vql_outputs.len() >= VQL_OUTPUT_MAX {
                     return Err(RpnError::VqlLimitExceeded);
                 }
                 self.vql_active = Some(VqlOutput::new());
                 self.pc += 1;
             }
-            RpnOp::VqlEndQuery => {
+            // 0x01 EndQuery
+            0x01 => {
                 let query = self.vql_active.take().ok_or(RpnError::VqlNoActiveQuery)?;
                 self.vql_outputs.push(query);
                 self.pc += 1;
             }
-            RpnOp::VqlBind => {
+            // 0x02 Bind
+            0x02 => {
                 let val_idx = self.pop_u32_coerce()?;
                 let key_idx = self.pop_u32_coerce()?;
                 let name = self.resolve_str(key_idx)?;
@@ -1769,7 +1888,8 @@ impl RpnVm {
                 query.fields.push(VqlField::Bind { name, value });
                 self.pc += 1;
             }
-            RpnOp::VqlSetField => {
+            // 0x03 SetField
+            0x03 => {
                 let value = self.pop_u64()?;
                 let name_idx = self.pop_u32_coerce()?;
                 let name = self.resolve_str(name_idx)?;
@@ -1777,7 +1897,8 @@ impl RpnVm {
                 query.fields.push(VqlField::FieldValue { name, value });
                 self.pc += 1;
             }
-            RpnOp::VqlSetFieldStr => {
+            // 0x04 SetFieldStr
+            0x04 => {
                 let val_idx = self.pop_u32_coerce()?;
                 let name_idx = self.pop_u32_coerce()?;
                 let name = self.resolve_str(name_idx)?;
@@ -1786,21 +1907,24 @@ impl RpnVm {
                 query.fields.push(VqlField::FieldStr { name, value });
                 self.pc += 1;
             }
-            RpnOp::VqlFilter => {
+            // 0x05 Filter
+            0x05 => {
                 let name_idx = self.pop_u32_coerce()?;
                 let name = self.resolve_str(name_idx)?;
                 let query = self.vql_active.as_mut().ok_or(RpnError::VqlNoActiveQuery)?;
                 query.fields.push(VqlField::Filter(name));
                 self.pc += 1;
             }
-            RpnOp::VqlProject => {
+            // 0x06 Project
+            0x06 => {
                 let name_idx = self.pop_u32_coerce()?;
                 let name = self.resolve_str(name_idx)?;
                 let query = self.vql_active.as_mut().ok_or(RpnError::VqlNoActiveQuery)?;
                 query.fields.push(VqlField::Project(name));
                 self.pc += 1;
             }
-            RpnOp::VqlParam => {
+            // 0x07 Param
+            0x07 => {
                 let val_idx = self.pop_u32_coerce()?;
                 let key_idx = self.pop_u32_coerce()?;
                 let key = self.resolve_str(key_idx)?;
@@ -1809,32 +1933,45 @@ impl RpnVm {
                 query.fields.push(VqlField::Param { key, value });
                 self.pc += 1;
             }
-            // --- SKLL opcodes ---
-            RpnOp::SkillBegin => {
+            _ => {
+                self.pc += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// OR page: SKLL sub-ops
+    /// 0x00 SkillBegin, 0x01 SkillEnd, 0x02 SkillStep,
+    /// 0x03 SkillLlmStep, 0x04 SkillReplaceable, 0x05 SkillInvoke,
+    /// 0x06 SkillInvokeSymbol, 0x07 SkillLlmModel, 0x08 SkillLlmUseCase,
+    /// 0x09 SkillSetShortDesc, 0x0A SkillSetLongDesc,
+    /// 0x0B SkillCronInterval, 0x0C SkillCronJitter,
+    /// 0x0D SkillForwardPrompt, 0x0E SkillAddToSystemPrompt
+    fn dispatch_or_skll(&mut self, sub_op: u8) -> Result<(), RpnError> {
+        match sub_op {
+            // 0x00 SkillBegin
+            0x00 => {
                 if self.skill_outputs.len() >= SKILL_OUTPUT_MAX {
                     return Err(RpnError::SkillLimitExceeded);
                 }
                 let name_idx = self.pop_u32_coerce()?;
                 let name = self.resolve_str(name_idx)?;
-                // If there's already an active skill, push it onto the stack
-                // (supports nested <Skill> definitions)
                 if let Some(parent) = self.skill_active.take() {
                     self.skill_stack.push(parent);
                 }
                 self.skill_active = Some(SkillDef::new(name));
                 self.pc += 1;
             }
-            RpnOp::SkillEnd => {
-                // Flush any pending LLM step
+            // 0x01 SkillEnd
+            0x01 => {
                 self.flush_llm_step()?;
                 let skill = self.skill_active.take().ok_or(RpnError::SkillNoActiveDef)?;
                 self.skill_outputs.push(skill);
-                // Restore parent skill if nested
                 self.skill_active = self.skill_stack.pop();
                 self.pc += 1;
             }
-            RpnOp::SkillStep => {
-                // Flush any pending LLM step first
+            // 0x02 SkillStep
+            0x02 => {
                 self.flush_llm_step()?;
                 let name_idx = self.pop_u32_coerce()?;
                 let name = self.resolve_str(name_idx)?;
@@ -1842,15 +1979,16 @@ impl RpnVm {
                 skill.steps.push(SkillStep::Deterministic { name });
                 self.pc += 1;
             }
-            RpnOp::SkillLlmStep => {
-                // Flush any previous pending LLM step
+            // 0x03 SkillLlmStep
+            0x03 => {
                 self.flush_llm_step()?;
                 let prompt_idx = self.pop_u32_coerce()?;
                 let prompt = self.resolve_str(prompt_idx)?;
                 self.skill_active_llm_prompt = Some(prompt);
                 self.pc += 1;
             }
-            RpnOp::SkillReplaceable => {
+            // 0x04 SkillReplaceable
+            0x04 => {
                 let default_idx = self.pop_u32_coerce()?;
                 let name_idx = self.pop_u32_coerce()?;
                 let name = self.resolve_str(name_idx)?;
@@ -1861,7 +1999,25 @@ impl RpnVm {
                 self.skill_active_llm_replaceables.push(SkillReplaceable { name, default });
                 self.pc += 1;
             }
-            RpnOp::SkillLlmModel => {
+            // 0x05 SkillInvoke
+            0x05 => {
+                self.flush_llm_step()?;
+                let name_idx = self.pop_u32_coerce()?;
+                let name = self.resolve_str(name_idx)?;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                skill.steps.push(SkillStep::InvokeAction { name });
+                self.pc += 1;
+            }
+            // 0x06 SkillInvokeSymbol
+            0x06 => {
+                self.flush_llm_step()?;
+                let symbol = self.pop_u32_coerce()?;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                skill.steps.push(SkillStep::InvokeSymbol { symbol });
+                self.pc += 1;
+            }
+            // 0x07 SkillLlmModel
+            0x07 => {
                 let model_idx = self.pop_u32_coerce()?;
                 let model = self.resolve_str(model_idx)?;
                 if self.skill_active_llm_prompt.is_none() {
@@ -1870,7 +2026,8 @@ impl RpnVm {
                 self.skill_active_llm_model = Some(model);
                 self.pc += 1;
             }
-            RpnOp::SkillLlmUseCase => {
+            // 0x08 SkillLlmUseCase
+            0x08 => {
                 let use_case_val = self.pop_u32_coerce()? as u8;
                 let use_case = LlmUseCase::from_u8(use_case_val)
                     .unwrap_or(LlmUseCase::General);
@@ -1880,21 +2037,24 @@ impl RpnVm {
                 self.skill_active_llm_use_case = use_case;
                 self.pc += 1;
             }
-            RpnOp::SkillSetShortDesc => {
+            // 0x09 SkillSetShortDesc
+            0x09 => {
                 let str_idx = self.pop_u32_coerce()?;
                 let desc = self.resolve_str(str_idx)?;
                 let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
                 skill.short_description = desc;
                 self.pc += 1;
             }
-            RpnOp::SkillSetLongDesc => {
+            // 0x0A SkillSetLongDesc
+            0x0A => {
                 let str_idx = self.pop_u32_coerce()?;
                 let desc = self.resolve_str(str_idx)?;
                 let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
                 skill.long_description = desc;
                 self.pc += 1;
             }
-            RpnOp::SkillCronInterval => {
+            // 0x0B SkillCronInterval
+            0x0B => {
                 let hi = self.pop_u32_coerce()? as u64;
                 let lo = self.pop_u32_coerce()? as u64;
                 let interval_ms = (hi << 32) | lo;
@@ -1905,7 +2065,8 @@ impl RpnVm {
                 }
                 self.pc += 1;
             }
-            RpnOp::SkillCronJitter => {
+            // 0x0C SkillCronJitter
+            0x0C => {
                 let hi = self.pop_u32_coerce()? as u64;
                 let lo = self.pop_u32_coerce()? as u64;
                 let jitter_ms = (hi << 32) | lo;
@@ -1916,8 +2077,38 @@ impl RpnVm {
                 }
                 self.pc += 1;
             }
-            // --- Object type definition opcodes ---
-            RpnOp::ObjTypeBegin => {
+            // 0x0D SkillForwardPrompt
+            0x0D => {
+                self.flush_llm_step()?;
+                let dest_idx = self.pop_u32_coerce()?;
+                let dest = self.resolve_str(dest_idx)?;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                skill.steps.push(SkillStep::ForwardPrompt { dest });
+                self.pc += 1;
+            }
+            // 0x0E SkillAddToSystemPrompt
+            0x0E => {
+                self.flush_llm_step()?;
+                let content_idx = self.pop_u32_coerce()?;
+                let content = self.resolve_str(content_idx)?;
+                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                skill.steps.push(SkillStep::AddToSystemPrompt { content });
+                self.pc += 1;
+            }
+            _ => {
+                self.pc += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// OR page: OBJT sub-ops
+    /// 0x00 ObjTypeBegin, 0x01 ObjTypeEnd, 0x02 ObjTypeSetShortDesc,
+    /// 0x03 ObjTypeSetLongDesc, 0x04 ObjTypeField
+    fn dispatch_or_objt(&mut self, sub_op: u8) -> Result<(), RpnError> {
+        match sub_op {
+            // 0x00 ObjTypeBegin
+            0x00 => {
                 if self.objtype_outputs.len() >= OBJECT_TYPE_MAX {
                     return Err(RpnError::ObjTypeLimitExceeded);
                 }
@@ -1926,31 +2117,33 @@ impl RpnVm {
                 self.objtype_active = Some(ObjectTypeDef::new(name));
                 self.pc += 1;
             }
-            RpnOp::ObjTypeEnd => {
+            // 0x01 ObjTypeEnd
+            0x01 => {
                 let def = self.objtype_active.take().ok_or(RpnError::ObjTypeNoActiveDef)?;
-                // Attach to active skill if one exists, otherwise standalone
                 if let Some(skill) = self.skill_active.as_mut() {
                     skill.object_types.push(def.clone());
                 }
                 self.objtype_outputs.push(def);
                 self.pc += 1;
             }
-            RpnOp::ObjTypeSetShortDesc => {
+            // 0x02 ObjTypeSetShortDesc
+            0x02 => {
                 let str_idx = self.pop_u32_coerce()?;
                 let desc = self.resolve_str(str_idx)?;
                 let def = self.objtype_active.as_mut().ok_or(RpnError::ObjTypeNoActiveDef)?;
                 def.short_description = desc;
                 self.pc += 1;
             }
-            RpnOp::ObjTypeSetLongDesc => {
+            // 0x03 ObjTypeSetLongDesc
+            0x03 => {
                 let str_idx = self.pop_u32_coerce()?;
                 let desc = self.resolve_str(str_idx)?;
                 let def = self.objtype_active.as_mut().ok_or(RpnError::ObjTypeNoActiveDef)?;
                 def.long_description = desc;
                 self.pc += 1;
             }
-            RpnOp::ObjTypeField => {
-                // Stack: name_idx, flags (bit0=fts, bit1=vec)
+            // 0x04 ObjTypeField
+            0x04 => {
                 let flags = self.pop_u32_coerce()?;
                 let name_idx = self.pop_u32_coerce()?;
                 let name = self.resolve_str(name_idx)?;
@@ -1962,8 +2155,20 @@ impl RpnVm {
                 });
                 self.pc += 1;
             }
-            // --- Card definition opcodes (feature-gated) ---
-            RpnOp::CardBegin => ui_op!(self, pops: 1, payload: 0, {
+            _ => {
+                self.pc += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// OR page: CARD sub-ops
+    /// 0x00 CardBegin, 0x01 CardEnd, 0x02 CardSetShortDesc,
+    /// 0x03 CardSetLongDesc
+    fn dispatch_or_card(&mut self, sub_op: u8) -> Result<(), RpnError> {
+        match sub_op {
+            // 0x00 CardBegin
+            0x00 => ui_op!(self, pops: 1, payload: 0, {
                 if self.card_outputs.len() >= CARD_DEF_MAX {
                     return Err(RpnError::CardLimitExceeded);
                 }
@@ -1972,7 +2177,8 @@ impl RpnVm {
                 self.card_active = Some(CardDef::new(name));
                 self.card_capturing = true;
             }),
-            RpnOp::CardEnd => ui_op!(self, pops: 0, payload: 0, {
+            // 0x01 CardEnd
+            0x01 => ui_op!(self, pops: 0, payload: 0, {
                 self.card_capturing = false;
                 let mut card = self.card_active.take().ok_or(RpnError::CardNoActiveDef)?;
                 card.string_table = self.string_table.clone();
@@ -1981,53 +2187,24 @@ impl RpnVm {
                 }
                 self.card_outputs.push(card);
             }),
-            RpnOp::CardSetShortDesc => ui_op!(self, pops: 1, payload: 0, {
+            // 0x02 CardSetShortDesc
+            0x02 => ui_op!(self, pops: 1, payload: 0, {
                 let str_idx = self.pop_u32_coerce()?;
                 let desc = self.resolve_str(str_idx)?;
                 let card = self.card_active.as_mut().ok_or(RpnError::CardNoActiveDef)?;
                 card.short_description = desc;
             }),
-            RpnOp::CardSetLongDesc => ui_op!(self, pops: 1, payload: 0, {
+            // 0x03 CardSetLongDesc
+            0x03 => ui_op!(self, pops: 1, payload: 0, {
                 let str_idx = self.pop_u32_coerce()?;
                 let desc = self.resolve_str(str_idx)?;
                 let card = self.card_active.as_mut().ok_or(RpnError::CardNoActiveDef)?;
                 card.long_description = desc;
             }),
-            RpnOp::SkillInvoke => {
-                // Flush any pending LLM step first
-                self.flush_llm_step()?;
-                let name_idx = self.pop_u32_coerce()?;
-                let name = self.resolve_str(name_idx)?;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                skill.steps.push(SkillStep::InvokeAction { name });
-                self.pc += 1;
-            }
-            RpnOp::SkillInvokeSymbol => {
-                // Flush any pending LLM step first
-                self.flush_llm_step()?;
-                let symbol = self.pop_u32_coerce()?;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                skill.steps.push(SkillStep::InvokeSymbol { symbol });
-                self.pc += 1;
-            }
-            RpnOp::SkillForwardPrompt => {
-                self.flush_llm_step()?;
-                let dest_idx = self.pop_u32_coerce()?;
-                let dest = self.resolve_str(dest_idx)?;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                skill.steps.push(SkillStep::ForwardPrompt { dest });
-                self.pc += 1;
-            }
-            RpnOp::SkillAddToSystemPrompt => {
-                self.flush_llm_step()?;
-                let content_idx = self.pop_u32_coerce()?;
-                let content = self.resolve_str(content_idx)?;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                skill.steps.push(SkillStep::AddToSystemPrompt { content });
+            _ => {
                 self.pc += 1;
             }
         }
-
         Ok(())
     }
 
@@ -2044,12 +2221,19 @@ impl RpnVm {
     }
 
     /// Decode bytecode to instruction list (for debugging).
+    /// Note: OR page opcodes (0x80+) are not decoded as RpnOp variants.
     pub fn decode(bytecode: &[u8]) -> Result<Vec<(RpnOp, Vec<u8>)>, RpnError> {
         let mut result = Vec::new();
         let mut pc = 0;
 
         while pc < bytecode.len() {
             let op_byte = bytecode[pc];
+            if op_byte >= 0x80 {
+                // OR page opcodes have no payload at the bytecode level
+                result.push((RpnOp::Nop, vec![op_byte]));
+                pc += 1;
+                continue;
+            }
             let op = RpnOp::from_u8(op_byte).ok_or(RpnError::InvalidOpcode(op_byte))?;
             let payload_size = op.payload_size();
             if pc + 1 + payload_size > bytecode.len() {
