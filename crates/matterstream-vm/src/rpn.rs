@@ -160,6 +160,205 @@ pub enum RpnOp {
     SystemCall  = 0x71,
 }
 
+// ── OR page enums (0x80+ sub-ops, offset from 0x80) ────────────────────
+// Wire byte = 0x80 + variant as u8. Only one page is active based on CR[0].
+
+/// MTUI OR page: UI draw operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum MtuiOp {
+    SetColor       = 0x00,
+    Box            = 0x01,
+    Slab           = 0x02,
+    Circle         = 0x03,
+    Text           = 0x04,
+    PushState      = 0x05,
+    PopState       = 0x06,
+    ApplyOffset    = 0x07,
+    Line           = 0x08,
+    TextStr        = 0x09,
+    Action         = 0x0A,
+    ApplyMatrix    = 0x0B,
+    ReplaceOffset  = 0x0C,
+    ReplaceMatrix  = 0x0D,
+}
+
+impl MtuiOp {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0x00 => Some(Self::SetColor),
+            0x01 => Some(Self::Box),
+            0x02 => Some(Self::Slab),
+            0x03 => Some(Self::Circle),
+            0x04 => Some(Self::Text),
+            0x05 => Some(Self::PushState),
+            0x06 => Some(Self::PopState),
+            0x07 => Some(Self::ApplyOffset),
+            0x08 => Some(Self::Line),
+            0x09 => Some(Self::TextStr),
+            0x0A => Some(Self::Action),
+            0x0B => Some(Self::ApplyMatrix),
+            0x0C => Some(Self::ReplaceOffset),
+            0x0D => Some(Self::ReplaceMatrix),
+            _ => None,
+        }
+    }
+    /// Wire byte for bytecode emission.
+    pub fn byte(self) -> u8 { 0x80 + self as u8 }
+}
+
+/// VQL0 OR page: Vesicle Query Language operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum VqlOp {
+    BeginQuery   = 0x00,
+    EndQuery     = 0x01,
+    Bind         = 0x02,
+    SetField     = 0x03,
+    SetFieldStr  = 0x04,
+    Filter       = 0x05,
+    Project      = 0x06,
+    Param        = 0x07,
+}
+
+impl VqlOp {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0x00 => Some(Self::BeginQuery),
+            0x01 => Some(Self::EndQuery),
+            0x02 => Some(Self::Bind),
+            0x03 => Some(Self::SetField),
+            0x04 => Some(Self::SetFieldStr),
+            0x05 => Some(Self::Filter),
+            0x06 => Some(Self::Project),
+            0x07 => Some(Self::Param),
+            _ => None,
+        }
+    }
+    pub fn byte(self) -> u8 { 0x80 + self as u8 }
+}
+
+/// SKLL OR page: Skill definition operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum SkllOp {
+    Begin              = 0x00,
+    End                = 0x01,
+    Step               = 0x02,
+    LlmStep            = 0x03,
+    Replaceable        = 0x04,
+    Invoke             = 0x05,
+    InvokeSymbol       = 0x06,
+    LlmModel           = 0x07,
+    LlmUseCase         = 0x08,
+    SetShortDesc       = 0x09,
+    SetLongDesc        = 0x0A,
+    CronInterval       = 0x0B,
+    CronJitter         = 0x0C,
+    ForwardPrompt      = 0x0D,
+    AddToSystemPrompt  = 0x0E,
+}
+
+impl SkllOp {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0x00 => Some(Self::Begin),
+            0x01 => Some(Self::End),
+            0x02 => Some(Self::Step),
+            0x03 => Some(Self::LlmStep),
+            0x04 => Some(Self::Replaceable),
+            0x05 => Some(Self::Invoke),
+            0x06 => Some(Self::InvokeSymbol),
+            0x07 => Some(Self::LlmModel),
+            0x08 => Some(Self::LlmUseCase),
+            0x09 => Some(Self::SetShortDesc),
+            0x0A => Some(Self::SetLongDesc),
+            0x0B => Some(Self::CronInterval),
+            0x0C => Some(Self::CronJitter),
+            0x0D => Some(Self::ForwardPrompt),
+            0x0E => Some(Self::AddToSystemPrompt),
+            _ => None,
+        }
+    }
+    pub fn byte(self) -> u8 { 0x80 + self as u8 }
+}
+
+/// OBJT OR page: Object type definition operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum ObjtOp {
+    Begin        = 0x00,
+    End          = 0x01,
+    SetShortDesc = 0x02,
+    SetLongDesc  = 0x03,
+    Field        = 0x04,
+}
+
+impl ObjtOp {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0x00 => Some(Self::Begin),
+            0x01 => Some(Self::End),
+            0x02 => Some(Self::SetShortDesc),
+            0x03 => Some(Self::SetLongDesc),
+            0x04 => Some(Self::Field),
+            _ => None,
+        }
+    }
+    pub fn byte(self) -> u8 { 0x80 + self as u8 }
+}
+
+/// CARD OR page: Card definition operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum CardOp {
+    Begin        = 0x00,
+    End          = 0x01,
+    SetShortDesc = 0x02,
+    SetLongDesc  = 0x03,
+}
+
+impl CardOp {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0x00 => Some(Self::Begin),
+            0x01 => Some(Self::End),
+            0x02 => Some(Self::SetShortDesc),
+            0x03 => Some(Self::SetLongDesc),
+            _ => None,
+        }
+    }
+    pub fn byte(self) -> u8 { 0x80 + self as u8 }
+}
+
+/// UserCall sub-op identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u64)]
+pub enum UserCallOp {
+    EvPoll         = 0x00,
+    EvHasEvent     = 0x01,
+    FrameCount     = 0x02,
+    Rand           = 0x03,
+    OidImport      = 0x10,
+    OidCall        = 0x11,
+    OidCosineMatch = 0x12,
+}
+
+/// SystemCall sub-op identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u64)]
+pub enum SystemCallOp {
+    AtomicRead     = 0x00,
+    AtomicWrite    = 0x01,
+    AtomicRmw      = 0x02,
+    NativeHook     = 0x03,
+    CopyList       = 0x04,
+    Sync           = 0x05,
+    DefineBlock    = 0x06,
+    SetOutputMode  = 0x07,
+    OidExec        = 0x10,
+}
+
 impl RpnOp {
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
