@@ -748,6 +748,11 @@ impl RpnVm {
         Ok(())
     }
 
+    /// Public push for native hooks (VM-escape).
+    pub fn push_value(&mut self, val: RpnValue) -> Result<(), RpnError> {
+        self.push(val)
+    }
+
     fn pop(&mut self) -> Result<RpnValue, RpnError> {
         self.stack.pop().ok_or(RpnError::StackUnderflow)
     }

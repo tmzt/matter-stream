@@ -28,3 +28,6 @@ name = "flappy_bird"
 
 [[example]]
 name = "package_demo"
+
+[[example]]
+name = "oid_import_demo"
