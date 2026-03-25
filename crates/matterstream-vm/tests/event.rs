@@ -3,7 +3,7 @@
 use matterstream_vm::event::{keys, VmEvent, VmEventType};
 use matterstream_vm::hooks::HookContext;
 use matterstream_vm::host::VmHost;
-use matterstream_vm::rpn::RpnOp;
+use matterstream_vm::rpn::{RpnOp, UserCallOp};
 
 #[test]
 fn test_vm_event_constructors() {
@@ -50,8 +50,12 @@ fn test_vm_host_tick_increments_frame() {
 #[test]
 fn test_vm_host_events_forwarded_to_vm() {
     let hooks = HookContext::new();
-    // Bytecode: EvPoll, Halt — pops one event
-    let bc = vec![RpnOp::EvPoll as u8, RpnOp::Halt as u8];
+    // Bytecode: UserCall(EvPoll), Halt — pops one event
+    let mut bc = Vec::new();
+    bc.push(RpnOp::UserCall as u8);
+    bc.extend_from_slice(&(UserCallOp::EvPoll as u64).to_le_bytes());
+    bc.extend_from_slice(&0u64.to_le_bytes());
+    bc.push(RpnOp::Halt as u8);
     let mut host = VmHost::new(bc, Vec::new(), hooks);
 
     host.push_event(VmEvent::key_down(keys::SPACE));

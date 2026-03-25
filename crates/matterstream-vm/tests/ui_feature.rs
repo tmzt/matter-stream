@@ -7,8 +7,8 @@
 
 #[cfg(feature = "ui")]
 mod with_ui {
-    use matterstream_vm::rpn::{RpnOp, RpnVm};
-    use matterstream_vm::ui_vm::{UiDrawCmd, CardDef};
+    use matterstream_vm::rpn::{CardOp, MtuiOp, RpnOp, RpnVm, SkllOp};
+    use matterstream_vm::ui_vm::UiDrawCmd;
     use matterstream_vm_arena::TripleArena;
 
     /// Pattern from memory-core-demo: hand-assemble bytecode that draws a slab,
@@ -23,12 +23,12 @@ mod with_ui {
         let mut bc = Vec::new();
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&blue.to_le_bytes());
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [0u32, 0, 200, 100, 12] {
             bc.push(RpnOp::Push32 as u8);
             bc.extend_from_slice(&val.to_le_bytes());
         }
-        bc.push(RpnOp::UiSlab as u8);
+        bc.push(MtuiOp::Slab.byte());
         bc.push(RpnOp::Halt as u8);
 
         vm.execute(&bc, &mut arenas).unwrap();
@@ -61,32 +61,43 @@ mod with_ui {
     }
 
     /// Pattern from tsx_detect.rs: compile TSX, execute, check card_outputs.
+    /// In msm1, card ops require CR switching: CARD mode for Begin/End, MTUI for draws.
     #[test]
     fn card_output_captures_draws() {
         let mut vm = RpnVm::new();
         let mut arenas = TripleArena::new();
+        vm.cr_bank[1] = matterstream_vm::rpn::SECURITY_INTERNAL as u32;
 
-        // Simulate CardBegin + draw + CardEnd via raw bytecode
-        // CardBegin pushes a new card, draws go to card_active, CardEnd finalizes
         let mut bc = Vec::new();
 
-        // Push card name string index
+        // Switch to CARD mode, emit CardBegin
+        bc.push(RpnOp::SystemCall as u8);
+        bc.extend_from_slice(&(matterstream_vm::rpn::SystemCallOp::SetOutputMode as u64).to_le_bytes());
+        bc.extend_from_slice(&(matterstream_vm::rpn::FOURCC_CARD as u64).to_le_bytes());
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&0u32.to_le_bytes());
-        bc.push(RpnOp::CardBegin as u8);
+        bc.push(CardOp::Begin.byte());
 
-        // Draw a slab inside the card
+        // Switch to MTUI mode, draw a slab
+        bc.push(RpnOp::SystemCall as u8);
+        bc.extend_from_slice(&(matterstream_vm::rpn::SystemCallOp::SetOutputMode as u64).to_le_bytes());
+        bc.extend_from_slice(&(matterstream_vm::ui_vm::FOURCC_MTUI as u64).to_le_bytes());
         let color = matterstream_common::rgba(0x33, 0x66, 0x99, 0xFF);
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&color.to_le_bytes());
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [0u32, 0, 200, 100, 8] {
             bc.push(RpnOp::Push32 as u8);
             bc.extend_from_slice(&val.to_le_bytes());
         }
-        bc.push(RpnOp::UiSlab as u8);
+        bc.push(MtuiOp::Slab.byte());
 
-        bc.push(RpnOp::CardEnd as u8);
+        // Switch to CARD mode, emit CardEnd
+        bc.push(RpnOp::SystemCall as u8);
+        bc.extend_from_slice(&(matterstream_vm::rpn::SystemCallOp::SetOutputMode as u64).to_le_bytes());
+        bc.extend_from_slice(&(matterstream_vm::rpn::FOURCC_CARD as u64).to_le_bytes());
+        bc.push(CardOp::End.byte());
+
         bc.push(RpnOp::Halt as u8);
 
         vm.string_table = vec!["test_card".to_string()];
@@ -108,24 +119,22 @@ mod with_ui {
         // SkillBegin (name_idx=0) + Step(name_idx=1, action_idx=2) + SkillEnd
         let mut bc = Vec::new();
 
-        // SetCR to SKLL mode
-        bc.push(RpnOp::Push32 as u8);
-        bc.extend_from_slice(&0u32.to_le_bytes()); // CR index 0
-        bc.push(RpnOp::Push32 as u8);
-        bc.extend_from_slice(&matterstream_vm::ui_vm::FOURCC_SKLL.to_le_bytes());
+        // SetCR to SKLL mode (inline: [u8 cr_idx][u64 value])
         bc.push(RpnOp::SetCR as u8);
+        bc.push(0u8); // CR index 0
+        bc.extend_from_slice(&(matterstream_vm::ui_vm::FOURCC_SKLL as u64).to_le_bytes());
 
         // SkillBegin with name string index 0
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&0u32.to_le_bytes());
-        bc.push(RpnOp::SkillBegin as u8);
+        bc.push(SkllOp::Begin.byte());
 
         // SkillStep with name string index 1
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&1u32.to_le_bytes());
-        bc.push(RpnOp::SkillStep as u8);
+        bc.push(SkllOp::Step.byte());
 
-        bc.push(RpnOp::SkillEnd as u8);
+        bc.push(SkllOp::End.byte());
         bc.push(RpnOp::Halt as u8);
 
         vm.string_table = vec![
@@ -152,29 +161,29 @@ mod with_ui {
         // Draw a box
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&white.to_le_bytes());
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [0u32, 0, 400, 300] {
             bc.push(RpnOp::Push32 as u8);
             bc.extend_from_slice(&val.to_le_bytes());
         }
-        bc.push(RpnOp::UiBox as u8);
+        bc.push(MtuiOp::Box.byte());
 
         // Draw a circle
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&red.to_le_bytes());
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [200u32, 150, 50] {
             bc.push(RpnOp::Push32 as u8);
             bc.extend_from_slice(&val.to_le_bytes());
         }
-        bc.push(RpnOp::UiCircle as u8);
+        bc.push(MtuiOp::Circle.byte());
 
         // Draw a line
         for val in [10u32, 10, 390, 290] {
             bc.push(RpnOp::Push32 as u8);
             bc.extend_from_slice(&val.to_le_bytes());
         }
-        bc.push(RpnOp::UiLine as u8);
+        bc.push(MtuiOp::Line.byte());
 
         bc.push(RpnOp::Halt as u8);
 
@@ -196,31 +205,31 @@ mod with_ui {
         let color = matterstream_common::rgba(255, 255, 255, 255);
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&color.to_le_bytes());
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
 
         // PushState + ApplyOffset(100, 50)
-        bc.push(RpnOp::UiPushState as u8);
+        bc.push(MtuiOp::PushState.byte());
         for val in [100u32, 50] {
             bc.push(RpnOp::Push32 as u8);
             bc.extend_from_slice(&val.to_le_bytes());
         }
-        bc.push(RpnOp::UiApplyOffset as u8);
+        bc.push(MtuiOp::ApplyOffset.byte());
 
         // Draw a box at (0,0) — should appear at (100, 50) due to transform
         for val in [0u32, 0, 50, 50] {
             bc.push(RpnOp::Push32 as u8);
             bc.extend_from_slice(&val.to_le_bytes());
         }
-        bc.push(RpnOp::UiBox as u8);
+        bc.push(MtuiOp::Box.byte());
 
-        bc.push(RpnOp::UiPopState as u8);
+        bc.push(MtuiOp::PopState.byte());
 
         // Draw another box at (0,0) — should appear at (0, 0) after pop
         for val in [0u32, 0, 50, 50] {
             bc.push(RpnOp::Push32 as u8);
             bc.extend_from_slice(&val.to_le_bytes());
         }
-        bc.push(RpnOp::UiBox as u8);
+        bc.push(MtuiOp::Box.byte());
 
         bc.push(RpnOp::Halt as u8);
 
@@ -253,12 +262,12 @@ mod with_ui {
         let mut bc = Vec::new();
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&color.to_le_bytes());
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [0u32, 0, 100, 100] {
             bc.push(RpnOp::Push32 as u8);
             bc.extend_from_slice(&val.to_le_bytes());
         }
-        bc.push(RpnOp::UiBox as u8);
+        bc.push(MtuiOp::Box.byte());
         bc.push(RpnOp::Halt as u8);
 
         vm.execute(&bc, &mut arenas).unwrap();

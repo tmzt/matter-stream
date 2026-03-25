@@ -96,7 +96,7 @@ All crates bumped to 0.2.x. Bytecode magic: `msm1`. Clean break, no backwards co
         0x11  OidCall
         0x12  OidCosineMatch
 
-0x61  CoprocessorCall [u64 action] [u64 length] [u64 data]
+0x61  CoprocessorCall [u32 coproc id] [u32 action] [u32 length] [u64 data]
         (reserved — coprocessor system TBD)
 
 ── SYSTEM ESCAPE (0x70-0x7F) — privileged ────────────────────

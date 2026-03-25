@@ -1209,8 +1209,9 @@ impl RpnVm {
         // Stack is cleared, but banks persist
         self.stack.clear();
         self.call_stack.clear();
-        // Reset control registers and extension outputs
-        self.cr_bank = [FOURCC_MTUI, 0, 0, 0, 0, 0, 0, 0];
+        // Reset control registers — preserve CR[1] (security, set by loader)
+        let security = self.cr_bank[1];
+        self.cr_bank = [FOURCC_MTUI, security, 0, 0, 0, 0, 0, 0];
         self.vql_outputs.clear();
         self.vql_active = None;
         self.skill_outputs.clear();
@@ -1780,11 +1781,22 @@ impl RpnVm {
                 let value = self.rng.next_bounded(max);
                 self.push(RpnValue::U32(value))?;
             }
-            // 0x10 OidImport
+            // 0x10 OidImport — pops a u128 (Push128/Fqa) or two u64s (hi, lo)
             0x10 => {
-                let lo = self.pop_u64()?;
-                let hi = self.pop_u64()?;
-                let oid = Oid::new(hi, lo);
+                let val = self.pop()?;
+                let (oid, hi, lo) = match val {
+                    RpnValue::Fqa(fqa) => {
+                        let v = fqa.value();
+                        let hi = (v >> 64) as u64;
+                        let lo = v as u64;
+                        (Oid::new(hi, lo), hi, lo)
+                    }
+                    RpnValue::U64(lo_val) => {
+                        let hi = self.pop_u64()?;
+                        (Oid::new(hi, lo_val), hi, lo_val)
+                    }
+                    _ => return Err(RpnError::TypeMismatch),
+                };
                 let entry = self.resolve_oid(oid)?;
 
                 let mode = oid.security_mode();
@@ -1799,11 +1811,22 @@ impl RpnVm {
                 let fqa = entry.fqa();
                 self.push(RpnValue::Fqa(fqa))?;
             }
-            // 0x11 OidCall
+            // 0x11 OidCall — pops a u128 (Push128/Fqa) or two u64s (hi, lo)
             0x11 => {
-                let lo = self.pop_u64()?;
-                let hi = self.pop_u64()?;
-                let oid = Oid::new(hi, lo);
+                let val = self.pop()?;
+                let (oid, hi, lo) = match val {
+                    RpnValue::Fqa(fqa) => {
+                        let v = fqa.value();
+                        let hi = (v >> 64) as u64;
+                        let lo = v as u64;
+                        (Oid::new(hi, lo), hi, lo)
+                    }
+                    RpnValue::U64(lo_val) => {
+                        let hi = self.pop_u64()?;
+                        (Oid::new(hi, lo_val), hi, lo_val)
+                    }
+                    _ => return Err(RpnError::TypeMismatch),
+                };
                 let entry = self.resolve_oid(oid)?;
 
                 let mode = oid.security_mode();
@@ -1881,8 +1904,10 @@ impl RpnVm {
             }
             // 0x06 DefineBlock (privileged variant, stub)
             0x06 => {}
-            // 0x07 SetOutputMode (stub)
-            0x07 => {}
+            // 0x07 SetOutputMode — set CR[0] to the FourCC in data
+            0x07 => {
+                self.cr_bank[0] = _data as u32;
+            }
             // 0x10 OidExec (stub)
             0x10 => {
                 self.push(RpnValue::U64(0))?;

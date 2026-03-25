@@ -10,7 +10,7 @@
 
 use matterstream_packaging::archive::{ArchiveMember, MtsmArchive};
 use matterstream_packaging::tkv::{TkvDocument, TkvValue};
-use matterstream_vm::rpn::{RpnOp, RpnVm};
+use matterstream_vm::rpn::{MtuiOp, RpnOp, RpnVm};
 use matterstream_common::rgba;
 use matterstream_vm::ui_vm::UiDrawCmd;
 use matterstream_vm_addressing::fqa::{FourCC, Ordinal};
@@ -28,14 +28,14 @@ fn main() {
     let blue = rgba(50, 100, 255, 255);
     bytecode.push(RpnOp::Push32 as u8);
     bytecode.extend_from_slice(&blue.to_le_bytes());
-    bytecode.push(RpnOp::UiSetColor as u8);
+    bytecode.push(MtuiOp::SetColor.byte());
 
     // Draw a slab at (0, 0) size 200×100 radius 12
     for val in [0u32, 0, 200, 100, 12] {
         bytecode.push(RpnOp::Push32 as u8);
         bytecode.extend_from_slice(&val.to_le_bytes());
     }
-    bytecode.push(RpnOp::UiSlab as u8);
+    bytecode.push(MtuiOp::Slab.byte());
 
     // Halt
     bytecode.push(RpnOp::Halt as u8);

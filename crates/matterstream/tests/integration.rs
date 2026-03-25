@@ -8,7 +8,7 @@ use matterstream::builder::StreamBuilder;
 use matterstream::fqa::{Fqa, FourCC, Ordinal};
 use matterstream::keyless::KeylessPolicy;
 use matterstream::ops::{Op, OpsHeader, Primitive, RsiPointer};
-use matterstream::rpn::{RpnOp, RpnVm};
+use matterstream::rpn::{RpnOp, RpnVm, SystemCallOp};
 use matterstream::scl::{Scl, SclVerdict};
 use matterstream::stream::MatterStream;
 use matterstream::tkv::{TkvDocument, TkvValue};
@@ -133,11 +133,16 @@ fn full_pipeline_archive_scl_arena_rpn() {
     let token = AslrToken(0xBEEF);
     asym_table.insert(token, matterstream::Ova::new(matterstream::ArenaId::Nursery, 0, 0, 0));
 
-    // RPN bytecode: Push32(42), Sync
+    // RPN bytecode: Push32(42), SystemCall(Sync)
     let push32_bytes = 42u32.to_le_bytes();
+    let sync_action = (SystemCallOp::Sync as u64).to_le_bytes();
+    let sync_data = 0u64.to_le_bytes();
+    let mut sync_payload = Vec::new();
+    sync_payload.extend_from_slice(&sync_action);
+    sync_payload.extend_from_slice(&sync_data);
     let bytecode = RpnVm::encode(&[
         (RpnOp::Push32, Some(&push32_bytes)),
-        (RpnOp::Sync, None),
+        (RpnOp::SystemCall, Some(&sync_payload)),
     ]);
 
     let mut archive = MtsmArchive::new();
@@ -171,8 +176,9 @@ fn full_pipeline_archive_scl_arena_rpn() {
     let ova = arenas.alloc_nursery(bytecode.len()).unwrap();
     arenas.write(ova, &bytecode).unwrap();
 
-    // Step 5: Execute RPN
+    // Step 5: Execute RPN (set security to INTERNAL for Sync access)
     let mut rpn = RpnVm::new();
+    rpn.cr_bank[1] = matterstream::rpn::SECURITY_INTERNAL as u32;
     rpn.execute(&bytecode, &mut arenas).unwrap();
 
     assert_eq!(rpn.stack.len(), 1);

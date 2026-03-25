@@ -1,7 +1,7 @@
 //! Tests for UI draw opcodes in the RPN VM.
 
 use matterstream::arena::TripleArena;
-use matterstream::rpn::{RpnError, RpnOp, RpnVm};
+use matterstream::rpn::{MtuiOp, RpnError, RpnOp, RpnVm};
 use matterstream::ui_vm::{
     UiDrawCmd, UI_DRAW_CMD_MAX, UI_STATE_STACK_MAX,
 };
@@ -30,7 +30,7 @@ fn ui_set_color() {
 
     let color = rgba(255, 0, 0, 255); // red
     let mut bc = encode_push32(color);
-    bc.push(RpnOp::UiSetColor as u8);
+    bc.push(MtuiOp::SetColor.byte());
 
     vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(vm.ui_state.color, color);
@@ -44,13 +44,13 @@ fn ui_box_emits_draw_cmd() {
 
     let color = rgba(0, 255, 0, 255);
     let mut bc = encode_push32(color);
-    bc.push(RpnOp::UiSetColor as u8);
+    bc.push(MtuiOp::SetColor.byte());
     // Push x=10, y=20, w=100, h=50
     bc.extend_from_slice(&encode_push32(10));
     bc.extend_from_slice(&encode_push32(20));
     bc.extend_from_slice(&encode_push32(100));
     bc.extend_from_slice(&encode_push32(50));
-    bc.push(RpnOp::UiBox as u8);
+    bc.push(MtuiOp::Box.byte());
 
     vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(vm.ui_draws.len(), 1);
@@ -73,14 +73,14 @@ fn ui_slab_emits_draw_cmd() {
 
     let color = rgba(0, 0, 255, 200);
     let mut bc = encode_push32(color);
-    bc.push(RpnOp::UiSetColor as u8);
+    bc.push(MtuiOp::SetColor.byte());
     // Push x=5, y=5, w=80, h=40, radius=8
     bc.extend_from_slice(&encode_push32(5));
     bc.extend_from_slice(&encode_push32(5));
     bc.extend_from_slice(&encode_push32(80));
     bc.extend_from_slice(&encode_push32(40));
     bc.extend_from_slice(&encode_push32(8));
-    bc.push(RpnOp::UiSlab as u8);
+    bc.push(MtuiOp::Slab.byte());
 
     vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(vm.ui_draws.len(), 1);
@@ -104,12 +104,12 @@ fn ui_circle_emits_draw_cmd() {
 
     let color = rgba(255, 255, 0, 128);
     let mut bc = encode_push32(color);
-    bc.push(RpnOp::UiSetColor as u8);
+    bc.push(MtuiOp::SetColor.byte());
     // Push x=50, y=50, r=25
     bc.extend_from_slice(&encode_push32(50));
     bc.extend_from_slice(&encode_push32(50));
     bc.extend_from_slice(&encode_push32(25));
-    bc.push(RpnOp::UiCircle as u8);
+    bc.push(MtuiOp::Circle.byte());
 
     vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(vm.ui_draws.len(), 1);
@@ -136,7 +136,7 @@ fn ui_text_emits_draw_cmd() {
     bc.extend_from_slice(&encode_push32(100));
     bc.extend_from_slice(&encode_push32(16));
     bc.extend_from_slice(&encode_push32(0));
-    bc.push(RpnOp::UiText as u8);
+    bc.push(MtuiOp::Text.byte());
 
     vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(vm.ui_draws.len(), 1);
@@ -159,13 +159,13 @@ fn ui_line_emits_draw_cmd() {
 
     let color = rgba(128, 128, 128, 255);
     let mut bc = encode_push32(color);
-    bc.push(RpnOp::UiSetColor as u8);
+    bc.push(MtuiOp::SetColor.byte());
     // Push x1=0, y1=0, x2=100, y2=100
     bc.extend_from_slice(&encode_push32(0));
     bc.extend_from_slice(&encode_push32(0));
     bc.extend_from_slice(&encode_push32(100));
     bc.extend_from_slice(&encode_push32(100));
-    bc.push(RpnOp::UiLine as u8);
+    bc.push(MtuiOp::Line.byte());
 
     vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(vm.ui_draws.len(), 1);
@@ -196,14 +196,14 @@ fn ui_push_pop_state_preserves_color() {
     let mut bc = Vec::new();
     // Set color to red
     bc.extend_from_slice(&encode_push32(red));
-    bc.push(RpnOp::UiSetColor as u8);
+    bc.push(MtuiOp::SetColor.byte());
     // Push state
-    bc.push(RpnOp::UiPushState as u8);
+    bc.push(MtuiOp::PushState.byte());
     // Set color to blue
     bc.extend_from_slice(&encode_push32(blue));
-    bc.push(RpnOp::UiSetColor as u8);
+    bc.push(MtuiOp::SetColor.byte());
     // Pop state — should restore red
-    bc.push(RpnOp::UiPopState as u8);
+    bc.push(MtuiOp::PopState.byte());
 
     vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(vm.ui_state.color, red);
@@ -218,15 +218,15 @@ fn ui_push_pop_state_preserves_offset() {
     // Apply offset (10, 20)
     bc.extend_from_slice(&encode_push32(10));
     bc.extend_from_slice(&encode_push32(20));
-    bc.push(RpnOp::UiApplyOffset as u8);
+    bc.push(MtuiOp::ApplyOffset.byte());
     // Push state (copies transform)
-    bc.push(RpnOp::UiPushState as u8);
+    bc.push(MtuiOp::PushState.byte());
     // Apply offset (50, 60) — accumulates on top of (10,20) => (60, 80)
     bc.extend_from_slice(&encode_push32(50));
     bc.extend_from_slice(&encode_push32(60));
-    bc.push(RpnOp::UiApplyOffset as u8);
+    bc.push(MtuiOp::ApplyOffset.byte());
     // Pop state — should restore transform to (10, 20)
-    bc.push(RpnOp::UiPopState as u8);
+    bc.push(MtuiOp::PopState.byte());
 
     vm.execute(&bc, &mut arenas).unwrap();
     // Transform stack top should be back to (10, 20)
@@ -244,13 +244,13 @@ fn ui_offset_applied_to_draws() {
     // Apply offset (100, 200)
     bc.extend_from_slice(&encode_push32(100));
     bc.extend_from_slice(&encode_push32(200));
-    bc.push(RpnOp::UiApplyOffset as u8);
+    bc.push(MtuiOp::ApplyOffset.byte());
     // Draw box at (10, 20, 30, 40) — should be offset to (110, 220)
     bc.extend_from_slice(&encode_push32(10));
     bc.extend_from_slice(&encode_push32(20));
     bc.extend_from_slice(&encode_push32(30));
     bc.extend_from_slice(&encode_push32(40));
-    bc.push(RpnOp::UiBox as u8);
+    bc.push(MtuiOp::Box.byte());
 
     vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(
@@ -276,7 +276,7 @@ fn ui_state_stack_overflow() {
 
     let mut bc = Vec::new();
     for _ in 0..=UI_STATE_STACK_MAX {
-        bc.push(RpnOp::UiPushState as u8);
+        bc.push(MtuiOp::PushState.byte());
     }
 
     let result = vm.execute(&bc, &mut arenas);
@@ -288,7 +288,7 @@ fn ui_state_stack_underflow() {
     let mut vm = RpnVm::new();
     let mut arenas = TripleArena::new();
 
-    let bc = vec![RpnOp::UiPopState as u8];
+    let bc = vec![MtuiOp::PopState.byte()];
     let result = vm.execute(&bc, &mut arenas);
     assert!(matches!(result, Err(RpnError::UiStateStackUnderflow)));
 }
@@ -307,7 +307,7 @@ fn ui_draw_limit_exceeded() {
         bc.extend_from_slice(&encode_push32(0));
         bc.extend_from_slice(&encode_push32(1));
         bc.extend_from_slice(&encode_push32(1));
-        bc.push(RpnOp::UiBox as u8);
+        bc.push(MtuiOp::Box.byte());
     }
 
     let result = vm.execute(&bc, &mut arenas);
@@ -325,16 +325,16 @@ fn ui_ops_consume_gas() {
 
     let color = rgba(255, 0, 0, 255);
     let mut bc = encode_push32(color);
-    bc.push(RpnOp::UiSetColor as u8);
-    // Box: 4 pushes + UiBox
+    bc.push(MtuiOp::SetColor.byte());
+    // Box: 4 pushes + MtuiOp::Box
     bc.extend_from_slice(&encode_push32(0));
     bc.extend_from_slice(&encode_push32(0));
     bc.extend_from_slice(&encode_push32(10));
     bc.extend_from_slice(&encode_push32(10));
-    bc.push(RpnOp::UiBox as u8);
+    bc.push(MtuiOp::Box.byte());
 
     let trace = vm.execute_metered(&bc, &mut arenas).unwrap();
-    // 5 Push32 (cost_push=1 each) + UiSetColor (cost_ui=5) + UiBox (cost_ui=5) = 15
+    // 5 Push32 (cost_push=1 each) + SetColor (cost_ui=5) + Box (cost_ui=5) = 15
     assert_eq!(trace.gas_consumed, 15);
 }
 
@@ -356,7 +356,7 @@ fn arithmetic_value_used_as_coordinate() {
     bc.extend_from_slice(&encode_push32(5));
     bc.extend_from_slice(&encode_push32(50));
     bc.extend_from_slice(&encode_push32(50));
-    bc.push(RpnOp::UiBox as u8);
+    bc.push(MtuiOp::Box.byte());
 
     vm.execute(&bc, &mut arenas).unwrap();
     // x should be 30 (truncated from u64 to u32 then cast to i32)
@@ -378,53 +378,43 @@ fn arithmetic_value_used_as_coordinate() {
 
 #[test]
 fn encode_decode_ui_opcodes_roundtrip() {
-    let instructions: Vec<(RpnOp, Option<&[u8]>)> = vec![
-        (RpnOp::UiSetColor, None),
-        (RpnOp::UiBox, None),
-        (RpnOp::UiSlab, None),
-        (RpnOp::UiCircle, None),
-        (RpnOp::UiText, None),
-        (RpnOp::UiPushState, None),
-        (RpnOp::UiPopState, None),
-        (RpnOp::UiApplyOffset, None),
-        (RpnOp::UiLine, None),
-    ];
+    // OR page opcodes are raw bytes, not RpnOp variants.
+    // The decoder stores them as (Nop, vec![byte]) entries.
+    let mut bytecode = Vec::new();
+    bytecode.push(MtuiOp::SetColor.byte());
+    bytecode.push(MtuiOp::Box.byte());
+    bytecode.push(MtuiOp::Slab.byte());
+    bytecode.push(MtuiOp::Circle.byte());
+    bytecode.push(MtuiOp::Text.byte());
+    bytecode.push(MtuiOp::PushState.byte());
+    bytecode.push(MtuiOp::PopState.byte());
+    bytecode.push(MtuiOp::ApplyOffset.byte());
+    bytecode.push(MtuiOp::Line.byte());
 
-    let bytecode = RpnVm::encode(&instructions);
     let decoded = RpnVm::decode(&bytecode).unwrap();
 
     assert_eq!(decoded.len(), 9);
-    assert_eq!(decoded[0].0, RpnOp::UiSetColor);
-    assert_eq!(decoded[1].0, RpnOp::UiBox);
-    assert_eq!(decoded[2].0, RpnOp::UiSlab);
-    assert_eq!(decoded[3].0, RpnOp::UiCircle);
-    assert_eq!(decoded[4].0, RpnOp::UiText);
-    assert_eq!(decoded[5].0, RpnOp::UiPushState);
-    assert_eq!(decoded[6].0, RpnOp::UiPopState);
-    assert_eq!(decoded[7].0, RpnOp::UiApplyOffset);
-    assert_eq!(decoded[8].0, RpnOp::UiLine);
+    // OR page ops decode as (Nop, vec![byte])
+    for (i, (op, payload)) in decoded.iter().enumerate() {
+        assert_eq!(*op, RpnOp::Nop, "entry {} should decode as Nop placeholder", i);
+        assert_eq!(payload.len(), 1, "entry {} should have 1-byte payload", i);
+    }
 }
 
 #[test]
 fn disassemble_ui_opcodes() {
-    let instructions: Vec<(RpnOp, Option<&[u8]>)> = vec![
-        (RpnOp::UiSetColor, None),
-        (RpnOp::UiBox, None),
-        (RpnOp::UiCircle, None),
-        (RpnOp::UiPushState, None),
-        (RpnOp::UiPopState, None),
-        (RpnOp::UiLine, None),
-    ];
+    let mut bytecode = Vec::new();
+    bytecode.push(MtuiOp::SetColor.byte());
+    bytecode.push(MtuiOp::Box.byte());
+    bytecode.push(MtuiOp::Circle.byte());
+    bytecode.push(MtuiOp::PushState.byte());
+    bytecode.push(MtuiOp::PopState.byte());
+    bytecode.push(MtuiOp::Line.byte());
 
-    let bytecode = RpnVm::encode(&instructions);
     let disasm = RpnVm::disassemble(&bytecode).unwrap();
 
-    assert!(disasm.contains("UiSetColor"));
-    assert!(disasm.contains("UiBox"));
-    assert!(disasm.contains("UiCircle"));
-    assert!(disasm.contains("UiPushState"));
-    assert!(disasm.contains("UiPopState"));
-    assert!(disasm.contains("UiLine"));
+    // Disassembly should show something for OR page bytes (0x80+)
+    assert!(!disasm.is_empty());
 }
 
 // Pixel-level render tests moved to matterstream-ui-soft

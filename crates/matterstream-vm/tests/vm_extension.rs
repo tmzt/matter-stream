@@ -1,9 +1,9 @@
 //! Tests for VM extension: control registers, VQL0, and SKLL opcodes.
 
-use matterstream_vm::rpn::{RpnOp, RpnVm};
+use matterstream_vm::rpn::{RpnOp, RpnVm, SkllOp, VqlOp};
 use matterstream_vm::ui_vm::{
     VqlField, LlmUseCase, SkillStep,
-    CR_OUTPUT_MODE, FOURCC_MTUI, FOURCC_VQL0,
+    CR_OUTPUT_MODE, FOURCC_MTUI, FOURCC_VQL0, FOURCC_SKLL,
 };
 use matterstream_vm_arena::TripleArena;
 
@@ -15,6 +15,23 @@ fn make_vm_with_strings(strings: &[&str]) -> RpnVm {
     vm
 }
 
+/// Emit inline SetCR: [opcode][cr_idx: u8][value: u64 LE]
+fn emit_set_cr(bc: &mut Vec<u8>, cr_idx: u8, value: u64) {
+    bc.push(RpnOp::SetCR as u8);
+    bc.push(cr_idx);
+    bc.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push32(bc: &mut Vec<u8>, val: u32) {
+    bc.push(RpnOp::Push32 as u8);
+    bc.extend_from_slice(&val.to_le_bytes());
+}
+
+fn push64(bc: &mut Vec<u8>, val: u64) {
+    bc.push(RpnOp::Push64 as u8);
+    bc.extend_from_slice(&val.to_le_bytes());
+}
+
 // ── Control Register tests ──────────────────────────────────────────────
 
 #[test]
@@ -22,13 +39,10 @@ fn test_set_cr_output_mode() {
     let mut vm = RpnVm::new();
     let mut arena = TripleArena::new();
 
-    // SetCR: push cr_index=0, push value=FOURCC_VQL0, SetCR
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),       // cr_index = 0
-        (RpnOp::Push32, Some(&FOURCC_VQL0.to_le_bytes())), // value
-        (RpnOp::SetCR, None),
-        (RpnOp::Halt, None),
-    ]);
+    // SetCR: inline cr_index=0, value=FOURCC_VQL0
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_VQL0 as u64);
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     assert_eq!(vm.cr_bank[CR_OUTPUT_MODE], FOURCC_VQL0);
@@ -39,11 +53,9 @@ fn test_set_cr_invalid_index() {
     let mut vm = RpnVm::new();
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::Push32, Some(&99u32.to_le_bytes())),  // invalid index
-        (RpnOp::Push32, Some(&42u32.to_le_bytes())),
-        (RpnOp::SetCR, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 99, 42);
+    bytecode.push(RpnOp::Halt as u8);
 
     let result = vm.execute(&bytecode, &mut arena);
     assert!(result.is_err());
@@ -55,17 +67,14 @@ fn test_cr_resets_on_execute() {
     let mut arena = TripleArena::new();
 
     // Set CR0 to VQL0
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::Push32, Some(&FOURCC_VQL0.to_le_bytes())),
-        (RpnOp::SetCR, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_VQL0 as u64);
+    bytecode.push(RpnOp::Halt as u8);
     vm.execute(&bytecode, &mut arena).unwrap();
     assert_eq!(vm.cr_bank[CR_OUTPUT_MODE], FOURCC_VQL0);
 
     // Execute again — should reset to MTUI
-    let bytecode2 = RpnVm::encode(&[(RpnOp::Halt, None)]);
+    let bytecode2 = vec![RpnOp::Halt as u8];
     vm.execute(&bytecode2, &mut arena).unwrap();
     assert_eq!(vm.cr_bank[CR_OUTPUT_MODE], FOURCC_MTUI);
 }
@@ -78,17 +87,17 @@ fn test_vql_basic_query() {
     let mut vm = make_vm_with_strings(&["email", "active"]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::VqlBeginQuery, None),
-        // VqlProject "email" (str_idx=0)
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::VqlProject, None),
-        // VqlFilter "active" (str_idx=1)
-        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
-        (RpnOp::VqlFilter, None),
-        (RpnOp::VqlEndQuery, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_VQL0 as u64);
+    bytecode.push(VqlOp::BeginQuery.byte());
+    // VqlProject "email" (str_idx=0)
+    push32(&mut bytecode, 0);
+    bytecode.push(VqlOp::Project.byte());
+    // VqlFilter "active" (str_idx=1)
+    push32(&mut bytecode, 1);
+    bytecode.push(VqlOp::Filter.byte());
+    bytecode.push(VqlOp::EndQuery.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     assert_eq!(vm.vql_outputs.len(), 1);
@@ -103,19 +112,19 @@ fn test_vql_bind_and_param() {
     let mut vm = make_vm_with_strings(&["role", "admin", "limit", "100"]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::VqlBeginQuery, None),
-        // VqlBind "role" = "admin"
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
-        (RpnOp::VqlBind, None),
-        // VqlParam "limit" = "100"
-        (RpnOp::Push32, Some(&2u32.to_le_bytes())),
-        (RpnOp::Push32, Some(&3u32.to_le_bytes())),
-        (RpnOp::VqlParam, None),
-        (RpnOp::VqlEndQuery, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_VQL0 as u64);
+    bytecode.push(VqlOp::BeginQuery.byte());
+    // VqlBind "role" = "admin"
+    push32(&mut bytecode, 0);
+    push32(&mut bytecode, 1);
+    bytecode.push(VqlOp::Bind.byte());
+    // VqlParam "limit" = "100"
+    push32(&mut bytecode, 2);
+    push32(&mut bytecode, 3);
+    bytecode.push(VqlOp::Param.byte());
+    bytecode.push(VqlOp::EndQuery.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     assert_eq!(vm.vql_outputs.len(), 1);
@@ -134,15 +143,15 @@ fn test_vql_set_field_numeric() {
     let mut vm = make_vm_with_strings(&["count"]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::VqlBeginQuery, None),
-        // VqlSetField "count" = 42
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),  // name_idx
-        (RpnOp::Push64, Some(&42u64.to_le_bytes())),  // value
-        (RpnOp::VqlSetField, None),
-        (RpnOp::VqlEndQuery, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_VQL0 as u64);
+    bytecode.push(VqlOp::BeginQuery.byte());
+    // VqlSetField "count" = 42
+    push32(&mut bytecode, 0);  // name_idx
+    push64(&mut bytecode, 42);  // value
+    bytecode.push(VqlOp::SetField.byte());
+    bytecode.push(VqlOp::EndQuery.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     assert_eq!(
@@ -156,10 +165,11 @@ fn test_vql_no_active_query_error() {
     let mut vm = make_vm_with_strings(&["x"]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::VqlProject, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_VQL0 as u64);
+    push32(&mut bytecode, 0);
+    bytecode.push(VqlOp::Project.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     assert!(vm.execute(&bytecode, &mut arena).is_err());
 }
@@ -169,17 +179,17 @@ fn test_vql_multiple_queries() {
     let mut vm = make_vm_with_strings(&["a", "b"]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::VqlBeginQuery, None),
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::VqlProject, None),
-        (RpnOp::VqlEndQuery, None),
-        (RpnOp::VqlBeginQuery, None),
-        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
-        (RpnOp::VqlProject, None),
-        (RpnOp::VqlEndQuery, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_VQL0 as u64);
+    bytecode.push(VqlOp::BeginQuery.byte());
+    push32(&mut bytecode, 0);
+    bytecode.push(VqlOp::Project.byte());
+    bytecode.push(VqlOp::EndQuery.byte());
+    bytecode.push(VqlOp::BeginQuery.byte());
+    push32(&mut bytecode, 1);
+    bytecode.push(VqlOp::Project.byte());
+    bytecode.push(VqlOp::EndQuery.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     assert_eq!(vm.vql_outputs.len(), 2);
@@ -193,19 +203,19 @@ fn test_skill_basic() {
     let mut vm = make_vm_with_strings(&["onboard", "validate", "provision"]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        // SkillBegin "onboard" (str_idx=0)
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::SkillBegin, None),
-        // SkillStep "validate" (str_idx=1)
-        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
-        (RpnOp::SkillStep, None),
-        // SkillStep "provision" (str_idx=2)
-        (RpnOp::Push32, Some(&2u32.to_le_bytes())),
-        (RpnOp::SkillStep, None),
-        (RpnOp::SkillEnd, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
+    // SkillBegin "onboard" (str_idx=0)
+    push32(&mut bytecode, 0);
+    bytecode.push(SkllOp::Begin.byte());
+    // SkillStep "validate" (str_idx=1)
+    push32(&mut bytecode, 1);
+    bytecode.push(SkllOp::Step.byte());
+    // SkillStep "provision" (str_idx=2)
+    push32(&mut bytecode, 2);
+    bytecode.push(SkllOp::Step.byte());
+    bytecode.push(SkllOp::End.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     assert_eq!(vm.skill_outputs.len(), 1);
@@ -228,19 +238,19 @@ fn test_skill_llm_step_with_replaceables() {
     ]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::SkillBegin, None),
-        // LlmStep with prompt
-        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
-        (RpnOp::SkillLlmStep, None),
-        // Replaceable: name="user", default="Unknown"
-        (RpnOp::Push32, Some(&2u32.to_le_bytes())),
-        (RpnOp::Push32, Some(&3u32.to_le_bytes())),
-        (RpnOp::SkillReplaceable, None),
-        (RpnOp::SkillEnd, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
+    push32(&mut bytecode, 0);
+    bytecode.push(SkllOp::Begin.byte());
+    // LlmStep with prompt
+    push32(&mut bytecode, 1);
+    bytecode.push(SkllOp::LlmStep.byte());
+    // Replaceable: name="user", default="Unknown"
+    push32(&mut bytecode, 2);
+    push32(&mut bytecode, 3);
+    bytecode.push(SkllOp::Replaceable.byte());
+    bytecode.push(SkllOp::End.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     assert_eq!(vm.skill_outputs.len(), 1);
@@ -264,21 +274,21 @@ fn test_skill_llm_with_model_and_use_case() {
     let mut vm = make_vm_with_strings(&["classify", "Classify this", "claude-haiku"]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::SkillBegin, None),
-        // LlmStep
-        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
-        (RpnOp::SkillLlmStep, None),
-        // Set model
-        (RpnOp::Push32, Some(&2u32.to_le_bytes())),
-        (RpnOp::SkillLlmModel, None),
-        // Set use case = Routing (1)
-        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
-        (RpnOp::SkillLlmUseCase, None),
-        (RpnOp::SkillEnd, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
+    push32(&mut bytecode, 0);
+    bytecode.push(SkllOp::Begin.byte());
+    // LlmStep
+    push32(&mut bytecode, 1);
+    bytecode.push(SkllOp::LlmStep.byte());
+    // Set model
+    push32(&mut bytecode, 2);
+    bytecode.push(SkllOp::LlmModel.byte());
+    // Set use case = Routing (1)
+    push32(&mut bytecode, 1);
+    bytecode.push(SkllOp::LlmUseCase.byte());
+    bytecode.push(SkllOp::End.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     match &vm.skill_outputs[0].steps[0] {
@@ -295,14 +305,14 @@ fn test_skill_invoke_action() {
     let mut vm = make_vm_with_strings(&["my_skill", "send_email"]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::SkillBegin, None),
-        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
-        (RpnOp::SkillInvoke, None),
-        (RpnOp::SkillEnd, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
+    push32(&mut bytecode, 0);
+    bytecode.push(SkllOp::Begin.byte());
+    push32(&mut bytecode, 1);
+    bytecode.push(SkllOp::Invoke.byte());
+    bytecode.push(SkllOp::End.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     assert_eq!(
@@ -316,14 +326,14 @@ fn test_skill_invoke_symbol() {
     let mut vm = make_vm_with_strings(&["my_skill"]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::SkillBegin, None),
-        (RpnOp::Push32, Some(&0x42u32.to_le_bytes())),
-        (RpnOp::SkillInvokeSymbol, None),
-        (RpnOp::SkillEnd, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
+    push32(&mut bytecode, 0);
+    bytecode.push(SkllOp::Begin.byte());
+    push32(&mut bytecode, 0x42);
+    bytecode.push(SkllOp::InvokeSymbol.byte());
+    bytecode.push(SkllOp::End.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     assert_eq!(
@@ -337,10 +347,11 @@ fn test_skill_no_active_def_error() {
     let mut vm = make_vm_with_strings(&["x"]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::SkillStep, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
+    push32(&mut bytecode, 0);
+    bytecode.push(SkllOp::Step.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     assert!(vm.execute(&bytecode, &mut arena).is_err());
 }
@@ -353,27 +364,27 @@ fn test_skill_mixed_steps() {
     ]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::SkillBegin, None),
-        // Deterministic step "fetch"
-        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
-        (RpnOp::SkillStep, None),
-        // LLM step with replaceable
-        (RpnOp::Push32, Some(&2u32.to_le_bytes())),
-        (RpnOp::SkillLlmStep, None),
-        (RpnOp::Push32, Some(&3u32.to_le_bytes())),
-        (RpnOp::Push32, Some(&4u32.to_le_bytes())),
-        (RpnOp::SkillReplaceable, None),
-        // Use case = DeepResearch (3)
-        (RpnOp::Push32, Some(&3u32.to_le_bytes())),
-        (RpnOp::SkillLlmUseCase, None),
-        // Deterministic step "store" — should flush LLM step first
-        (RpnOp::Push32, Some(&5u32.to_le_bytes())),
-        (RpnOp::SkillStep, None),
-        (RpnOp::SkillEnd, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
+    push32(&mut bytecode, 0);
+    bytecode.push(SkllOp::Begin.byte());
+    // Deterministic step "fetch"
+    push32(&mut bytecode, 1);
+    bytecode.push(SkllOp::Step.byte());
+    // LLM step with replaceable
+    push32(&mut bytecode, 2);
+    bytecode.push(SkllOp::LlmStep.byte());
+    push32(&mut bytecode, 3);
+    push32(&mut bytecode, 4);
+    bytecode.push(SkllOp::Replaceable.byte());
+    // Use case = DeepResearch (3)
+    push32(&mut bytecode, 3);
+    bytecode.push(SkllOp::LlmUseCase.byte());
+    // Deterministic step "store" — should flush LLM step first
+    push32(&mut bytecode, 5);
+    bytecode.push(SkllOp::Step.byte());
+    bytecode.push(SkllOp::End.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     assert_eq!(vm.skill_outputs[0].steps.len(), 3);
@@ -405,28 +416,28 @@ fn test_nested_skills() {
     ]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        // Begin parent skill
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::SkillBegin, None),
-        (RpnOp::Push32, Some(&3u32.to_le_bytes())),
-        (RpnOp::SkillStep, None),
-        // Nested: child_a
-        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
-        (RpnOp::SkillBegin, None),
-        (RpnOp::Push32, Some(&4u32.to_le_bytes())),
-        (RpnOp::SkillStep, None),
-        (RpnOp::SkillEnd, None),
-        // Nested: child_b
-        (RpnOp::Push32, Some(&2u32.to_le_bytes())),
-        (RpnOp::SkillBegin, None),
-        (RpnOp::Push32, Some(&5u32.to_le_bytes())),
-        (RpnOp::SkillStep, None),
-        (RpnOp::SkillEnd, None),
-        // End parent skill
-        (RpnOp::SkillEnd, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
+    // Begin parent skill
+    push32(&mut bytecode, 0);
+    bytecode.push(SkllOp::Begin.byte());
+    push32(&mut bytecode, 3);
+    bytecode.push(SkllOp::Step.byte());
+    // Nested: child_a
+    push32(&mut bytecode, 1);
+    bytecode.push(SkllOp::Begin.byte());
+    push32(&mut bytecode, 4);
+    bytecode.push(SkllOp::Step.byte());
+    bytecode.push(SkllOp::End.byte());
+    // Nested: child_b
+    push32(&mut bytecode, 2);
+    bytecode.push(SkllOp::Begin.byte());
+    push32(&mut bytecode, 5);
+    bytecode.push(SkllOp::Step.byte());
+    bytecode.push(SkllOp::End.byte());
+    // End parent skill
+    bytecode.push(SkllOp::End.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     // Should have 3 skills: child_a, child_b, parent (in order of SkillEnd)
@@ -445,19 +456,19 @@ fn test_sibling_skills() {
     let mut vm = make_vm_with_strings(&["alpha", "beta", "s1", "s2"]);
     let mut arena = TripleArena::new();
 
-    let bytecode = RpnVm::encode(&[
-        (RpnOp::Push32, Some(&0u32.to_le_bytes())),
-        (RpnOp::SkillBegin, None),
-        (RpnOp::Push32, Some(&2u32.to_le_bytes())),
-        (RpnOp::SkillStep, None),
-        (RpnOp::SkillEnd, None),
-        (RpnOp::Push32, Some(&1u32.to_le_bytes())),
-        (RpnOp::SkillBegin, None),
-        (RpnOp::Push32, Some(&3u32.to_le_bytes())),
-        (RpnOp::SkillStep, None),
-        (RpnOp::SkillEnd, None),
-        (RpnOp::Halt, None),
-    ]);
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
+    push32(&mut bytecode, 0);
+    bytecode.push(SkllOp::Begin.byte());
+    push32(&mut bytecode, 2);
+    bytecode.push(SkllOp::Step.byte());
+    bytecode.push(SkllOp::End.byte());
+    push32(&mut bytecode, 1);
+    bytecode.push(SkllOp::Begin.byte());
+    push32(&mut bytecode, 3);
+    bytecode.push(SkllOp::Step.byte());
+    bytecode.push(SkllOp::End.byte());
+    bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
     assert_eq!(vm.skill_outputs.len(), 2);

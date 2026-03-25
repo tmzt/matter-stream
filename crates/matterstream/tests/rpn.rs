@@ -2,7 +2,7 @@
 
 use matterstream::arena::TripleArena;
 use matterstream::ova::ArenaId;
-use matterstream::rpn::{GasConfig, RpnError, RpnOp, RpnVm};
+use matterstream::rpn::{GasConfig, RpnError, RpnOp, RpnVm, SystemCallOp, SECURITY_INTERNAL};
 
 fn encode_push32(val: u32) -> Vec<u8> {
     let mut buf = vec![RpnOp::Push32 as u8];
@@ -153,10 +153,14 @@ fn dup_and_swap() {
 #[test]
 fn sync_swaps_arenas() {
     let mut vm = RpnVm::new();
+    vm.cr_bank[1] = SECURITY_INTERNAL as u32;
     let mut arenas = TripleArena::new();
     assert_eq!(arenas.active_arena(), ArenaId::DynamicA);
 
-    let bc = vec![RpnOp::Sync as u8];
+    let mut bc = Vec::new();
+    bc.push(RpnOp::SystemCall as u8);
+    bc.extend_from_slice(&(SystemCallOp::Sync as u64).to_le_bytes());
+    bc.extend_from_slice(&0u64.to_le_bytes());
     vm.execute(&bc, &mut arenas).unwrap();
 
     assert!(vm.synced);
@@ -192,13 +196,13 @@ fn map_new_set_get() {
     let mut vm = RpnVm::new();
     let mut arenas = TripleArena::new();
 
-    // MapNew, Push key 1, Push value 99, MapSet, Push key 1, MapGet
-    let mut bc = vec![RpnOp::MapNew as u8];
+    // DictNew, Push key 1, Push value 99, DictSet, Push key 1, DictGet
+    let mut bc = vec![RpnOp::DictNew as u8];
     bc.extend_from_slice(&encode_push64(1)); // key
     bc.extend_from_slice(&encode_push64(99)); // value
-    bc.push(RpnOp::MapSet as u8);
+    bc.push(RpnOp::DictSet as u8);
     bc.extend_from_slice(&encode_push64(1)); // key
-    bc.push(RpnOp::MapGet as u8);
+    bc.push(RpnOp::DictGet as u8);
 
     vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(vm.stack.len(), 1);
@@ -220,9 +224,9 @@ fn invalid_opcode_rejected() {
     let mut vm = RpnVm::new();
     let mut arenas = TripleArena::new();
 
-    let bc = vec![0xFF]; // invalid opcode
+    let bc = vec![0x1F]; // invalid opcode (gap in universal range)
     let result = vm.execute(&bc, &mut arenas);
-    assert!(matches!(result, Err(RpnError::InvalidOpcode(0xFF))));
+    assert!(matches!(result, Err(RpnError::InvalidOpcode(0x1F))));
 }
 
 #[test]
@@ -234,18 +238,16 @@ fn encode_decode_bytecode_roundtrip() {
         (RpnOp::Push64, Some(&push64_bytes)),
         (RpnOp::Add, None),
         (RpnOp::Nop, None),
-        (RpnOp::Sync, None),
     ];
 
     let bytecode = RpnVm::encode(&instructions);
     let decoded = RpnVm::decode(&bytecode).unwrap();
 
-    assert_eq!(decoded.len(), 5);
+    assert_eq!(decoded.len(), 4);
     assert_eq!(decoded[0].0, RpnOp::Push32);
     assert_eq!(decoded[1].0, RpnOp::Push64);
     assert_eq!(decoded[2].0, RpnOp::Add);
     assert_eq!(decoded[3].0, RpnOp::Nop);
-    assert_eq!(decoded[4].0, RpnOp::Sync);
 }
 
 #[test]
@@ -300,11 +302,15 @@ fn gas_exhaustion_error() {
 #[test]
 fn gas_sync_costs_more() {
     let mut vm = RpnVm::new();
+    vm.cr_bank[1] = SECURITY_INTERNAL as u32;
     let mut arenas = TripleArena::new();
 
-    let bc = vec![RpnOp::Sync as u8];
+    let mut bc = Vec::new();
+    bc.push(RpnOp::SystemCall as u8);
+    bc.extend_from_slice(&(SystemCallOp::Sync as u64).to_le_bytes());
+    bc.extend_from_slice(&0u64.to_le_bytes());
     let trace = vm.execute_metered(&bc, &mut arenas).unwrap();
-    assert_eq!(trace.gas_consumed, vm.gas.cost_sync); // 100
+    assert_eq!(trace.gas_consumed, vm.gas.cost_system_call); // SystemCall wraps Sync
     assert_eq!(trace.syncs, 1);
 }
 

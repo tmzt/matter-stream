@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use matterstream_packaging::archive::{ArchiveMember, MtsmArchive};
 use matterstream_packaging::tkv::{TkvDocument, TkvValue};
-use matterstream_vm::rpn::{RpnOp, RpnVm};
+use matterstream_vm::rpn::{MtuiOp, RpnOp, RpnVm, UserCallOp};
 use matterstream_vm_addressing::fqa::{Fqa, FourCC, Ordinal};
 use matterstream_vm_addressing::oid::{ImportKind, Oid};
 use matterstream_vm_addressing::oid_index::OidIndexBuilder;
@@ -27,9 +27,15 @@ fn push32(bc: &mut Vec<u8>, val: u32) {
 }
 
 fn oid_push(bc: &mut Vec<u8>, oid: Oid) {
-    bc.push(RpnOp::OidPush as u8);
+    bc.push(RpnOp::Push128 as u8);
     bc.extend_from_slice(&oid.lo.to_le_bytes());
     bc.extend_from_slice(&oid.hi.to_le_bytes());
+}
+
+fn emit_oid_import(bc: &mut Vec<u8>) {
+    bc.push(RpnOp::UserCall as u8);
+    bc.extend_from_slice(&(UserCallOp::OidImport as u64).to_le_bytes());
+    bc.extend_from_slice(&0u64.to_le_bytes());
 }
 
 use matterstream_common::rgba;
@@ -99,60 +105,60 @@ fn main() {
 
         // Background
         push32(&mut bc, rgba(15, 15, 25, 255));
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [0u32, 0, 400, 300] { push32(&mut bc, val); }
-        bc.push(RpnOp::UiBox as u8);
+        bc.push(MtuiOp::Box.byte());
 
         // Title bar
         push32(&mut bc, rgba(40, 40, 80, 255));
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [0u32, 0, 400, 40, 0] { push32(&mut bc, val); }
-        bc.push(RpnOp::UiSlab as u8);
+        bc.push(MtuiOp::Slab.byte());
 
         // Title text
         push32(&mut bc, rgba(255, 255, 255, 255));
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [12u32, 12, 20, 0] { push32(&mut bc, val); }
-        bc.push(RpnOp::UiTextStr as u8);
+        bc.push(MtuiOp::TextStr.byte());
 
         // Import Button via OID
         oid_push(&mut bc, button_oid);
-        bc.push(RpnOp::OidImport as u8);
+        emit_oid_import(&mut bc);
         bc.push(RpnOp::Drop as u8);
 
         // Draw button (simulating resolved import)
         push32(&mut bc, rgba(26, 26, 46, 255));
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [20u32, 55, 360, 55, 12] { push32(&mut bc, val); }
-        bc.push(RpnOp::UiSlab as u8);
+        bc.push(MtuiOp::Slab.byte());
 
         push32(&mut bc, rgba(50, 100, 255, 255));
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [24u32, 59, 352, 47, 10] { push32(&mut bc, val); }
-        bc.push(RpnOp::UiSlab as u8);
+        bc.push(MtuiOp::Slab.byte());
 
         // Button label
         push32(&mut bc, rgba(255, 255, 255, 255));
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [40u32, 72, 16, 1] { push32(&mut bc, val); }
-        bc.push(RpnOp::UiTextStr as u8);
+        bc.push(MtuiOp::TextStr.byte());
 
         // Import Label via OID
         oid_push(&mut bc, label_oid);
-        bc.push(RpnOp::OidImport as u8);
+        emit_oid_import(&mut bc);
         bc.push(RpnOp::Drop as u8);
 
         // Status text
         push32(&mut bc, rgba(0, 255, 136, 255));
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [20u32, 122, 14, 2] { push32(&mut bc, val); }
-        bc.push(RpnOp::UiTextStr as u8);
+        bc.push(MtuiOp::TextStr.byte());
 
         // Divider
         push32(&mut bc, rgba(80, 80, 120, 255));
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [20u32, 145, 380, 145] { push32(&mut bc, val); }
-        bc.push(RpnOp::UiLine as u8);
+        bc.push(MtuiOp::Line.byte());
 
         // Bottom cards with labels
         for i in 0..3u32 {
@@ -160,14 +166,14 @@ fn main() {
             let g = 80 + i * 30;
             let b = 120 + i * 20;
             push32(&mut bc, rgba(r as u8, g as u8, b as u8, 200));
-            bc.push(RpnOp::UiSetColor as u8);
+            bc.push(MtuiOp::SetColor.byte());
             for val in [20 + i * 125, 160u32, 115, 120, 8] { push32(&mut bc, val); }
-            bc.push(RpnOp::UiSlab as u8);
+            bc.push(MtuiOp::Slab.byte());
 
             push32(&mut bc, rgba(255, 255, 255, 220));
-            bc.push(RpnOp::UiSetColor as u8);
+            bc.push(MtuiOp::SetColor.byte());
             for val in [30 + i * 125, 175u32, 12, 3 + i] { push32(&mut bc, val); }
-            bc.push(RpnOp::UiTextStr as u8);
+            bc.push(MtuiOp::TextStr.byte());
         }
 
         bc.push(RpnOp::Halt as u8);
@@ -213,8 +219,8 @@ fn main() {
     vm.execute(consumer_code, &mut arenas).unwrap();
 
     println!("Executed: VM ran consumer bytecode successfully");
-    println!("Button OID {} resolved ✓", button_oid);
-    println!("Label OID {} resolved ✓", label_oid);
+    println!("Button OID {} resolved", button_oid);
+    println!("Label OID {} resolved", label_oid);
 
     // With ui feature, verify draw commands
     #[cfg(feature = "ui-softbuffer")]

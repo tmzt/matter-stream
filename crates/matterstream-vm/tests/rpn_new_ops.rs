@@ -2,7 +2,7 @@
 
 use matterstream_vm::event::{VmEvent, VmEventType};
 use matterstream_vm::rpn::{
-    RpnError, RpnOp, RpnVm, BANK_INT, BANK_ZERO_PAGE,
+    RpnError, RpnOp, RpnVm, UserCallOp, BANK_INT, BANK_ZERO_PAGE,
 };
 use matterstream_vm_arena::TripleArena;
 
@@ -15,6 +15,13 @@ fn run(bytecode: &[u8]) -> RpnVm {
     let mut arenas = TripleArena::new();
     vm.execute(bytecode, &mut arenas).unwrap();
     vm
+}
+
+/// Emit a UserCall instruction with the given sub-op and data=0.
+fn emit_user_call(bc: &mut Vec<u8>, action: UserCallOp) {
+    bc.push(RpnOp::UserCall as u8);
+    bc.extend_from_slice(&(action as u64).to_le_bytes());
+    bc.extend_from_slice(&0u64.to_le_bytes());
 }
 
 // ── Bitwise operations ──
@@ -221,11 +228,13 @@ fn test_invalid_bank_slot() {
     ));
 }
 
-// ── Event opcodes ──
+// ── Event opcodes (now UserCall sub-ops) ──
 
 #[test]
 fn test_ev_poll_empty() {
-    let bc = encode(&[(RpnOp::EvPoll, None)]);
+    let mut bc = Vec::new();
+    emit_user_call(&mut bc, UserCallOp::EvPoll);
+    bc.push(RpnOp::Halt as u8);
     let vm = run(&bc);
     // Should push (type=0, data=0) — type on top
     assert_eq!(vm.stack.len(), 2);
@@ -239,7 +248,9 @@ fn test_ev_poll_with_event() {
     let mut arenas = TripleArena::new();
     vm.event_queue.push_back(VmEvent::key_down(32)); // space
 
-    let bc = encode(&[(RpnOp::EvPoll, None)]);
+    let mut bc = Vec::new();
+    emit_user_call(&mut bc, UserCallOp::EvPoll);
+    bc.push(RpnOp::Halt as u8);
     vm.execute(&bc, &mut arenas).unwrap();
 
     assert_eq!(vm.stack.len(), 2);
@@ -253,13 +264,17 @@ fn test_ev_has_event() {
     let mut arenas = TripleArena::new();
 
     // No events → 0
-    let bc = encode(&[(RpnOp::EvHasEvent, None)]);
+    let mut bc = Vec::new();
+    emit_user_call(&mut bc, UserCallOp::EvHasEvent);
+    bc.push(RpnOp::Halt as u8);
     vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(vm.stack[0].as_u64(), Some(0));
 
     // Add event → 1
     vm.event_queue.push_back(VmEvent::tick(16));
-    let bc2 = encode(&[(RpnOp::EvHasEvent, None)]);
+    let mut bc2 = Vec::new();
+    emit_user_call(&mut bc2, UserCallOp::EvHasEvent);
+    bc2.push(RpnOp::Halt as u8);
     vm.execute(&bc2, &mut arenas).unwrap();
     assert_eq!(vm.stack[0].as_u64(), Some(1));
 }
@@ -270,7 +285,9 @@ fn test_frame_count() {
     let mut arenas = TripleArena::new();
     vm.frame_count = 123;
 
-    let bc = encode(&[(RpnOp::FrameCount, None)]);
+    let mut bc = Vec::new();
+    emit_user_call(&mut bc, UserCallOp::FrameCount);
+    bc.push(RpnOp::Halt as u8);
     vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(vm.stack[0].as_u64(), Some(123));
 }
@@ -280,10 +297,11 @@ fn test_rand() {
     let mut vm = RpnVm::new();
     let mut arenas = TripleArena::new();
 
-    let bc = encode(&[
-        (RpnOp::Push32, Some(&100u32.to_le_bytes())),
-        (RpnOp::Rand, None),
-    ]);
+    let mut bc = Vec::new();
+    bc.push(RpnOp::Push32 as u8);
+    bc.extend_from_slice(&100u32.to_le_bytes());
+    emit_user_call(&mut bc, UserCallOp::Rand);
+    bc.push(RpnOp::Halt as u8);
     vm.execute(&bc, &mut arenas).unwrap();
 
     let val = vm.stack[0].as_u32().unwrap();
@@ -293,10 +311,11 @@ fn test_rand() {
 #[test]
 fn test_rand_deterministic() {
     // Two VMs with same seed should produce same result
-    let bc = encode(&[
-        (RpnOp::Push32, Some(&1000u32.to_le_bytes())),
-        (RpnOp::Rand, None),
-    ]);
+    let mut bc = Vec::new();
+    bc.push(RpnOp::Push32 as u8);
+    bc.extend_from_slice(&1000u32.to_le_bytes());
+    emit_user_call(&mut bc, UserCallOp::Rand);
+    bc.push(RpnOp::Halt as u8);
 
     let vm1 = run(&bc);
     let vm2 = run(&bc);

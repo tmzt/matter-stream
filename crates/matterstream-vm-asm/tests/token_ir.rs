@@ -1,6 +1,7 @@
 //! Tests that IR tokens are typed (no strings), and IDs are opaque.
 
 use matterstream_vm_asm::{Asm, LabelId, GlobalId, StringId};
+use matterstream_vm::rpn::RpnOp;
 
 #[test]
 fn test_label_ids_are_sequential() {
@@ -62,7 +63,7 @@ fn test_minimal_program() {
     asm.halt();
     let output = asm.finish().unwrap();
     assert_eq!(output.bytecode.len(), 1);
-    assert_eq!(output.bytecode[0], 0x15); // Halt opcode
+    assert_eq!(output.bytecode[0], RpnOp::Halt as u8); // Halt opcode (0x0D in msm1)
 }
 
 #[test]

@@ -8,7 +8,7 @@ use matterstream::dmove::{DmoveDescriptor, DmoveEngine, DmoveSource};
 use matterstream::fqa::{Fqa, FourCC, Ordinal};
 use matterstream::keyless::{EntropyClass, KeylessPolicy};
 use matterstream::ova::{ArenaId, Ova, MAX_GEN, MAX_OBJECT, MAX_OFFSET};
-use matterstream::rpn::{RpnOp, RpnVm};
+use matterstream::rpn::{RpnOp, RpnVm, SystemCallOp};
 use matterstream::scl::{shannon_entropy, Scl, SclConfig, SclVerdict};
 use matterstream::tkv::{TkvDocument, TkvValue};
 
@@ -678,20 +678,20 @@ fn rpn_map_many_entries() {
     let mut vm = RpnVm::new();
     let mut arenas = TripleArena::new();
 
-    let mut bc = vec![RpnOp::MapNew as u8];
+    let mut bc = vec![RpnOp::DictNew as u8];
     for i in 0u64..50 {
         // Push key, push value, MapSet
         bc.push(RpnOp::Push64 as u8);
         bc.extend_from_slice(&i.to_le_bytes());
         bc.push(RpnOp::Push64 as u8);
         bc.extend_from_slice(&(i * 100).to_le_bytes());
-        bc.push(RpnOp::MapSet as u8);
+        bc.push(RpnOp::DictSet as u8);
     }
 
     // Append a MapGet for key 25 to verify
     bc.push(RpnOp::Push64 as u8);
     bc.extend_from_slice(&25u64.to_le_bytes());
-    bc.push(RpnOp::MapGet as u8);
+    bc.push(RpnOp::DictGet as u8);
 
     vm.execute(&bc, &mut arenas).unwrap();
     assert_eq!(vm.stack.last().unwrap().as_u64().unwrap(), 2500);
@@ -720,11 +720,14 @@ fn rpn_swap_stress() {
 #[test]
 fn rpn_multiple_syncs() {
     let mut vm = RpnVm::new();
+    vm.cr_bank[1] = matterstream::rpn::SECURITY_INTERNAL as u32;
     let mut arenas = TripleArena::new();
 
     let mut bc = Vec::new();
     for _ in 0..10 {
-        bc.push(RpnOp::Sync as u8);
+        bc.push(RpnOp::SystemCall as u8);
+        bc.extend_from_slice(&(SystemCallOp::Sync as u64).to_le_bytes());
+        bc.extend_from_slice(&0u64.to_le_bytes());
     }
 
     vm.execute(&bc, &mut arenas).unwrap();

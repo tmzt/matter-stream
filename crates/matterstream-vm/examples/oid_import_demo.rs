@@ -12,7 +12,7 @@
 
 use matterstream_packaging::archive::{ArchiveMember, MtsmArchive};
 use matterstream_packaging::tkv::{TkvDocument, TkvValue};
-use matterstream_vm::rpn::{NativeHookFn, RpnError, RpnOp, RpnValue, RpnVm};
+use matterstream_vm::rpn::{MtuiOp, NativeHookFn, RpnError, RpnOp, RpnValue, RpnVm, UserCallOp};
 use matterstream_vm_addressing::fqa::{Fqa, FourCC, Ordinal};
 use matterstream_vm_addressing::oid::{ImportKind, Oid};
 use matterstream_vm_addressing::oid_index::OidIndexBuilder;
@@ -24,9 +24,9 @@ fn push32(bc: &mut Vec<u8>, val: u32) {
     bc.extend_from_slice(&val.to_le_bytes());
 }
 
-/// Helper: encode an OidPush instruction.
+/// Helper: encode a Push128 instruction for an OID.
 fn oid_push(bc: &mut Vec<u8>, oid: Oid) {
-    bc.push(RpnOp::OidPush as u8);
+    bc.push(RpnOp::Push128 as u8);
     bc.extend_from_slice(&oid.lo.to_le_bytes());
     bc.extend_from_slice(&oid.hi.to_le_bytes());
 }
@@ -54,11 +54,11 @@ fn main() {
         let mut bc = Vec::new();
         let blue = matterstream_common::rgba(50, 100, 255, 255);
         push32(&mut bc, blue);
-        bc.push(RpnOp::UiSetColor as u8);
+        bc.push(MtuiOp::SetColor.byte());
         for val in [0u32, 0, 200, 100, 12] {
             push32(&mut bc, val);
         }
-        bc.push(RpnOp::UiSlab as u8);
+        bc.push(MtuiOp::Slab.byte());
         bc.push(RpnOp::Halt as u8);
         bc
     };
@@ -89,7 +89,9 @@ fn main() {
         let mut bc = Vec::new();
         // Import the Button component via OID → pushes FQA onto stack
         oid_push(&mut bc, button_oid);
-        bc.push(RpnOp::OidCall as u8);
+        bc.push(RpnOp::UserCall as u8);
+        bc.extend_from_slice(&(UserCallOp::OidCall as u64).to_le_bytes());
+        bc.extend_from_slice(&0u64.to_le_bytes());
         bc.push(RpnOp::Halt as u8);
         bc
     };
@@ -181,7 +183,9 @@ fn main() {
     // ══════════════════════════════════════════════════════════════════════
     let mut hook_bc = Vec::new();
     oid_push(&mut hook_bc, native_hook_oid);
-    hook_bc.push(RpnOp::OidCall as u8);
+    hook_bc.push(RpnOp::UserCall as u8);
+    hook_bc.extend_from_slice(&(UserCallOp::OidCall as u64).to_le_bytes());
+    hook_bc.extend_from_slice(&0u64.to_le_bytes());
     hook_bc.push(RpnOp::Halt as u8);
 
     vm.execute(&hook_bc, &mut arenas).expect("System hook should execute");
@@ -204,7 +208,9 @@ fn main() {
 
     let mut bad_bc = Vec::new();
     oid_push(&mut bad_bc, sandboxed_hook_oid);
-    bad_bc.push(RpnOp::OidCall as u8);
+    bad_bc.push(RpnOp::UserCall as u8);
+    bad_bc.extend_from_slice(&(UserCallOp::OidCall as u64).to_le_bytes());
+    bad_bc.extend_from_slice(&0u64.to_le_bytes());
     bad_bc.push(RpnOp::Halt as u8);
 
     let err = vm.execute(&bad_bc, &mut arenas).unwrap_err();

@@ -266,14 +266,14 @@ fn test_jmp_if_not_taken() {
 #[test]
 fn test_map_operations() {
     let bc = encode(&[
-        (RpnOp::MapNew, None),
+        (RpnOp::DictNew, None),
         // Set key 1 = 42
         (RpnOp::Push64, Some(&1u64.to_le_bytes())),
         (RpnOp::Push32, Some(&42u32.to_le_bytes())),
-        (RpnOp::MapSet, None),
+        (RpnOp::DictSet, None),
         // Get key 1
         (RpnOp::Push64, Some(&1u64.to_le_bytes())),
-        (RpnOp::MapGet, None),
+        (RpnOp::DictGet, None),
     ]);
     let vm = run(&bc);
     assert_eq!(vm.stack[0].as_u32(), Some(42));
@@ -288,9 +288,9 @@ fn test_stack_underflow() {
 
 #[test]
 fn test_invalid_opcode() {
-    let bc = vec![0xFE]; // invalid opcode
+    let bc = vec![0x0E]; // invalid opcode (gap in universal range, between Halt and Add)
     let result = run_result(&bc);
-    assert_eq!(result.unwrap_err(), RpnError::InvalidOpcode(0xFE));
+    assert_eq!(result.unwrap_err(), RpnError::InvalidOpcode(0x0E));
 }
 
 #[test]
