@@ -1533,22 +1533,20 @@ impl RpnVm {
                 self.push(RpnValue::U64(result as u32 as u64))?;
                 self.pc += 1;
             }
-            // --- UI draw opcodes ---
-            RpnOp::UiSetColor => {
+            // --- UI draw opcodes (feature-gated via ui_op! macro) ---
+            RpnOp::UiSetColor => ui_op!(self, pops: 1, payload: 0, {
                 let rgba = self.pop_u32_coerce()?;
                 self.ui_state.color = rgba;
-                self.pc += 1;
-            }
-            RpnOp::UiBox => {
+            }),
+            RpnOp::UiBox => ui_op!(self, pops: 4, payload: 0, {
                 let h = self.pop_u32_coerce()?;
                 let w = self.pop_u32_coerce()?;
                 let raw_y = self.pop_u32_coerce()? as i32;
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
                 self.push_draw(UiDrawCmd::Box { x, y, w, h, color: self.ui_state.color })?;
-                self.pc += 1;
-            }
-            RpnOp::UiSlab => {
+            }),
+            RpnOp::UiSlab => ui_op!(self, pops: 5, payload: 0, {
                 let radius = self.pop_u32_coerce()?;
                 let h = self.pop_u32_coerce()?;
                 let w = self.pop_u32_coerce()?;
@@ -1556,35 +1554,31 @@ impl RpnVm {
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
                 self.push_draw(UiDrawCmd::Slab { x, y, w, h, radius, color: self.ui_state.color })?;
-                self.pc += 1;
-            }
-            RpnOp::UiCircle => {
+            }),
+            RpnOp::UiCircle => ui_op!(self, pops: 3, payload: 0, {
                 let r = self.pop_u32_coerce()?;
                 let raw_y = self.pop_u32_coerce()? as i32;
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
                 self.push_draw(UiDrawCmd::Circle { x, y, r, color: self.ui_state.color })?;
-                self.pc += 1;
-            }
-            RpnOp::UiText => {
+            }),
+            RpnOp::UiText => ui_op!(self, pops: 4, payload: 0, {
                 let slot = self.pop_u32_coerce()?;
                 let size = self.pop_u32_coerce()?;
                 let raw_y = self.pop_u32_coerce()? as i32;
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
                 self.push_draw(UiDrawCmd::Text { x, y, size, slot, color: self.ui_state.color })?;
-                self.pc += 1;
-            }
-            RpnOp::UiTextStr => {
+            }),
+            RpnOp::UiTextStr => ui_op!(self, pops: 4, payload: 0, {
                 let str_idx = self.pop_u32_coerce()?;
                 let size = self.pop_u32_coerce()?;
                 let raw_y = self.pop_u32_coerce()? as i32;
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
                 self.push_draw(UiDrawCmd::TextStr { x, y, size, str_idx, color: self.ui_state.color })?;
-                self.pc += 1;
-            }
-            RpnOp::UiAction => {
+            }),
+            RpnOp::UiAction => ui_op!(self, pops: 5, payload: 0, {
                 let str_idx = self.pop_u32_coerce()?;
                 let h = self.pop_u32_coerce()?;
                 let w = self.pop_u32_coerce()?;
@@ -1592,41 +1586,31 @@ impl RpnVm {
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
                 self.push_draw(UiDrawCmd::Action { x, y, w, h, str_idx })?;
-                self.pc += 1;
-            }
-            RpnOp::UiPushState => {
+            }),
+            RpnOp::UiPushState => ui_op!(self, pops: 0, payload: 0, {
                 if self.ui_state_stack.len() >= UI_STATE_STACK_MAX {
                     return Err(RpnError::UiStateStackOverflow);
                 }
                 self.ui_state_stack.push(self.ui_state);
-                // Push a copy of the current transform
                 let current = *self.current_transform();
                 self.transform_stack.push(current);
-                self.pc += 1;
-            }
-            RpnOp::UiPopState => {
-                self.ui_state = self
-                    .ui_state_stack
-                    .pop()
+            }),
+            RpnOp::UiPopState => ui_op!(self, pops: 0, payload: 0, {
+                self.ui_state = self.ui_state_stack.pop()
                     .ok_or(RpnError::UiStateStackUnderflow)?;
-                // Pop transform (but keep at least one)
                 if self.transform_stack.len() > 1 {
                     self.transform_stack.pop();
                 }
-                self.pc += 1;
-            }
-            RpnOp::UiApplyOffset => {
-                // Accumulate (dx, dy) into top transform's translation
+            }),
+            RpnOp::UiApplyOffset => ui_op!(self, pops: 2, payload: 0, {
                 let dy = self.pop_u32_coerce()? as i32;
                 let dx = self.pop_u32_coerce()? as i32;
                 if let Some(top) = self.transform_stack.last_mut() {
                     top[12] += dx as f32;
                     top[13] += dy as f32;
                 }
-                self.pc += 1;
-            }
-            RpnOp::UiApplyMatrix => {
-                // Pop 16 f32s from stack, multiply with top, replace top
+            }),
+            RpnOp::UiApplyMatrix => ui_op!(self, pops: 16, payload: 0, {
                 let mut m = [0.0f32; 16];
                 for i in (0..16).rev() {
                     m[i] = f32::from_bits(self.pop_u32_coerce()?);
@@ -1634,10 +1618,8 @@ impl RpnVm {
                 if let Some(top) = self.transform_stack.last_mut() {
                     *top = mat4_multiply(top, &m);
                 }
-                self.pc += 1;
-            }
-            RpnOp::UiReplaceOffset => {
-                // Replace top transform with identity + (dx, dy)
+            }),
+            RpnOp::UiReplaceOffset => ui_op!(self, pops: 2, payload: 0, {
                 let dy = self.pop_u32_coerce()? as i32;
                 let dx = self.pop_u32_coerce()? as i32;
                 if let Some(top) = self.transform_stack.last_mut() {
@@ -1645,10 +1627,8 @@ impl RpnVm {
                     top[12] = dx as f32;
                     top[13] = dy as f32;
                 }
-                self.pc += 1;
-            }
-            RpnOp::UiReplaceMatrix => {
-                // Pop 16 f32s from stack, replace top (no multiply)
+            }),
+            RpnOp::UiReplaceMatrix => ui_op!(self, pops: 16, payload: 0, {
                 let mut m = [0.0f32; 16];
                 for i in (0..16).rev() {
                     m[i] = f32::from_bits(self.pop_u32_coerce()?);
@@ -1656,9 +1636,8 @@ impl RpnVm {
                 if let Some(top) = self.transform_stack.last_mut() {
                     *top = m;
                 }
-                self.pc += 1;
-            }
-            RpnOp::UiLine => {
+            }),
+            RpnOp::UiLine => ui_op!(self, pops: 4, payload: 0, {
                 let raw_y2 = self.pop_u32_coerce()? as i32;
                 let raw_x2 = self.pop_u32_coerce()? as i32;
                 let raw_y1 = self.pop_u32_coerce()? as i32;
@@ -1666,8 +1645,7 @@ impl RpnVm {
                 let (x1, y1) = self.transform_point(raw_x1, raw_y1);
                 let (x2, y2) = self.transform_point(raw_x2, raw_y2);
                 self.push_draw(UiDrawCmd::Line { x1, y1, x2, y2, color: self.ui_state.color })?;
-                self.pc += 1;
-            }
+            }),
             // --- Event & runtime opcodes ---
             RpnOp::EvPoll => {
                 if let Some(ev) = self.event_queue.pop_front() {
@@ -1984,8 +1962,8 @@ impl RpnVm {
                 });
                 self.pc += 1;
             }
-            // --- Card definition opcodes ---
-            RpnOp::CardBegin => {
+            // --- Card definition opcodes (feature-gated) ---
+            RpnOp::CardBegin => ui_op!(self, pops: 1, payload: 0, {
                 if self.card_outputs.len() >= CARD_DEF_MAX {
                     return Err(RpnError::CardLimitExceeded);
                 }
@@ -1993,34 +1971,28 @@ impl RpnVm {
                 let name = self.resolve_str(name_idx)?;
                 self.card_active = Some(CardDef::new(name));
                 self.card_capturing = true;
-                self.pc += 1;
-            }
-            RpnOp::CardEnd => {
+            }),
+            RpnOp::CardEnd => ui_op!(self, pops: 0, payload: 0, {
                 self.card_capturing = false;
                 let mut card = self.card_active.take().ok_or(RpnError::CardNoActiveDef)?;
-                // Copy relevant string table entries to the card
                 card.string_table = self.string_table.clone();
-                // Attach to active skill if one exists
                 if let Some(skill) = self.skill_active.as_mut() {
                     skill.cards.push(card.clone());
                 }
                 self.card_outputs.push(card);
-                self.pc += 1;
-            }
-            RpnOp::CardSetShortDesc => {
+            }),
+            RpnOp::CardSetShortDesc => ui_op!(self, pops: 1, payload: 0, {
                 let str_idx = self.pop_u32_coerce()?;
                 let desc = self.resolve_str(str_idx)?;
                 let card = self.card_active.as_mut().ok_or(RpnError::CardNoActiveDef)?;
                 card.short_description = desc;
-                self.pc += 1;
-            }
-            RpnOp::CardSetLongDesc => {
+            }),
+            RpnOp::CardSetLongDesc => ui_op!(self, pops: 1, payload: 0, {
                 let str_idx = self.pop_u32_coerce()?;
                 let desc = self.resolve_str(str_idx)?;
                 let card = self.card_active.as_mut().ok_or(RpnError::CardNoActiveDef)?;
                 card.long_description = desc;
-                self.pc += 1;
-            }
+            }),
             RpnOp::SkillInvoke => {
                 // Flush any pending LLM step first
                 self.flush_llm_step()?;
