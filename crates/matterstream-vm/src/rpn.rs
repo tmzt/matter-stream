@@ -11,7 +11,12 @@
 
 use matterstream_vm_addressing::fqa::Fqa;
 use matterstream_vm_addressing::ova::Ova;
+use matterstream_vm_addressing::oid::{Oid, SecurityMode, ImportKind};
+use matterstream_vm_addressing::oid_index::OidIndex;
 use matterstream_vm_arena::TripleArena;
+
+/// Native hook function signature for VM-escape dispatch.
+pub type NativeHookFn = fn(vm: &mut RpnVm, arenas: &mut TripleArena) -> Result<(), RpnError>;
 
 use crate::event::{VmEvent, VmEventType};
 use crate::ui_vm::{
@@ -132,6 +137,10 @@ pub enum RpnOp {
     Rand = 0x53,
     // Control register (v0.5.0)
     SetCR = 0x60,
+    // OID import opcodes (v0.7.0)
+    OidPush = 0x69,
+    OidImport = 0x6A,
+    OidCall = 0x6B,
     // VQL0 — Vesicle Query Language (v0.5.0)
     VqlBeginQuery = 0x61,
     VqlEndQuery = 0x62,
@@ -244,6 +253,9 @@ impl RpnOp {
             0x52 => Some(RpnOp::FrameCount),
             0x53 => Some(RpnOp::Rand),
             0x60 => Some(RpnOp::SetCR),
+            0x69 => Some(RpnOp::OidPush),
+            0x6A => Some(RpnOp::OidImport),
+            0x6B => Some(RpnOp::OidCall),
             0x61 => Some(RpnOp::VqlBeginQuery),
             0x62 => Some(RpnOp::VqlEndQuery),
             0x63 => Some(RpnOp::VqlBind),
@@ -285,7 +297,7 @@ impl RpnOp {
         match self {
             RpnOp::Push32 => 4,
             RpnOp::Push64 | RpnOp::Jmp | RpnOp::JmpIf => 8,
-            RpnOp::PushFqa => 16,
+            RpnOp::PushFqa | RpnOp::OidPush => 16,
             _ => 0,
         }
     }
@@ -383,6 +395,8 @@ impl GasConfig {
             | RpnOp::UiReplaceOffset
             | RpnOp::UiReplaceMatrix => self.cost_ui,
             RpnOp::SetCR => self.cost_cr,
+            RpnOp::OidPush => self.cost_push,
+            RpnOp::OidImport | RpnOp::OidCall => self.cost_call,
             RpnOp::VqlBeginQuery
             | RpnOp::VqlEndQuery
             | RpnOp::VqlBind
@@ -495,6 +509,10 @@ pub enum RpnError {
     ObjTypeNoActiveDef,
     CardLimitExceeded,
     CardNoActiveDef,
+    OidNotFound { hi: u64, lo: u64 },
+    OidSecurityViolation { hi: u64, lo: u64, required: &'static str, actual: &'static str },
+    OidNoIndicesLoaded,
+    OidInvalidNativeHook(u32),
 }
 
 impl fmt::Display for RpnError {
@@ -540,6 +558,14 @@ impl fmt::Display for RpnError {
             RpnError::ObjTypeNoActiveDef => write!(f, "RPN no active object type definition"),
             RpnError::CardLimitExceeded => write!(f, "RPN card definition limit exceeded"),
             RpnError::CardNoActiveDef => write!(f, "RPN no active card definition"),
+            RpnError::OidNotFound { hi, lo } => {
+                write!(f, "RPN OID not found: {:#018x}:{:#018x}", hi, lo)
+            }
+            RpnError::OidSecurityViolation { hi, lo, required, actual } => {
+                write!(f, "RPN OID security violation: {:#018x}:{:#018x} requires {} but caller is {}", hi, lo, required, actual)
+            }
+            RpnError::OidNoIndicesLoaded => write!(f, "RPN no OID indices loaded"),
+            RpnError::OidInvalidNativeHook(id) => write!(f, "RPN invalid native hook dispatch_id: {}", id),
         }
     }
 }
@@ -623,6 +649,12 @@ pub struct RpnVm {
     pub objtype_outputs: Vec<ObjectTypeDef>,
     objtype_active: Option<ObjectTypeDef>,
 
+    // ── OID import state ────────────────────────────────────────────────
+    /// Loaded .osym indices — raw bytes, binary searched directly.
+    pub oid_indices: Vec<Vec<u8>>,
+    /// Native hook dispatch table (system/internal packages only).
+    pub native_hooks: Vec<NativeHookFn>,
+
     // ── UI state (requires "ui" feature) ────────────────────────────────
     #[cfg(feature = "ui")]
     pub ui_draws: Vec<UiDrawCmd>,
@@ -672,6 +704,8 @@ impl RpnVm {
             skill_active_llm_use_case: LlmUseCase::General,
             objtype_outputs: Vec::new(),
             objtype_active: None,
+            oid_indices: Vec::new(),
+            native_hooks: Vec::new(),
             #[cfg(feature = "ui")]
             ui_draws: Vec::new(),
             #[cfg(feature = "ui")]
@@ -810,6 +844,18 @@ impl RpnVm {
         Ok(u128::from_le_bytes(
             bytecode[pos..pos + 16].try_into().unwrap(),
         ))
+    }
+
+    /// Resolve an OID by binary searching across all loaded .osym indices.
+    fn resolve_oid(&self, oid: Oid) -> Result<matterstream_vm_addressing::oid_index::OidEntry, RpnError> {
+        for raw in &self.oid_indices {
+            if let Ok(idx) = OidIndex::from_bytes(raw) {
+                if let Some(entry) = idx.lookup(oid) {
+                    return Ok(entry);
+                }
+            }
+        }
+        Err(RpnError::OidNotFound { hi: oid.hi, lo: oid.lo })
     }
 
     /// Consume gas for an opcode. Returns error if budget exceeded.
@@ -1652,6 +1698,71 @@ impl RpnVm {
                 }
                 self.cr_bank[cr_idx as usize] = value;
                 self.pc += 1;
+            }
+            // --- OID import opcodes ---
+            RpnOp::OidPush => {
+                // Push 16-byte inline OID as two u64s (hi, lo)
+                let lo = Self::read_u64(bytecode, self.pc + 1)?;
+                let hi = Self::read_u64(bytecode, self.pc + 9)?;
+                self.push(RpnValue::U64(hi))?;
+                self.push(RpnValue::U64(lo))?;
+                self.pc += 17;
+            }
+            RpnOp::OidImport => {
+                // Pop OID (lo, hi), resolve to FQA via .osym binary search
+                let lo = self.pop_u64()?;
+                let hi = self.pop_u64()?;
+                let oid = Oid::new(hi, lo);
+                let entry = self.resolve_oid(oid)?;
+
+                // Security check
+                let mode = oid.security_mode();
+                if entry.kind == ImportKind::NativeHook && mode == SecurityMode::Sandboxed {
+                    return Err(RpnError::OidSecurityViolation {
+                        hi, lo,
+                        required: "System or Internal",
+                        actual: "Sandboxed",
+                    });
+                }
+
+                // Push the resolved FQA
+                let fqa = entry.fqa();
+                self.push(RpnValue::Fqa(fqa))?;
+                self.pc += 1;
+            }
+            RpnOp::OidCall => {
+                // Pop OID (lo, hi), resolve to FQA, dispatch
+                let lo = self.pop_u64()?;
+                let hi = self.pop_u64()?;
+                let oid = Oid::new(hi, lo);
+                let entry = self.resolve_oid(oid)?;
+
+                let mode = oid.security_mode();
+                match entry.kind {
+                    ImportKind::NativeHook => {
+                        if mode == SecurityMode::Sandboxed {
+                            return Err(RpnError::OidSecurityViolation {
+                                hi, lo,
+                                required: "System or Internal",
+                                actual: "Sandboxed",
+                            });
+                        }
+                        let dispatch_id = entry.dispatch_id();
+                        if dispatch_id as usize >= self.native_hooks.len() {
+                            return Err(RpnError::OidInvalidNativeHook(dispatch_id));
+                        }
+                        // VM-escape: call the native hook function
+                        let hook = self.native_hooks[dispatch_id as usize];
+                        hook(self, arenas)?;
+                        self.pc += 1;
+                    }
+                    _ => {
+                        // Push FQA for caller to use (full FQA→OVA dispatch is future work)
+                        let fqa = entry.fqa();
+                        self.push(RpnValue::Fqa(fqa))?;
+                        self.pc += 1;
+                    }
+                }
             }
             // --- VQL0 opcodes ---
             RpnOp::VqlBeginQuery => {
