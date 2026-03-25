@@ -15,7 +15,8 @@ use std::time::Duration;
 
 use matterstream_packaging::archive::{ArchiveMember, MtsmArchive};
 use matterstream_packaging::tkv::{TkvDocument, TkvValue};
-use matterstream_ui::{render_ui_draws, rgba};
+use matterstream_packaging::fnta::builtin_font;
+use matterstream_ui::{render_ui_draws_with_font, rgba};
 use matterstream_vm::rpn::{RpnOp, RpnValue, RpnVm};
 use matterstream_vm_addressing::fqa::{Fqa, FourCC, Ordinal};
 use matterstream_vm_addressing::oid::{ImportKind, Oid};
@@ -124,7 +125,17 @@ fn main() {
     // Build CONSUMER package — imports Button and Label, draws a layout
     // ══════════════════════════════════════════════════════════════════════
 
-    // Consumer bytecode: draw background, then import Button + Label
+    // String table for text rendering
+    let string_table = vec![
+        "OID Import Demo".to_string(),          // 0
+        "Button (imported @chitin/ui)".to_string(), // 1
+        "Status: Connected".to_string(),        // 2
+        "Package A".to_string(),                // 3
+        "Package B".to_string(),                // 4
+        "Package C".to_string(),                // 5
+    ];
+
+    // Consumer bytecode: draw background, then import Button + Label, with real text
     let consumer_bc = {
         let mut bc = Vec::new();
 
@@ -144,56 +155,64 @@ fn main() {
         }
         bc.push(RpnOp::UiSlab as u8);
 
-        // Title text placeholder
+        // Title text (str_idx=0: "OID Import Demo")
         push32(&mut bc, rgba(255, 255, 255, 255));
         bc.push(RpnOp::UiSetColor as u8);
-        for val in [10u32, 8, 20, 0] {
+        for val in [12u32, 12, 20, 0] { // x, y, size, str_idx
             push32(&mut bc, val);
         }
-        bc.push(RpnOp::UiText as u8);
+        bc.push(RpnOp::UiTextStr as u8);
 
         // Import Button via OID → FQA pushed to stack
         oid_push(&mut bc, button_oid);
         bc.push(RpnOp::OidImport as u8);
-        bc.push(RpnOp::Drop as u8); // consume the FQA for now
+        bc.push(RpnOp::Drop as u8);
 
-        // Draw the button inline (simulating what would happen after full FQA→OVA resolution)
+        // Draw the button (simulating resolved import)
         push32(&mut bc, rgba(26, 26, 46, 255));
         bc.push(RpnOp::UiSetColor as u8);
-        for val in [20u32, 60, 360, 60, 12] {
+        for val in [20u32, 55, 360, 55, 12] {
             push32(&mut bc, val);
         }
         bc.push(RpnOp::UiSlab as u8);
 
         push32(&mut bc, rgba(50, 100, 255, 255));
         bc.push(RpnOp::UiSetColor as u8);
-        for val in [24u32, 64, 352, 52, 10] {
+        for val in [24u32, 59, 352, 47, 10] {
             push32(&mut bc, val);
         }
         bc.push(RpnOp::UiSlab as u8);
+
+        // Button label text (str_idx=1)
+        push32(&mut bc, rgba(255, 255, 255, 255));
+        bc.push(RpnOp::UiSetColor as u8);
+        for val in [40u32, 72, 16, 1] {
+            push32(&mut bc, val);
+        }
+        bc.push(RpnOp::UiTextStr as u8);
 
         // Import Label via OID
         oid_push(&mut bc, label_oid);
         bc.push(RpnOp::OidImport as u8);
         bc.push(RpnOp::Drop as u8);
 
-        // Status circle
+        // Status text (str_idx=2)
         push32(&mut bc, rgba(0, 255, 136, 255));
         bc.push(RpnOp::UiSetColor as u8);
-        for val in [360u32, 250, 20] {
+        for val in [20u32, 122, 14, 2] {
             push32(&mut bc, val);
         }
-        bc.push(RpnOp::UiCircle as u8);
+        bc.push(RpnOp::UiTextStr as u8);
 
         // Divider line
         push32(&mut bc, rgba(80, 80, 120, 255));
         bc.push(RpnOp::UiSetColor as u8);
-        for val in [20u32, 140, 380, 140] {
+        for val in [20u32, 145, 380, 145] {
             push32(&mut bc, val);
         }
         bc.push(RpnOp::UiLine as u8);
 
-        // Bottom slabs
+        // Bottom slabs with labels
         for i in 0..3u32 {
             let r = 60 + i * 40;
             let g = 80 + i * 30;
@@ -204,6 +223,14 @@ fn main() {
                 push32(&mut bc, val);
             }
             bc.push(RpnOp::UiSlab as u8);
+
+            // Card label (str_idx = 3 + i)
+            push32(&mut bc, rgba(255, 255, 255, 220));
+            bc.push(RpnOp::UiSetColor as u8);
+            for val in [30 + i * 125, 175u32, 12, 3 + i] {
+                push32(&mut bc, val);
+            }
+            bc.push(RpnOp::UiTextStr as u8);
         }
 
         bc.push(RpnOp::Halt as u8);
@@ -245,11 +272,15 @@ fn main() {
     vm.oid_indices.push(lib_restored.oid_index().unwrap().data.clone());
     vm.oid_indices.push(consumer_restored.oid_index().unwrap().data.clone());
 
+    // Set up string table for text rendering
+    vm.string_table = string_table.clone();
+
     // Execute consumer bytecode
     let consumer_code = &consumer_restored.bincode_members()[0].data;
     vm.execute(consumer_code, &mut arenas).unwrap();
 
     let draws = vm.ui_draws.clone();
+    let font = builtin_font();
     println!("Executed: {} draw commands from OID-imported consumer package", draws.len());
 
     // Verify OID imports resolved
@@ -282,21 +313,34 @@ fn main() {
                     event: WindowEvent::RedrawRequested,
                     ..
                 } => {
-                    let (width, height) = {
-                        let size = window.inner_size();
-                        (size.width.max(1), size.height.max(1))
-                    };
+                    let phys_size = window.inner_size();
+                    let phys_w = phys_size.width.max(1);
+                    let phys_h = phys_size.height.max(1);
+                    let scale = window.scale_factor() as u32;
+                    let log_w = phys_w / scale;
+                    let log_h = phys_h / scale;
+
                     surface
                         .resize(
-                            NonZeroU32::new(width).unwrap(),
-                            NonZeroU32::new(height).unwrap(),
+                            NonZeroU32::new(phys_w).unwrap(),
+                            NonZeroU32::new(phys_h).unwrap(),
                         )
                         .unwrap();
 
-                    let mut buffer = surface.buffer_mut().unwrap();
-                    buffer.fill(0x000F0F19); // match background color
+                    // Render at logical resolution then upscale
+                    let mut log_buf = vec![0x000F0F19u32; (log_w * log_h) as usize];
+                    render_ui_draws_with_font(&draws, &mut log_buf, log_w, log_h, &string_table, Some(&font));
 
-                    render_ui_draws(&draws, &mut buffer, width, height);
+                    // Nearest-neighbor upscale to physical buffer
+                    let mut buffer = surface.buffer_mut().unwrap();
+                    for py in 0..phys_h {
+                        for px in 0..phys_w {
+                            let lx = px / scale;
+                            let ly = py / scale;
+                            buffer[(py * phys_w + px) as usize] =
+                                log_buf[(ly * log_w + lx) as usize];
+                        }
+                    }
 
                     buffer.present().unwrap();
                 }
