@@ -2237,7 +2237,7 @@ impl RpnVm {
                 let raw_y = self.pop_u32_coerce()? as i32;
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_sdf_draw(SdfDrawCmd {
+                self.push_sdf_draw(matterstream_common::SdfDrawCmd {
                     pos: [x as f32, y as f32],
                     size: [w, h],
                     color: [0.0; 4],
@@ -2246,7 +2246,7 @@ impl RpnVm {
             }),
             // 0x0F RibbonEnd — pops 0
             0x0F => ui_op!(self, pops: 0, payload: 0, {
-                self.push_sdf_draw(SdfDrawCmd {
+                self.push_sdf_draw(matterstream_common::SdfDrawCmd {
                     pos: [0.0; 2],
                     size: [0.0; 2],
                     color: [0.0; 4],

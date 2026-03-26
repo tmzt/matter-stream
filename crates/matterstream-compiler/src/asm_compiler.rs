@@ -1313,6 +1313,19 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
             emit_container_children(asm, &hstack_node, x, y);
             return;
         }
+        "Ribbon" => {
+            let x = get_num_prop(&node.props, "x").unwrap_or(0) as i32;
+            let y = get_num_prop(&node.props, "y").unwrap_or(0) as i32;
+            let w = get_num_prop(&node.props, "w").unwrap_or(400) as u32;
+            let h = get_num_prop(&node.props, "h").unwrap_or(300) as u32;
+            let scroll_slot = get_num_prop(&node.props, "scrollSlot").unwrap_or(0) as u32;
+            let direction = get_num_prop(&node.props, "direction").unwrap_or(0) as u32;
+            let card_width = get_num_prop(&node.props, "cardWidth").unwrap_or(360) as u32;
+            asm.ui_ribbon_begin(x, y, w, h, scroll_slot, direction, card_width);
+            emit_nodes(asm, &node.children);
+            asm.ui_ribbon_end();
+            return;
+        }
         _ => {
             // Unknown tag — emit children only
         }
