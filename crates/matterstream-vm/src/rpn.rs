@@ -11,11 +11,15 @@
 //! - UserCall (0x60) / CoprocessorCall (0x61) escape hatches
 //! - SystemCall (0x71) privileged ops, SetCR (0x70)
 
+use std::sync::Arc;
+
 use matterstream_vm_addressing::fqa::Fqa;
 use matterstream_vm_addressing::ova::Ova;
 use matterstream_vm_addressing::oid::{Oid, SecurityMode, ImportKind};
 use matterstream_vm_addressing::oid_index::OidIndex;
 use matterstream_vm_arena::TripleArena;
+
+use crate::shared::VmSharedState;
 
 /// Native hook function signature for VM-escape dispatch.
 pub type NativeHookFn = fn(vm: &mut RpnVm, arenas: &mut TripleArena) -> Result<(), RpnError>;
@@ -821,13 +825,15 @@ pub struct RpnVm {
     /// Mutable string bank (runtime-writable, 256 nullable slots).
     pub string_bank: Vec<Option<String>>,
 
-    // ── User-space atomics (temporary until full permission system) ──────
-    /// Readable atomics: host writes, bytecode reads. 256 slots.
+    // ── Shared state (external Arc or local fallback) ──────────────────
+    /// External shared state provider. When set, ReadUserAtomic / SubmitUserSemaphore /
+    /// SharedStringGet/Set dispatch through this trait. When None, falls back to local arrays.
+    pub shared_state: Option<Arc<dyn VmSharedState>>,
+    /// Local fallback: readable atomics (256 slots). Used when shared_state is None.
     pub user_atomics_readable: Vec<std::sync::atomic::AtomicU32>,
-    /// Submit semaphores: bytecode writes (fire-and-forget), host reads+clears. 256 slots.
+    /// Local fallback: submit semaphores (256 slots). Used when shared_state is None.
     pub user_atomics_submit: Vec<std::sync::atomic::AtomicU32>,
-    /// Shared string table: mutex-protected, nullable. Host and bytecode can both read/write.
-    /// Full copy on get/set — no partial access.
+    /// Local fallback: shared strings (256 slots). Used when shared_state is None.
     pub user_shared_strings: Vec<std::sync::Mutex<Option<String>>>,
     // Event queue
     pub event_queue: VecDeque<VmEvent>,
@@ -902,6 +908,7 @@ impl RpnVm {
             zero_page: [0; 256],
             string_table: Vec::new(),
             string_bank: vec![None; 256],
+            shared_state: None,
             user_atomics_readable: (0..256).map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
             user_atomics_submit: (0..256).map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
             user_shared_strings: (0..256).map(|_| std::sync::Mutex::new(None)).collect(),
@@ -2063,29 +2070,35 @@ impl RpnVm {
                 // Stub: push 0 as match score
                 self.push(RpnValue::U64(0))?;
             }
-            // 0x20 ReadUserAtomic — read from user_atomics_readable[slot]
+            // 0x20 ReadUserAtomic — read from shared_state or local fallback
             0x20 => {
                 let slot = self.pop_u32_coerce()? as usize;
-                let val = if slot < self.user_atomics_readable.len() {
+                let val = if let Some(ref shared) = self.shared_state {
+                    shared.read_atomic(slot)
+                } else if slot < self.user_atomics_readable.len() {
                     self.user_atomics_readable[slot].load(std::sync::atomic::Ordering::Relaxed)
                 } else {
                     0
                 };
                 self.push(RpnValue::U32(val))?;
             }
-            // 0x21 SubmitUserSemaphore — write to user_atomics_submit[slot]
+            // 0x21 SubmitUserSemaphore — write to shared_state or local fallback
             0x21 => {
                 let val = self.pop_u32_coerce()?;
                 let slot = self.pop_u32_coerce()? as usize;
-                if slot < self.user_atomics_submit.len() {
+                if let Some(ref shared) = self.shared_state {
+                    shared.write_semaphore(slot, val);
+                } else if slot < self.user_atomics_submit.len() {
                     self.user_atomics_submit[slot].store(val, std::sync::atomic::Ordering::Relaxed);
                 }
             }
-            // 0x22 SharedStringGet — copy shared_strings[shared_slot] → string_bank[local_slot]
+            // 0x22 SharedStringGet — read from shared_state or local fallback → string_bank
             0x22 => {
                 let local_slot = self.pop_u32_coerce()? as usize;
                 let shared_slot = self.pop_u32_coerce()? as usize;
-                let val = if shared_slot < self.user_shared_strings.len() {
+                let val = if let Some(ref shared) = self.shared_state {
+                    shared.read_string(shared_slot)
+                } else if shared_slot < self.user_shared_strings.len() {
                     self.user_shared_strings[shared_slot].lock().unwrap().clone()
                 } else {
                     None
@@ -2094,7 +2107,7 @@ impl RpnVm {
                     self.string_bank[local_slot] = val;
                 }
             }
-            // 0x23 SharedStringSet — copy string_bank[local_slot] → shared_strings[shared_slot]
+            // 0x23 SharedStringSet — write string_bank → shared_state or local fallback
             0x23 => {
                 let shared_slot = self.pop_u32_coerce()? as usize;
                 let local_slot = self.pop_u32_coerce()? as usize;
@@ -2103,7 +2116,9 @@ impl RpnVm {
                 } else {
                     None
                 };
-                if shared_slot < self.user_shared_strings.len() {
+                if let Some(ref shared) = self.shared_state {
+                    shared.write_string(shared_slot, val);
+                } else if shared_slot < self.user_shared_strings.len() {
                     *self.user_shared_strings[shared_slot].lock().unwrap() = val;
                 }
             }

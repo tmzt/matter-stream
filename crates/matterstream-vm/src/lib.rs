@@ -5,6 +5,7 @@ pub mod event;
 pub mod host;
 pub mod hooks;
 pub mod or_page;
+pub mod shared;
 pub mod vm_handle;
 #[cfg(feature = "ui")]
 pub mod gpu;
