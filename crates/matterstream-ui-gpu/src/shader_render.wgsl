@@ -34,6 +34,8 @@ struct GpuUniforms {
     scalar_bank: array<vec4<f32>, 4>,
     int_bank: array<vec4<i32>, 4>,
     zero_page: array<vec4<u32>, 16>,
+    // Font descriptor: [glyph_w, glyph_h, first_cp, last_cp]
+    font: vec4<u32>,
 };
 
 struct Anim {
@@ -49,6 +51,8 @@ struct Anim {
 @group(0) @binding(1) var<storage, read> draw_cmds: array<DrawCmd>;
 @group(0) @binding(2) var<storage, read> header: RenderHeader;
 @group(0) @binding(3) var<storage, read> anim_bank: array<Anim>;
+@group(0) @binding(4) var<storage, read> glyph_bitmap: array<u32>;
+@group(0) @binding(5) var<storage, read> char_buffer: array<u32>;
 
 // ── Vertex shader: full-screen triangle ──
 
@@ -162,8 +166,45 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let b = vec2<f32>(half_len, 0.0);
                 d = sd_segment(p, a, b, cmd.size.y * 0.5);
             }
-            case 4u: { // Text — skip on GPU (rendered by CPU text atlas)
-                d = 1e6;
+            case 4u: { // Text — render using font bitmap atlas
+                // params[3] = packed u16/u16: (char_offset << 16) | char_count
+                // Font descriptor in uniforms.font: [glyph_w, glyph_h, first_cp, last_cp]
+                let glyph_w = uniforms.font.x;
+                let glyph_h = uniforms.font.y;
+                let first_cp = uniforms.font.z;
+
+                if glyph_w > 0u && glyph_h > 0u {
+                    let packed = bitcast<u32>(cmd.params.w);
+                    let char_offset = packed >> 16u;
+                    let char_count = packed & 0xFFFFu;
+
+                    let text_x = cmd.pos.x;
+                    let text_y = cmd.pos.y;
+                    let text_size = cmd.size.y;
+                    let scale_f = max(text_size / f32(glyph_h), 1.0);
+                    let advance = f32(glyph_w + 1u) * scale_f;
+
+                    for (var ci: u32 = 0u; ci < char_count; ci = ci + 1u) {
+                        let cp = char_buffer[char_offset + ci];
+                        let glyph_idx = clamp(cp, first_cp, uniforms.font.w) - first_cp;
+
+                        let char_x = text_x + f32(ci) * advance;
+                        let local_x = pixel.x - char_x;
+                        let local_y = pixel.y - text_y;
+
+                        if local_x >= 0.0 && local_x < f32(glyph_w) * scale_f &&
+                           local_y >= 0.0 && local_y < f32(glyph_h) * scale_f {
+                            let gx = u32(local_x / scale_f);
+                            let gy = u32(local_y / scale_f);
+                            let row_byte = glyph_bitmap[glyph_idx * glyph_h + gy];
+                            let bit = glyph_w - 1u - gx;
+                            if (row_byte & (1u << bit)) != 0u {
+                                d = -1.0;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
             default: {
                 // Unknown type — skip

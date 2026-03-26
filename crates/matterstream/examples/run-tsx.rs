@@ -186,6 +186,30 @@ fn run() {
         let renderer = GpuSdfRenderer::new(&device, surface_format);
         let start_time = std::time::Instant::now();
 
+        // Upload font atlas + char buffer for text rendering
+        let builtin = matterstream_packaging::fnta::builtin_font();
+        let gpu_font = matterstream_common::GpuFont::new(
+            builtin.glyph_w, builtin.glyph_h, builtin.first_cp, builtin.last_cp,
+        );
+        let bitmap_u32 = matterstream_common::pack_bitmap(&builtin.bitmap);
+        renderer.upload_font(&queue, &gpu_font, &bitmap_u32);
+
+        // Pack string table into char_buffer and patch text SdfDrawCmds with packed offset/count
+        let (char_data, str_offsets) = matterstream_common::pack_strings(&asm_output.string_table);
+        renderer.upload_chars(&queue, &char_data);
+
+        // Patch text draw commands: params[3] = (char_offset << 16) | char_count
+        for cmd in sdf_draws.iter_mut() {
+            if cmd.params[0] as u32 == matterstream_common::DRAW_TYPE_TEXT as u32 {
+                let str_idx = cmd.params[3] as u32 as usize;
+                if str_idx < str_offsets.len() {
+                    let so = &str_offsets[str_idx];
+                    let packed = (so.start << 16) | so.len;
+                    cmd.params[3] = f32::from_bits(packed);
+                }
+            }
+        }
+
         event_loop.run(move |event, elwt| {
             elwt.set_control_flow(ControlFlow::Wait);
             match event {
@@ -212,7 +236,7 @@ fn run() {
                         // Pass physical resolution — shader maps clip space to pixel coords
                         // SdfDrawCmd positions are in logical pixels, shader needs to scale
                         let scale = window.scale_factor() as f32;
-                        renderer.render_full_scaled(&device, &queue, &view, phys.width, phys.height, scale, &sdf_draws, time_ms, &gpu_scalar_bank, &gpu_int_bank, &gpu_anim_bank);
+                        renderer.render_full_scaled(&device, &queue, &view, phys.width, phys.height, scale, &sdf_draws, time_ms, &gpu_scalar_bank, &gpu_int_bank, &gpu_anim_bank, Some(&gpu_font));
                         frame.present();
                     }
                 }
