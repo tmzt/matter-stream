@@ -118,7 +118,7 @@ fn main() {
         // Title text
         push32(&mut bc, rgba(255, 255, 255, 255));
         bc.push(MtuiOp::SetColor.byte());
-        for val in [12u32, 12, 20, 0] { push32(&mut bc, val); }
+        for val in [12u32, 12, 20, 0, 0] { push32(&mut bc, val); }
         bc.push(MtuiOp::TextStr.byte());
 
         // Import Button via OID
@@ -140,7 +140,7 @@ fn main() {
         // Button label
         push32(&mut bc, rgba(255, 255, 255, 255));
         bc.push(MtuiOp::SetColor.byte());
-        for val in [40u32, 72, 16, 1] { push32(&mut bc, val); }
+        for val in [40u32, 72, 16, 0, 1] { push32(&mut bc, val); }
         bc.push(MtuiOp::TextStr.byte());
 
         // Import Label via OID
@@ -151,7 +151,7 @@ fn main() {
         // Status text
         push32(&mut bc, rgba(0, 255, 136, 255));
         bc.push(MtuiOp::SetColor.byte());
-        for val in [20u32, 122, 14, 2] { push32(&mut bc, val); }
+        for val in [20u32, 122, 14, 0, 2] { push32(&mut bc, val); }
         bc.push(MtuiOp::TextStr.byte());
 
         // Divider
@@ -172,7 +172,7 @@ fn main() {
 
             push32(&mut bc, rgba(255, 255, 255, 220));
             bc.push(MtuiOp::SetColor.byte());
-            for val in [30 + i * 125, 175u32, 12, 3 + i] { push32(&mut bc, val); }
+            for val in [30 + i * 125, 175u32, 12, 0, 3 + i] { push32(&mut bc, val); }
             bc.push(MtuiOp::TextStr.byte());
         }
 

@@ -747,6 +747,8 @@ pub struct RpnVm {
     pub zero_page: [u8; 256],
     // String table for UiTextStr
     pub string_table: Vec<String>,
+    /// Mutable string bank (runtime-writable, 256 nullable slots).
+    pub string_bank: Vec<Option<String>>,
     // Event queue
     pub event_queue: VecDeque<VmEvent>,
     // Frame counter
@@ -814,6 +816,7 @@ impl RpnVm {
             vec4_bank: [[0.0; 4]; 16],
             zero_page: [0; 256],
             string_table: Vec::new(),
+            string_bank: vec![None; 256],
             event_queue: VecDeque::new(),
             frame_count: 0,
             rng: SimpleRng::new(0xDEAD_BEEF),
@@ -2069,19 +2072,22 @@ impl RpnVm {
                     params: [matterstream_common::DRAW_TYPE_LINE, 0.0, 0.0, 0.0],
                 });
             }),
-            // 0x09 TextStr
-            0x09 => ui_op!(self, pops: 4, payload: 0, {
+            // 0x09 TextStr — pops [x, y, size, bank_id, str_idx]
+            // bank_id: 0 = string_table (immutable), 1 = string_bank (mutable)
+            0x09 => ui_op!(self, pops: 5, payload: 0, {
                 let str_idx = self.pop_u32_coerce()?;
+                let bank_id = self.pop_u32_coerce()?;
                 let size = self.pop_u32_coerce()?;
                 let raw_y = self.pop_u32_coerce()? as i32;
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
                 let color = self.ui_state.color;
+                // Resolve the string for UiDrawCmd (legacy path uses str_idx into combined view)
                 self.push_draw(UiDrawCmd::TextStr { x, y, size, str_idx, color })?;
                 self.push_sdf_draw(matterstream_common::SdfDrawCmd {
                     pos: [x as f32, y as f32], size: [(size * 4) as f32, size as f32],
                     color: matterstream_common::color_u32_to_f32(color),
-                    params: [matterstream_common::DRAW_TYPE_TEXT, 0.0, 0.0, str_idx as f32],
+                    params: [matterstream_common::DRAW_TYPE_TEXT, bank_id as f32, 0.0, str_idx as f32],
                 });
             }),
             // 0x0A Action

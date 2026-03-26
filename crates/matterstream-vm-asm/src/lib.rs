@@ -412,9 +412,19 @@ impl Asm {
         self.raw(mtui::CIRCLE)
     }
 
+    /// Draw text from string table (bank_id=0, immutable).
     pub fn draw_text_str(&mut self, x: i32, y: i32, size: u32, id: StringId) -> &mut Self {
         self.push32(x as u32).push32(y as u32).push32(size);
+        self.push32(0); // bank_id: 0 = string_table
         self.tokens.push(AsmToken::StrRef(id));
+        self.raw(mtui::TEXT_STR)
+    }
+
+    /// Draw text from string bank (bank_id=1, mutable runtime slot).
+    pub fn draw_text_bank(&mut self, x: i32, y: i32, size: u32, slot: u32) -> &mut Self {
+        self.push32(x as u32).push32(y as u32).push32(size);
+        self.push32(1); // bank_id: 1 = string_bank
+        self.push32(slot);
         self.raw(mtui::TEXT_STR)
     }
 

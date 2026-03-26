@@ -195,6 +195,7 @@ fn test_ui_text_str() {
     push32(&mut bc, 10);  // x
     push32(&mut bc, 20);  // y
     push32(&mut bc, 16);  // size
+    push32(&mut bc, 0);   // bank_id: 0 = string_table
     push32(&mut bc, 1);   // str_idx = 1 ("World")
     bc.push(MtuiOp::TextStr.byte());
     bc.push(RpnOp::Halt as u8);
