@@ -188,13 +188,16 @@ fn run() {
     {
         use std::num::NonZeroU32;
         use std::sync::Arc;
-        use matterstream_ui_soft::render_sdf;
+        use matterstream_ui_soft::render_sdf_with_font;
+        use matterstream_packaging::fnta::builtin_font;
         use softbuffer::{Context, Surface};
         use winit::event::{Event, WindowEvent};
         use winit::event_loop::{EventLoop, ControlFlow};
         use winit::window::Window;
 
         let sdf_draws = vm.sdf_draws.clone();
+        let string_table = asm_output.string_table.clone();
+        let font = builtin_font();
 
         let event_loop = EventLoop::new().unwrap();
         let window = Arc::new(
@@ -223,7 +226,7 @@ fn run() {
                     surface.resize(NonZeroU32::new(pw).unwrap(), NonZeroU32::new(ph).unwrap()).unwrap();
 
                     let mut log_buf = vec![0x00181818u32; (lw * lh) as usize];
-                    render_sdf(&sdf_draws, &mut log_buf, lw, lh);
+                    render_sdf_with_font(&sdf_draws, &mut log_buf, lw, lh, &string_table, Some(&font));
 
                     let mut buffer = surface.buffer_mut().unwrap();
                     for py in 0..ph {

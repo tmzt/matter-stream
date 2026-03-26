@@ -5,7 +5,7 @@
 //!
 //! Usage: `render_ui_draws_with_font::<SoftRenderer>(...)`
 
-use matterstream_common::{Rasterizer, rgba_unpack, SdfDrawCmd, sdf_eval};
+use matterstream_common::{Rasterizer, rgba_unpack, SdfDrawCmd, sdf_eval, DRAW_TYPE_TEXT};
 
 /// Softbuffer CPU rasterizer. Zero-sized type — all methods are static.
 pub struct SoftRenderer;
@@ -132,21 +132,34 @@ pub fn draw_line(buf: &mut [u32], width: u32, height: u32, x1: i32, y1: i32, x2:
 // ── SDF-based rendering (new primary path) ──────────────────────────────
 
 /// Render SdfDrawCmd list to a softbuffer pixel buffer using per-pixel SDF evaluation.
-/// Produces pixel-identical output to the GPU fragment shader.
 ///
 /// `buf` is in softbuffer format (0x00RRGGBB), `width` × `height` pixels.
 pub fn render_sdf(draws: &[SdfDrawCmd], buf: &mut [u32], width: u32, height: u32) {
+    render_sdf_with_font(draws, buf, width, height, &[], None);
+}
+
+/// Render SdfDrawCmd list with font atlas support for text rendering.
+pub fn render_sdf_with_font(
+    draws: &[SdfDrawCmd],
+    buf: &mut [u32],
+    width: u32,
+    height: u32,
+    string_table: &[String],
+    font: Option<&matterstream_packaging::fnta::FontAtlas>,
+) {
+    // First pass: render SDF shapes (non-text)
     for py in 0..height {
         for px in 0..width {
             let fx = px as f32 + 0.5;
             let fy = py as f32 + 0.5;
             let idx = (py * width + px) as usize;
 
-            // Evaluate each draw command front-to-back, blend over
             for cmd in draws {
+                if cmd.params[0] as u32 == DRAW_TYPE_TEXT as u32 {
+                    continue; // text handled in second pass
+                }
                 let (d, color) = sdf_eval(cmd, fx, fy);
                 if d < 1.0 {
-                    // Smoothstep antialiasing at the edge (matching shader)
                     let alpha = if d < 0.0 { color[3] } else { color[3] * (1.0 - d) };
                     if alpha > 0.001 {
                         let src_rgba = f32_color_to_softbuffer(color[0], color[1], color[2], alpha);
@@ -155,6 +168,69 @@ pub fn render_sdf(draws: &[SdfDrawCmd], buf: &mut [u32], width: u32, height: u32
                 }
             }
         }
+    }
+
+    // Second pass: render text with font atlas
+    if let Some(font) = font {
+        for cmd in draws {
+            if cmd.params[0] as u32 != DRAW_TYPE_TEXT as u32 {
+                continue;
+            }
+            let bank_id = cmd.params[1] as u32;
+            let str_idx = cmd.params[3] as u32;
+            let text = if bank_id == 0 {
+                string_table.get(str_idx as usize).map(|s| s.as_str())
+            } else {
+                None // string bank not supported in this path yet
+            };
+            if let Some(text) = text {
+                let x = cmd.pos[0] as i32;
+                let y = cmd.pos[1] as i32;
+                let size = cmd.size[1] as u32; // height = font size
+                let color = f32_color_to_softbuffer(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]);
+                render_text_glyphs(buf, width, height, x, y, size, text, color, font);
+            }
+        }
+    }
+}
+
+/// Render text using bitmap font glyphs.
+fn render_text_glyphs(
+    buf: &mut [u32], width: u32, height: u32,
+    x: i32, y: i32, size: u32, text: &str, color: u32,
+    font: &matterstream_packaging::fnta::FontAtlas,
+) {
+    let gw = font.glyph_w as u32;
+    let gh = font.glyph_h as u32;
+    if gw == 0 || gh == 0 { return; }
+    let scale = (size / gh).max(1);
+    let advance = (gw + 1) * scale;
+
+    let mut cursor_x = x;
+    for ch in text.bytes() {
+        let cp = if ch >= font.first_cp && ch <= font.last_cp { ch } else { b'?' };
+        if let Some(rows) = font.glyph_rows(cp) {
+            for (row_idx, &row_byte) in rows.iter().enumerate() {
+                for col in 0..gw {
+                    let bit = gw - 1 - col;
+                    if row_byte & (1 << bit) != 0 {
+                        let px = cursor_x + (col * scale) as i32;
+                        let py = y + (row_idx as u32 * scale) as i32;
+                        for dy in 0..scale {
+                            for dx in 0..scale {
+                                let fx = px + dx as i32;
+                                let fy = py + dy as i32;
+                                if fx >= 0 && fy >= 0 && (fx as u32) < width && (fy as u32) < height {
+                                    let idx = (fy as u32 * width + fx as u32) as usize;
+                                    buf[idx] = blend_pixel(buf[idx], color);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        cursor_x += advance as i32;
     }
 }
 

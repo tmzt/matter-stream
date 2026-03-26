@@ -7,3 +7,4 @@ license = "Apache-2.0"
 
 [dependencies]
 matterstream-common = { path = "../matterstream-common" }
+matterstream-packaging = { path = "../matterstream-packaging" }
