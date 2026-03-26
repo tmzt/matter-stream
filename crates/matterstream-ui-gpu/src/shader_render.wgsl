@@ -162,9 +162,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let b = vec2<f32>(half_len, 0.0);
                 d = sd_segment(p, a, b, cmd.size.y * 0.5);
             }
-            case 4u: { // Text placeholder — render as colored box
-                let half = cmd.size * 0.5;
-                d = sd_box(p, half);
+            case 4u: { // Text — skip on GPU (rendered by CPU text atlas)
+                d = 1e6;
             }
             default: {
                 // Unknown type — skip
