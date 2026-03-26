@@ -124,7 +124,7 @@ fn run() {
             event_loop.create_window(
                 Window::default_attributes()
                     .with_title(&format!("run-tsx [GPU]: {}", file_path))
-                    .with_inner_size(winit::dpi::LogicalSize::new(1024, 120)),
+                    .with_inner_size(winit::dpi::LogicalSize::new(800, 600)),
             ).unwrap(),
         );
 
@@ -140,16 +140,19 @@ fn run() {
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps.formats[0];
-        let mut config = surface.get_default_config(&adapter, 400, 300).unwrap();
+        let init_size = window.inner_size();
+        let mut config = surface.get_default_config(&adapter, init_size.width.max(1), init_size.height.max(1)).unwrap();
         config.present_mode = wgpu::PresentMode::Fifo;
         surface.configure(&device, &config);
 
         let renderer = GpuSdfRenderer::new(&device, surface_format);
-        window.request_redraw();
 
         event_loop.run(move |event, elwt| {
             elwt.set_control_flow(ControlFlow::Wait);
             match event {
+                Event::AboutToWait => {
+                    window.request_redraw();
+                }
                 Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
                     let size = window.inner_size();
                     if size.width > 0 && size.height > 0 {
@@ -198,7 +201,7 @@ fn run() {
             event_loop.create_window(
                 Window::default_attributes()
                     .with_title(&format!("run-tsx: {}", file_path))
-                    .with_inner_size(winit::dpi::LogicalSize::new(1024, 120)),
+                    .with_inner_size(winit::dpi::LogicalSize::new(800, 600)),
             ).unwrap(),
         );
 
