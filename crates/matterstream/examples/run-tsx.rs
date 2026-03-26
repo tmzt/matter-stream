@@ -138,6 +138,19 @@ fn run() {
 
         let sdf_draws = vm.sdf_draws.clone();
         let gpu_anim_bank = anim_bank.clone();
+        let mut gpu_int_bank = vm.int_bank;
+        let mut gpu_scalar_bank = vm.scalar_bank;
+
+        // Share mic_state with GPU path too
+        let mic_state = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mic_state_bg = std::sync::Arc::clone(&mic_state);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(1000));
+                let old = mic_state_bg.load(std::sync::atomic::Ordering::Relaxed);
+                mic_state_bg.store(if old == 0 { 1 } else { 0 }, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
 
         let event_loop = EventLoop::new().unwrap();
         let window = Arc::new(
@@ -175,10 +188,13 @@ fn run() {
                     window.request_redraw();
                 }
                 Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
-                    let size = window.inner_size();
-                    if size.width > 0 && size.height > 0 {
-                        config.width = size.width;
-                        config.height = size.height;
+                    // Sync mic state from background thread
+                    gpu_int_bank[0] = mic_state.load(std::sync::atomic::Ordering::Relaxed) as i32;
+
+                    let phys = window.inner_size();
+                    if phys.width > 0 && phys.height > 0 {
+                        config.width = phys.width;
+                        config.height = phys.height;
                         surface.configure(&device, &config);
 
                         let frame = match surface.get_current_texture() {
@@ -188,7 +204,11 @@ fn run() {
                         };
                         let view = frame.texture.create_view(&Default::default());
                         let time_ms = start_time.elapsed().as_millis() as f32;
-                        renderer.render_full(&device, &queue, &view, size.width, size.height, &sdf_draws, time_ms, &vm.scalar_bank, &vm.int_bank, &gpu_anim_bank);
+                        // Pass logical resolution (physical / scale) so SDF coords match
+                        let scale = window.scale_factor() as u32;
+                        let lw = phys.width / scale;
+                        let lh = phys.height / scale;
+                        renderer.render_full(&device, &queue, &view, lw, lh, &sdf_draws, time_ms, &gpu_scalar_bank, &gpu_int_bank, &gpu_anim_bank);
                         frame.present();
                     }
                 }
