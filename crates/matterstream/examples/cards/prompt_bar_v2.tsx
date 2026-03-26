@@ -1,4 +1,4 @@
-const [listening, setListening] = useState(false);
+const [micOn, setMicOn] = useMicState();
 
 const IconButton = ({ w, h, radius, color, action, label, labelColor }) => (
   <Slab w={w} h={h} radius={radius} color={color} action={action} halign="center" valign="center">
@@ -20,4 +20,6 @@ const IconButton = ({ w, h, radius, color, action, label, labelColor }) => (
     <IconButton w={68} h={48} radius={24} color="#4466FFFF" action="prompt_send" label="Send" labelColor="#FFFFFFFF" />
 
   </Slab>
+
+  <Circle x={26} y={28} r={8} color="#FF4444FF" />
 </>

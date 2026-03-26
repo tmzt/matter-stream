@@ -52,12 +52,20 @@ struct ComponentDef {
 // ── OXC → JsxNode lowering ──────────────────────────────────────────────
 
 /// A useState binding: variable name → packed bank ref.
+/// How a state binding is backed at runtime.
+#[derive(Debug, Clone)]
+enum StateBackend {
+    /// Local IntBank slot — useState(value).
+    IntBank { packed_ref: u32, initial_value: i64 },
+    /// UserAtomicReadable — useMicState() etc.
+    UserAtomic { slot: u32 },
+}
+
 #[derive(Debug, Clone)]
 struct StateBinding {
     name: String,
     setter_name: String,
-    packed_ref: u32,
-    initial_value: i64,
+    backend: StateBackend,
 }
 
 struct AsmCompiler {
@@ -85,15 +93,23 @@ impl AsmCompiler {
         self.state_bindings.push(StateBinding {
             name: name.to_string(),
             setter_name: setter_name.to_string(),
-            packed_ref,
-            initial_value: initial,
+            backend: StateBackend::IntBank { packed_ref, initial_value: initial },
         });
         packed_ref
     }
 
-    /// Look up a state binding by variable name. Returns packed ref if found.
-    fn resolve_state(&self, name: &str) -> Option<u32> {
-        self.state_bindings.iter().find(|b| b.name == name).map(|b| b.packed_ref)
+    /// Allocate a UserAtomic-backed hook (useMicState, etc.).
+    fn alloc_atomic_hook(&mut self, name: &str, setter_name: &str, atomic_slot: u32) {
+        self.state_bindings.push(StateBinding {
+            name: name.to_string(),
+            setter_name: setter_name.to_string(),
+            backend: StateBackend::UserAtomic { slot: atomic_slot },
+        });
+    }
+
+    /// Look up a state binding by variable name.
+    fn resolve_state(&self, name: &str) -> Option<&StateBinding> {
+        self.state_bindings.iter().find(|b| b.name == name)
     }
 
     /// First pass: collect component definitions and useState let-bindings.
@@ -148,20 +164,27 @@ impl AsmCompiler {
             Expression::Identifier(id) => id.name.as_str(),
             _ => return,
         };
-        if callee_name != "useState" { return; }
-
-        // Extract initial value (default: 0/false)
-        let initial = if let Some(arg) = call.arguments.first() {
-            match arg {
-                Argument::BooleanLiteral(b) => if b.value { 1 } else { 0 },
-                Argument::NumericLiteral(n) => n.value as i64,
-                _ => 0,
+        match callee_name {
+            "useState" => {
+                let initial = if let Some(arg) = call.arguments.first() {
+                    match arg {
+                        Argument::BooleanLiteral(b) => if b.value { 1 } else { 0 },
+                        Argument::NumericLiteral(n) => n.value as i64,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+                self.alloc_int_state(&name, &setter_name, initial);
+                return;
             }
-        } else {
-            0
-        };
-
-        self.alloc_int_state(&name, &setter_name, initial);
+            "useMicState" => {
+                // Builtin hook: reads from UserAtomicReadable[0]
+                self.alloc_atomic_hook(&name, &setter_name, 0);
+                return;
+            }
+            _ => return,
+        }
     }
 
     fn try_collect_component<'a>(
@@ -1328,14 +1351,31 @@ pub fn compile_to_asm(tsx_source: &str) -> Result<AsmOutput, String> {
     // Pass 3: emit Asm bytecode
     let mut asm = Asm::new();
 
-    // Emit state initialization for useState let-bindings
+    // Emit state initialization for let-bindings
     for binding in &compiler.state_bindings {
-        let bank_type = (binding.packed_ref >> 16) as u32;
-        let slot = (binding.packed_ref & 0xFFFF) as u32;
-        asm.push32(binding.initial_value as u32); // value
-        asm.push32(bank_type);                     // bank_id
-        asm.push32(slot);                          // slot
-        asm.op(matterstream_vm::rpn::RpnOp::StoreBank);
+        match &binding.backend {
+            StateBackend::IntBank { packed_ref, initial_value } => {
+                let bank_type = (packed_ref >> 16) as u32;
+                let slot = (packed_ref & 0xFFFF) as u32;
+                asm.push32(*initial_value as u32);
+                asm.push32(bank_type);
+                asm.push32(slot);
+                asm.op(matterstream_vm::rpn::RpnOp::StoreBank);
+            }
+            StateBackend::UserAtomic { slot } => {
+                // Read UserAtomicReadable[slot] → IntBank[local_slot]
+                // Runs every frame (bytecode is re-executed for UI)
+                asm.read_user_atomic(*slot);
+                // Store result to a local IntBank slot
+                let local_bank = BANK_INT as u32;
+                let local_slot = (compiler.state_bindings.iter()
+                    .position(|b| b.name == binding.name)
+                    .unwrap()) as u32;
+                asm.push32(local_bank);
+                asm.push32(local_slot);
+                asm.op(matterstream_vm::rpn::RpnOp::StoreBank);
+            }
+        }
     }
 
     emit_nodes(&mut asm, &nodes);

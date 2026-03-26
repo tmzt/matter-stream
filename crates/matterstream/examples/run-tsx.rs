@@ -195,9 +195,20 @@ fn run() {
         use winit::event_loop::{EventLoop, ControlFlow};
         use winit::window::Window;
 
-        let sdf_draws = vm.sdf_draws.clone();
+        let bytecode = asm_output.bytecode.clone();
         let string_table = asm_output.string_table.clone();
         let font = builtin_font();
+
+        // Background thread toggles mic state for useMicState() demo
+        let mic_state = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mic_state_bg = std::sync::Arc::clone(&mic_state);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(1000));
+                let old = mic_state_bg.load(std::sync::atomic::Ordering::Relaxed);
+                mic_state_bg.store(if old == 0 { 1 } else { 0 }, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
 
         let event_loop = EventLoop::new().unwrap();
         let window = Arc::new(
@@ -215,7 +226,21 @@ fn run() {
         event_loop.run(move |event, elwt| {
             elwt.set_control_flow(ControlFlow::Wait);
             match event {
+                Event::AboutToWait => {
+                    window.request_redraw();
+                }
                 Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
+                    // Sync mic state from background thread
+                    vm.user_atomics_readable[0].store(
+                        mic_state.load(std::sync::atomic::Ordering::Relaxed),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+
+                    // Re-execute bytecode each frame (picks up atomic changes)
+                    vm.string_table = string_table.clone();
+                    vm.cr_bank[1] = matterstream_vm::rpn::SECURITY_INTERNAL as u32;
+                    let _ = vm.execute(&bytecode, &mut arenas);
+
                     let phys = window.inner_size();
                     let pw = phys.width.max(1);
                     let ph = phys.height.max(1);
@@ -226,7 +251,7 @@ fn run() {
                     surface.resize(NonZeroU32::new(pw).unwrap(), NonZeroU32::new(ph).unwrap()).unwrap();
 
                     let mut log_buf = vec![0x00181818u32; (lw * lh) as usize];
-                    render_sdf_with_font(&sdf_draws, &mut log_buf, lw, lh, &string_table, Some(&font));
+                    render_sdf_with_font(&vm.sdf_draws, &mut log_buf, lw, lh, &string_table, Some(&font));
 
                     let mut buffer = surface.buffer_mut().unwrap();
                     for py in 0..ph {
