@@ -1,15 +1,24 @@
-//! UiPipeline trait — monomorphized render pipeline interface.
+//! Render pipeline types and traits.
 //!
-//! Both GPU (wgpu) and CPU (softbuffer SDF eval) implement this.
+//! `RenderFrame` is the output of the compute stage and input to the render stage.
+//! `RenderBackend` is implemented by GPU (wgpu) and CPU (softbuffer) renderers.
 
-use crate::sdf::SdfDrawCmd;
+use crate::sdf::{SdfDrawCmd, Anim, GpuTexture};
+use crate::font::GpuFont;
 
-/// Render pipeline for SDF draw commands.
-/// Implementations are monomorphized via generics — no vtable dispatch.
-pub trait UiPipeline {
-    /// Render a draw list to the output surface.
-    fn render(&mut self, draws: &[SdfDrawCmd], string_table: &[String]);
-
-    /// Resize the output surface.
-    fn resize(&mut self, width: u32, height: u32);
+/// Fully prepared frame — output of compute stage, input to render stage.
+/// All strings packed, all offsets encoded, all data GPU-uploadable.
+pub struct RenderFrame {
+    pub draws: Vec<SdfDrawCmd>,       // string offsets already in params[3]
+    pub char_buffer: Vec<u32>,        // packed codepoints
+    pub anim_bank: Vec<Anim>,
+    pub texture_bank: Vec<GpuTexture>, // texture descriptors
+    pub font: GpuFont,
+    pub glyph_bitmap: Vec<u32>,       // packed bitmap
+    pub scalar_bank: [f32; 16],
+    pub int_bank: [i32; 16],
+    pub time_ms: f32,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f32,
 }

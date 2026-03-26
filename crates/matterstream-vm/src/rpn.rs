@@ -185,6 +185,8 @@ pub enum MtuiOp {
     ApplyMatrix    = 0x0B,
     ReplaceOffset  = 0x0C,
     ReplaceMatrix  = 0x0D,
+    RibbonBegin    = 0x0E,
+    RibbonEnd      = 0x0F,
 }
 
 impl MtuiOp {
@@ -204,6 +206,8 @@ impl MtuiOp {
             0x0B => Some(Self::ApplyMatrix),
             0x0C => Some(Self::ReplaceOffset),
             0x0D => Some(Self::ReplaceMatrix),
+            0x0E => Some(Self::RibbonBegin),
+            0x0F => Some(Self::RibbonEnd),
             _ => None,
         }
     }
@@ -2222,6 +2226,32 @@ impl RpnVm {
                 if let Some(top) = self.transform_stack.last_mut() {
                     *top = m;
                 }
+            }),
+            // 0x0E RibbonBegin — pops 7: x, y, w, h, scroll_slot, dir, card_width
+            0x0E => ui_op!(self, pops: 7, payload: 0, {
+                let card_width = self.pop_u32_coerce()? as f32;
+                let scroll_dir = self.pop_u32_coerce()? as f32;
+                let scroll_slot = self.pop_u32_coerce()? as f32;
+                let h = self.pop_u32_coerce()? as f32;
+                let w = self.pop_u32_coerce()? as f32;
+                let raw_y = self.pop_u32_coerce()? as i32;
+                let raw_x = self.pop_u32_coerce()? as i32;
+                let (x, y) = self.transform_point(raw_x, raw_y);
+                self.push_sdf_draw(SdfDrawCmd {
+                    pos: [x as f32, y as f32],
+                    size: [w, h],
+                    color: [0.0; 4],
+                    params: [matterstream_common::DRAW_TYPE_RIBBON_BEGIN, scroll_slot, scroll_dir, card_width],
+                });
+            }),
+            // 0x0F RibbonEnd — pops 0
+            0x0F => ui_op!(self, pops: 0, payload: 0, {
+                self.push_sdf_draw(SdfDrawCmd {
+                    pos: [0.0; 2],
+                    size: [0.0; 2],
+                    color: [0.0; 4],
+                    params: [matterstream_common::DRAW_TYPE_RIBBON_END, 0.0, 0.0, 0.0],
+                });
             }),
             _ => {
                 // Unknown MTUI sub-op: skip

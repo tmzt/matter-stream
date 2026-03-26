@@ -45,6 +45,8 @@ pub mod mtui {
     pub const APPLY_MATRIX: u8 = 0x8B;
     pub const REPLACE_OFFSET: u8 = 0x8C;
     pub const REPLACE_MATRIX: u8 = 0x8D;
+    pub const RIBBON_BEGIN: u8 = 0x8E;
+    pub const RIBBON_END: u8 = 0x8F;
 }
 
 pub mod vql {
@@ -507,6 +509,16 @@ impl Asm {
         self.push32(x as u32).push32(y as u32).push32(w).push32(h);
         self.tokens.push(AsmToken::StrRef(id));
         self.raw(mtui::ACTION)
+    }
+
+    pub fn ui_ribbon_begin(&mut self, x: i32, y: i32, w: u32, h: u32, scroll_bank_slot: u32, scroll_dir: u32, card_width: u32) -> &mut Self {
+        self.push32(x as u32).push32(y as u32).push32(w).push32(h)
+            .push32(scroll_bank_slot).push32(scroll_dir).push32(card_width);
+        self.raw(mtui::RIBBON_BEGIN)
+    }
+
+    pub fn ui_ribbon_end(&mut self) -> &mut Self {
+        self.raw(mtui::RIBBON_END)
     }
 
     // ── VQL helpers (VQL0 OR page) ──

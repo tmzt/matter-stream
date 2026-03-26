@@ -10,10 +10,8 @@
 //! renderer.render(&device, &queue, &surface_view, width, height, &sdf_draws);
 //! ```
 
-use matterstream_common::SdfDrawCmd;
+use matterstream_common::{SdfDrawCmd, RenderFrame};
 
-/// GPU SDF renderer. Holds pipeline state and buffers.
-/// Does NOT own the wgpu device — attaches to an existing context.
 /// GPU Anim struct matching WGSL layout.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -24,6 +22,16 @@ struct GpuAnim {
     _pad: u32,
 }
 
+/// GPU texture descriptor matching WGSL layout.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GpuTextureDesc {
+    width: u32,
+    height: u32,
+    layer: u32,
+    flags: u32,
+}
+
 pub struct GpuSdfRenderer {
     pipeline: wgpu::RenderPipeline,
     draw_cmd_buffer: wgpu::Buffer,
@@ -32,6 +40,10 @@ pub struct GpuSdfRenderer {
     anim_buffer: wgpu::Buffer,
     glyph_bitmap_buffer: wgpu::Buffer,
     char_buffer_gpu: wgpu::Buffer,
+    texture_bank_buffer: wgpu::Buffer,
+    tex_array: wgpu::Texture,
+    tex_array_view: wgpu::TextureView,
+    tex_sampler: wgpu::Sampler,
     bind_group: wgpu::BindGroup,
     max_cmds: u32,
 }
@@ -44,7 +56,7 @@ struct RenderHeader {
     _pad: [u32; 3],
 }
 
-/// Minimal uniforms for the shader. Caller can extend.
+/// Minimal uniforms for the shader.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MinimalUniforms {
@@ -52,13 +64,12 @@ struct MinimalUniforms {
     resolution: [f32; 4],
     mouse: [f32; 4],
     theme: [f32; 4],
-    // Tier 1 banks (zeroed — not used for basic SDF rendering)
     vec4_bank: [[f32; 4]; 16],
     vec3_bank: [[f32; 4]; 16],
     scalar_bank: [[f32; 4]; 4],
     int_bank: [[i32; 4]; 4],
     zero_page: [[u32; 4]; 16],
-    font: [u32; 4],  // [glyph_w, glyph_h, first_cp, last_cp]
+    font: [u32; 4],
 }
 
 impl Default for MinimalUniforms {
@@ -95,6 +106,8 @@ impl From<&SdfDrawCmd> for GpuDrawCmd {
 }
 
 const MAX_DRAW_CMDS: u32 = 4096;
+const MAX_TEXTURE_LAYERS: u32 = 8;
+const PLACEHOLDER_TEX_SIZE: u32 = 1;
 const SHADER_SOURCE: &str = include_str!("shader_render.wgsl");
 
 impl GpuSdfRenderer {
@@ -137,7 +150,7 @@ impl GpuSdfRenderer {
 
         let glyph_bitmap_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("glyph_bitmap"),
-            size: 8192, // enough for 5x8 font × 95 glyphs = 760 u32s
+            size: 8192,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -149,7 +162,42 @@ impl GpuSdfRenderer {
             mapped_at_creation: false,
         });
 
-        // Bind group layout
+        let texture_bank_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("texture_bank"),
+            size: (MAX_TEXTURE_LAYERS as u64) * std::mem::size_of::<GpuTextureDesc>() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Placeholder texture array (1x1, 1 layer) — used when no textures are loaded
+        let tex_array = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("tex_array"),
+            size: wgpu::Extent3d {
+                width: PLACEHOLDER_TEX_SIZE,
+                height: PLACEHOLDER_TEX_SIZE,
+                depth_or_array_layers: MAX_TEXTURE_LAYERS,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let tex_array_view = tex_array.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let tex_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("tex_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        // Bind group layout (bindings 0-8)
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("sdf_render_layout"),
             entries: &[
@@ -213,6 +261,35 @@ impl GpuSdfRenderer {
                     },
                     count: None,
                 },
+                // Binding 6: texture_2d_array for texture bank
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Binding 7: sampler for texture bank
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // Binding 8: texture_bank descriptors
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -226,6 +303,9 @@ impl GpuSdfRenderer {
                 wgpu::BindGroupEntry { binding: 3, resource: anim_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: glyph_bitmap_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 5, resource: char_buffer_gpu.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&tex_array_view) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&tex_sampler) },
+                wgpu::BindGroupEntry { binding: 8, resource: texture_bank_buffer.as_entire_binding() },
             ],
         });
 
@@ -272,13 +352,16 @@ impl GpuSdfRenderer {
             anim_buffer,
             glyph_bitmap_buffer,
             char_buffer_gpu,
+            texture_bank_buffer,
+            tex_array,
+            tex_array_view,
+            tex_sampler,
             bind_group,
             max_cmds: MAX_DRAW_CMDS,
         }
     }
 
     /// Render SdfDrawCmd list to a texture view.
-    /// The caller owns the surface/texture — this just records render commands.
     pub fn render(
         &self,
         device: &wgpu::Device,
@@ -323,12 +406,10 @@ impl GpuSdfRenderer {
 
     /// Upload font atlas data (call once or when font changes).
     pub fn upload_font(&self, queue: &wgpu::Queue, font: &matterstream_common::GpuFont, bitmap: &[u32]) {
-        // Font descriptor goes in uniforms (uploaded each frame via render_full_scaled)
-        // Bitmap goes in storage buffer
         if !bitmap.is_empty() {
             queue.write_buffer(&self.glyph_bitmap_buffer, 0, bytemuck::cast_slice(bitmap));
         }
-        let _ = font; // stored in uniforms, uploaded per-frame
+        let _ = font;
     }
 
     /// Upload character data for text rendering.
@@ -355,32 +436,20 @@ impl GpuSdfRenderer {
     ) {
         let count = draws.len().min(self.max_cmds as usize);
 
-        // Upload draw commands (convert to GPU-safe wrapper type)
         if count > 0 {
             let gpu_cmds: Vec<GpuDrawCmd> = draws[..count].iter().map(GpuDrawCmd::from).collect();
-            queue.write_buffer(
-                &self.draw_cmd_buffer,
-                0,
-                bytemuck::cast_slice(&gpu_cmds),
-            );
+            queue.write_buffer(&self.draw_cmd_buffer, 0, bytemuck::cast_slice(&gpu_cmds));
         }
 
-        // Upload header
-        let header = RenderHeader {
-            cmd_count: count as u32,
-            _pad: [0; 3],
-        };
+        let header = RenderHeader { cmd_count: count as u32, _pad: [0; 3] };
         queue.write_buffer(&self.header_buffer, 0, bytemuck::bytes_of(&header));
 
-        // Upload uniforms with bank values
         let mut uniforms = MinimalUniforms::default();
         uniforms.time_delta = [time_ms, 0.0, 0.0, 0.0];
         uniforms.resolution = [width as f32, height as f32, scale, 0.0];
-        // Pack scalar_bank into vec4 groups
         for (i, val) in scalar_bank.iter().take(16).enumerate() {
             uniforms.scalar_bank[i / 4][i % 4] = *val;
         }
-        // Pack int_bank into ivec4 groups
         for (i, val) in int_bank.iter().take(16).enumerate() {
             uniforms.int_bank[i / 4][i % 4] = *val;
         }
@@ -389,7 +458,6 @@ impl GpuSdfRenderer {
         }
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        // Upload anim bank
         if !anim_bank.is_empty() {
             let gpu_anims: Vec<GpuAnim> = anim_bank.iter().map(|a| GpuAnim {
                 freq: a.freq, duty: a.duty, enable_ref: a.enable_ref, _pad: 0,
@@ -397,7 +465,6 @@ impl GpuSdfRenderer {
             queue.write_buffer(&self.anim_buffer, 0, bytemuck::cast_slice(&gpu_anims));
         }
 
-        // Render pass
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("sdf_render_encoder"),
         });
@@ -409,9 +476,7 @@ impl GpuSdfRenderer {
                     view: target,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1, g: 0.1, b: 0.12, a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.1, b: 0.12, a: 1.0 }),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -424,9 +489,41 @@ impl GpuSdfRenderer {
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.draw(0..3, 0..1); // Full-screen triangle
+            pass.draw(0..3, 0..1);
         }
 
         queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Render a fully prepared `RenderFrame`.
+    pub fn render_frame(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        frame: &RenderFrame,
+    ) {
+        if !frame.char_buffer.is_empty() {
+            queue.write_buffer(&self.char_buffer_gpu, 0, bytemuck::cast_slice(&frame.char_buffer));
+        }
+        if !frame.glyph_bitmap.is_empty() {
+            queue.write_buffer(&self.glyph_bitmap_buffer, 0, bytemuck::cast_slice(&frame.glyph_bitmap));
+        }
+
+        // Upload texture_bank descriptors
+        if !frame.texture_bank.is_empty() {
+            let gpu_descs: Vec<GpuTextureDesc> = frame.texture_bank.iter().map(|t| GpuTextureDesc {
+                width: t.width, height: t.height, layer: t.layer, flags: t.flags,
+            }).collect();
+            queue.write_buffer(&self.texture_bank_buffer, 0, bytemuck::cast_slice(&gpu_descs));
+        }
+
+        self.render_full_scaled(
+            device, queue, target,
+            frame.width, frame.height, frame.scale,
+            &frame.draws, frame.time_ms,
+            &frame.scalar_bank, &frame.int_bank,
+            &frame.anim_bank, Some(&frame.font),
+        );
     }
 }

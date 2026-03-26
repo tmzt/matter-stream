@@ -20,6 +20,7 @@ fn main() {
 }
 
 #[cfg(feature = "compiler")]
+#[allow(deprecated, unreachable_code)]
 fn run() {
     use std::env;
     use std::fs;
@@ -126,31 +127,36 @@ fn run() {
         }
     }
 
+    // Background thread toggles mic state for useMicState() demo
+    let mic_state = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let mic_state_bg = std::sync::Arc::clone(&mic_state);
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(1000));
+            let old = mic_state_bg.load(std::sync::atomic::Ordering::Relaxed);
+            mic_state_bg.store(if old == 0 { 1 } else { 0 }, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
+
     // Render with GPU SDF pipeline if available
     #[cfg(feature = "ui-gpu")]
     {
-        use std::num::NonZeroU32;
         use std::sync::Arc;
         use matterstream_ui_gpu::GpuSdfRenderer;
         use winit::event::{Event, WindowEvent};
         use winit::event_loop::{EventLoop, ControlFlow};
         use winit::window::Window;
 
-        let mut sdf_draws = vm.sdf_draws.clone();
-        let gpu_anim_bank = anim_bank.clone();
-        let mut gpu_int_bank = vm.int_bank;
-        let mut gpu_scalar_bank = vm.scalar_bank;
+        let builtin = matterstream_packaging::fnta::builtin_font();
+        let font = matterstream_common::GpuFont::new(
+            builtin.glyph_w, builtin.glyph_h, builtin.first_cp, builtin.last_cp,
+        );
 
-        // Share mic_state with GPU path too
-        let mic_state = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let mic_state_bg = std::sync::Arc::clone(&mic_state);
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_millis(1000));
-                let old = mic_state_bg.load(std::sync::atomic::Ordering::Relaxed);
-                mic_state_bg.store(if old == 0 { 1 } else { 0 }, std::sync::atomic::Ordering::Relaxed);
-            }
-        });
+        let sdf_draws = vm.sdf_draws.clone();
+        let string_table = asm_output.string_table.clone();
+        let gpu_anim_bank = anim_bank.clone();
+        let gpu_scalar_bank = vm.scalar_bank;
+        let mut gpu_int_bank = vm.int_bank;
 
         let event_loop = EventLoop::new().unwrap();
         let window = Arc::new(
@@ -186,29 +192,9 @@ fn run() {
         let renderer = GpuSdfRenderer::new(&device, surface_format);
         let start_time = std::time::Instant::now();
 
-        // Upload font atlas + char buffer for text rendering
-        let builtin = matterstream_packaging::fnta::builtin_font();
-        let gpu_font = matterstream_common::GpuFont::new(
-            builtin.glyph_w, builtin.glyph_h, builtin.first_cp, builtin.last_cp,
-        );
+        // One-time font bitmap upload
         let bitmap_u32 = matterstream_common::pack_bitmap(&builtin.bitmap);
-        renderer.upload_font(&queue, &gpu_font, &bitmap_u32);
-
-        // Pack string table into char_buffer and patch text SdfDrawCmds with packed offset/count
-        let (char_data, str_offsets) = matterstream_common::pack_strings(&asm_output.string_table);
-        renderer.upload_chars(&queue, &char_data);
-
-        // Patch text draw commands: params[3] = (char_offset << 16) | char_count
-        for cmd in sdf_draws.iter_mut() {
-            if cmd.params[0] as u32 == matterstream_common::DRAW_TYPE_TEXT as u32 {
-                let str_idx = cmd.params[3] as u32 as usize;
-                if str_idx < str_offsets.len() {
-                    let so = &str_offsets[str_idx];
-                    let packed = (so.start << 16) | so.len;
-                    cmd.params[3] = f32::from_bits(packed);
-                }
-            }
-        }
+        renderer.upload_font(&queue, &font, &bitmap_u32);
 
         event_loop.run(move |event, elwt| {
             elwt.set_control_flow(ControlFlow::Wait);
@@ -226,18 +212,23 @@ fn run() {
                         config.height = phys.height;
                         surface.configure(&device, &config);
 
-                        let frame = match surface.get_current_texture() {
+                        let frame_tex = match surface.get_current_texture() {
                             wgpu::CurrentSurfaceTexture::Success(t)
                             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
                             _ => { surface.configure(&device, &config); return; }
                         };
-                        let view = frame.texture.create_view(&Default::default());
-                        let time_ms = start_time.elapsed().as_millis() as f32;
-                        // Pass physical resolution — shader maps clip space to pixel coords
-                        // SdfDrawCmd positions are in logical pixels, shader needs to scale
+                        let view = frame_tex.texture.create_view(&Default::default());
                         let scale = window.scale_factor() as f32;
-                        renderer.render_full_scaled(&device, &queue, &view, phys.width, phys.height, scale, &sdf_draws, time_ms, &gpu_scalar_bank, &gpu_int_bank, &gpu_anim_bank, Some(&gpu_font));
-                        frame.present();
+                        let time_ms = start_time.elapsed().as_millis() as f32;
+
+                        let render_frame = matterstream_ui_cpu_compute::prepare_frame(
+                            &sdf_draws, &string_table,
+                            &font, &builtin.bitmap,
+                            &gpu_anim_bank, &gpu_scalar_bank, &gpu_int_bank,
+                            time_ms, phys.width, phys.height, scale,
+                        );
+                        renderer.render_frame(&device, &queue, &view, &render_frame);
+                        frame_tex.present();
                     }
                 }
                 Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
@@ -253,32 +244,26 @@ fn run() {
         return; // GPU path handles the event loop
     }
 
-    // Fallback: render with CPU SDF if softbuffer available
-    #[cfg(feature = "ui-softbuffer")]
+    // Fallback: render with CPU SDF if softbuffer available (and GPU not enabled)
+    #[cfg(all(feature = "ui-softbuffer", not(feature = "ui-gpu")))]
     {
         use std::num::NonZeroU32;
         use std::sync::Arc;
-        use matterstream_ui_soft::render_sdf_full;
-        use matterstream_packaging::fnta::builtin_font;
         use softbuffer::{Context, Surface};
         use winit::event::{Event, WindowEvent};
         use winit::event_loop::{EventLoop, ControlFlow};
         use winit::window::Window;
 
-        let bytecode = asm_output.bytecode.clone();
-        let string_table = asm_output.string_table.clone();
-        let font = builtin_font();
+        let builtin = matterstream_packaging::fnta::builtin_font();
+        let font = matterstream_common::GpuFont::new(
+            builtin.glyph_w, builtin.glyph_h, builtin.first_cp, builtin.last_cp,
+        );
 
-        // Background thread toggles mic state for useMicState() demo
-        let mic_state = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let mic_state_bg = std::sync::Arc::clone(&mic_state);
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_millis(1000));
-                let old = mic_state_bg.load(std::sync::atomic::Ordering::Relaxed);
-                mic_state_bg.store(if old == 0 { 1 } else { 0 }, std::sync::atomic::Ordering::Relaxed);
-            }
-        });
+        let sdf_draws = vm.sdf_draws.clone();
+        let string_table = asm_output.string_table.clone();
+        let soft_anim_bank = anim_bank.clone();
+        let soft_scalar_bank = vm.scalar_bank;
+        let mut soft_int_bank = vm.int_bank;
 
         let event_loop = EventLoop::new().unwrap();
         let window = Arc::new(
@@ -301,9 +286,8 @@ fn run() {
                     window.request_redraw();
                 }
                 Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
-                    // Sync mic state from background thread → int_bank[0]
-                    let mic_val = mic_state.load(std::sync::atomic::Ordering::Relaxed);
-                    vm.int_bank[0] = mic_val as i32;
+                    // Sync mic state from background thread
+                    soft_int_bank[0] = mic_state.load(std::sync::atomic::Ordering::Relaxed) as i32;
 
                     let phys = window.inner_size();
                     let pw = phys.width.max(1);
@@ -314,13 +298,16 @@ fn run() {
 
                     surface.resize(NonZeroU32::new(pw).unwrap(), NonZeroU32::new(ph).unwrap()).unwrap();
 
-                    let mut log_buf = vec![0x00181818u32; (lw * lh) as usize];
                     let time_ms = start_time.elapsed().as_millis() as f32;
-                    render_sdf_full(
-                        &vm.sdf_draws, &mut log_buf, lw, lh,
-                        time_ms, &anim_bank, &vm.int_bank,
-                        &string_table, Some(&font),
+                    let render_frame = matterstream_ui_cpu_compute::prepare_frame(
+                        &sdf_draws, &string_table,
+                        &font, &builtin.bitmap,
+                        &soft_anim_bank, &soft_scalar_bank, &soft_int_bank,
+                        time_ms, lw, lh, scale as f32,
                     );
+
+                    let mut log_buf = vec![0x00181818u32; (lw * lh) as usize];
+                    matterstream_ui_soft::render_frame(&render_frame, &mut log_buf);
 
                     let mut buffer = surface.buffer_mut().unwrap();
                     for py in 0..ph {
@@ -338,6 +325,9 @@ fn run() {
         }).unwrap();
     }
 
-    #[cfg(not(feature = "ui-softbuffer"))]
-    println!("No renderer — run with --features ui-softbuffer for window");
+    #[cfg(not(any(feature = "ui-softbuffer", feature = "ui-gpu")))]
+    {
+        let _ = (&anim_bank, &mic_state);
+        println!("No renderer — run with --features ui-softbuffer or ui-gpu for window");
+    }
 }

@@ -5,7 +5,7 @@
 //!
 //! Usage: `render_ui_draws_with_font::<SoftRenderer>(...)`
 
-use matterstream_common::{Rasterizer, rgba_unpack, SdfDrawCmd, Anim, sdf_eval, sdf_eval_animated, DRAW_TYPE_TEXT};
+use matterstream_common::{Rasterizer, rgba_unpack, SdfDrawCmd, Anim, RenderFrame, sdf_eval_animated, DRAW_TYPE_TEXT, DRAW_TYPE_RIBBON_BEGIN, DRAW_TYPE_RIBBON_END, DRAW_TYPE_TEXTURE};
 
 /// Softbuffer CPU rasterizer. Zero-sized type — all methods are static.
 pub struct SoftRenderer;
@@ -202,6 +202,133 @@ pub fn render_sdf_full(
                 let size = cmd.size[1] as u32; // height = font size
                 let color = f32_color_to_softbuffer(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]);
                 render_text_glyphs(buf, width, height, x, y, size, text, color, font);
+            }
+        }
+    }
+}
+
+/// Render a fully prepared `RenderFrame` to a pixel buffer.
+///
+/// This is the primary entry point for the unified pipeline.
+/// Supports ribbon view (clip + scroll), texture (placeholder), and text.
+pub fn render_frame(frame: &RenderFrame, buf: &mut [u32]) {
+    let width = frame.width;
+    let height = frame.height;
+
+    // Pre-scan for ribbon state per command (avoids tracking in inner pixel loop)
+    struct RibbonCtx { clip: [f32; 4], scroll_x: f32, scroll_y: f32 }
+    let mut ribbon_map: Vec<Option<RibbonCtx>> = Vec::with_capacity(frame.draws.len());
+    let mut current_ribbon: Option<RibbonCtx> = None;
+    for cmd in &frame.draws {
+        let ty = cmd.params[0] as u32;
+        if ty == DRAW_TYPE_RIBBON_BEGIN as u32 {
+            let slot = cmd.params[1] as usize;
+            let dir = cmd.params[2];
+            let scroll_val = if slot < 16 { frame.scalar_bank[slot] } else { 0.0 };
+            let (sx, sy) = if dir > 0.5 { (0.0, scroll_val) } else { (scroll_val, 0.0) };
+            current_ribbon = Some(RibbonCtx {
+                clip: [cmd.pos[0], cmd.pos[1], cmd.pos[0] + cmd.size[0], cmd.pos[1] + cmd.size[1]],
+                scroll_x: sx, scroll_y: sy,
+            });
+            ribbon_map.push(None); // marker cmd, no render
+        } else if ty == DRAW_TYPE_RIBBON_END as u32 {
+            current_ribbon = None;
+            ribbon_map.push(None);
+        } else {
+            ribbon_map.push(current_ribbon.as_ref().map(|r| RibbonCtx {
+                clip: r.clip, scroll_x: r.scroll_x, scroll_y: r.scroll_y,
+            }));
+        }
+    }
+
+    // First pass: SDF shapes (non-text, non-texture, non-marker) with animation
+    for py in 0..height {
+        for px in 0..width {
+            let fx = px as f32 + 0.5;
+            let fy = py as f32 + 0.5;
+            let idx = (py * width + px) as usize;
+
+            for (ci, cmd) in frame.draws.iter().enumerate() {
+                let ty = cmd.params[0] as u32;
+                if ty == DRAW_TYPE_TEXT as u32 || ty == DRAW_TYPE_TEXTURE as u32
+                    || ty == DRAW_TYPE_RIBBON_BEGIN as u32 || ty == DRAW_TYPE_RIBBON_END as u32 {
+                    continue;
+                }
+
+                // Ribbon clip + scroll
+                let (eval_x, eval_y) = if let Some(ref rb) = ribbon_map[ci] {
+                    if fx < rb.clip[0] || fx >= rb.clip[2] || fy < rb.clip[1] || fy >= rb.clip[3] {
+                        continue;
+                    }
+                    (fx - rb.scroll_x, fy - rb.scroll_y)
+                } else {
+                    (fx, fy)
+                };
+
+                let (d, color) = sdf_eval_animated(cmd, eval_x, eval_y, frame.time_ms, &frame.anim_bank, &frame.int_bank);
+                if d < 1.0 {
+                    let alpha = if d < 0.0 { color[3] } else { color[3] * (1.0 - d) };
+                    if alpha > 0.001 {
+                        let src_rgba = f32_color_to_softbuffer(color[0], color[1], color[2], alpha);
+                        buf[idx] = blend_pixel(buf[idx], src_rgba);
+                    }
+                }
+            }
+        }
+    }
+
+    // Second pass: text from packed char_buffer (with ribbon scroll)
+    if frame.font.glyph_w > 0 && frame.font.glyph_h > 0 {
+        for (ci, cmd) in frame.draws.iter().enumerate() {
+            if cmd.params[0] as u32 != DRAW_TYPE_TEXT as u32 { continue; }
+            let packed = f32::to_bits(cmd.params[3]);
+            let char_offset = (packed >> 16) as usize;
+            let char_count = (packed & 0xFFFF) as usize;
+            if char_count == 0 { continue; }
+
+            let rb = &ribbon_map[ci];
+            let (scroll_x, scroll_y) = rb.as_ref().map(|r| (r.scroll_x, r.scroll_y)).unwrap_or((0.0, 0.0));
+
+            let x = cmd.pos[0] as i32 + scroll_x as i32;
+            let y = cmd.pos[1] as i32 + scroll_y as i32;
+            let text_size = cmd.size[1] as u32;
+            let color = f32_color_to_softbuffer(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]);
+
+            let gw = frame.font.glyph_w;
+            let gh = frame.font.glyph_h;
+            let scale = (text_size / gh).max(1);
+            let advance = (gw + 1) * scale;
+
+            let clip = rb.as_ref().map(|r| r.clip);
+
+            for ci_ch in 0..char_count {
+                let cp = frame.char_buffer.get(char_offset + ci_ch).copied().unwrap_or(b'?' as u32);
+                let glyph_idx = cp.clamp(frame.font.first_cp, frame.font.last_cp) - frame.font.first_cp;
+                let char_x = x + (ci_ch as u32 * advance) as i32;
+
+                for gy in 0..gh {
+                    let row_byte = frame.glyph_bitmap.get((glyph_idx * gh + gy) as usize).copied().unwrap_or(0);
+                    for gx in 0..gw {
+                        let bit = gw - 1 - gx;
+                        if row_byte & (1 << bit) != 0 {
+                            for dy in 0..scale {
+                                for dx in 0..scale {
+                                    let px = char_x + (gx * scale + dx) as i32;
+                                    let py = y + (gy * scale + dy) as i32;
+                                    if px < 0 || py < 0 || (px as u32) >= width || (py as u32) >= height { continue; }
+                                    // Ribbon clip
+                                    if let Some(c) = clip {
+                                        let fpx = px as f32;
+                                        let fpy = py as f32;
+                                        if fpx < c[0] || fpx >= c[2] || fpy < c[1] || fpy >= c[3] { continue; }
+                                    }
+                                    let idx = (py as u32 * width + px as u32) as usize;
+                                    buf[idx] = blend_pixel(buf[idx], color);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

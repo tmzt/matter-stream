@@ -45,6 +45,13 @@ struct Anim {
     _pad: u32,
 };
 
+struct GpuTexture {
+    width: u32,
+    height: u32,
+    layer: u32,
+    flags: u32,
+};
+
 // ── Bindings ──
 
 @group(0) @binding(0) var<uniform> uniforms: GpuUniforms;
@@ -53,6 +60,9 @@ struct Anim {
 @group(0) @binding(3) var<storage, read> anim_bank: array<Anim>;
 @group(0) @binding(4) var<storage, read> glyph_bitmap: array<u32>;
 @group(0) @binding(5) var<storage, read> char_buffer: array<u32>;
+@group(0) @binding(6) var tex_array: texture_2d_array<f32>;
+@group(0) @binding(7) var tex_sampler: sampler;
+@group(0) @binding(8) var<storage, read> texture_bank: array<GpuTexture>;
 
 // ── Vertex shader: full-screen triangle ──
 
@@ -134,11 +144,56 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let count = header.cmd_count;
 
+    // Ribbon state tracking
+    var in_ribbon: bool = false;
+    var ribbon_clip_min: vec2<f32> = vec2<f32>(0.0);
+    var ribbon_clip_max: vec2<f32> = vec2<f32>(0.0);
+    var ribbon_scroll: vec2<f32> = vec2<f32>(0.0);
+
     for (var i: u32 = 0u; i < count; i = i + 1u) {
         let cmd = draw_cmds[i];
         let ty = u32(cmd.params.x);
+
+        // Handle ribbon markers first (no geometry)
+        if ty == 6u { // RIBBON_BEGIN
+            in_ribbon = true;
+            ribbon_clip_min = cmd.pos;
+            ribbon_clip_max = cmd.pos + cmd.size;
+            // Read scroll offset from scalar_bank[slot]
+            let slot = u32(cmd.params.y);
+            let pack = slot / 4u;
+            let comp = slot % 4u;
+            let scroll_val = uniforms.scalar_bank[min(pack, 3u)][min(comp, 3u)];
+            let dir = cmd.params.z;
+            if dir > 0.5 {
+                ribbon_scroll = vec2<f32>(0.0, scroll_val);
+            } else {
+                ribbon_scroll = vec2<f32>(scroll_val, 0.0);
+            }
+            continue;
+        }
+        if ty == 7u { // RIBBON_END
+            in_ribbon = false;
+            ribbon_scroll = vec2<f32>(0.0);
+            continue;
+        }
+
+        // Ribbon clipping: skip this command for pixels outside viewport
+        if in_ribbon {
+            if pixel.x < ribbon_clip_min.x || pixel.x >= ribbon_clip_max.x ||
+               pixel.y < ribbon_clip_min.y || pixel.y >= ribbon_clip_max.y {
+                continue;
+            }
+        }
+
+        // Compute effective pixel (with scroll offset for ribbon children)
+        var effective_pixel = pixel;
+        if in_ribbon {
+            effective_pixel = pixel - ribbon_scroll;
+        }
+
         let center = cmd.pos + cmd.size * 0.5;
-        let p = pixel - center;
+        let p = effective_pixel - center;
 
         var d: f32 = 1e6;
         var shadow_d: f32 = 1e6;
@@ -167,8 +222,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 d = sd_segment(p, a, b, cmd.size.y * 0.5);
             }
             case 4u: { // Text — render using font bitmap atlas
-                // params[3] = packed u16/u16: (char_offset << 16) | char_count
-                // Font descriptor in uniforms.font: [glyph_w, glyph_h, first_cp, last_cp]
                 let glyph_w = uniforms.font.x;
                 let glyph_h = uniforms.font.y;
                 let first_cp = uniforms.font.z;
@@ -189,8 +242,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         let glyph_idx = clamp(cp, first_cp, uniforms.font.w) - first_cp;
 
                         let char_x = text_x + f32(ci) * advance;
-                        let local_x = pixel.x - char_x;
-                        let local_y = pixel.y - text_y;
+                        let local_x = effective_pixel.x - char_x;
+                        let local_y = effective_pixel.y - text_y;
 
                         if local_x >= 0.0 && local_x < f32(glyph_w) * scale_f &&
                            local_y >= 0.0 && local_y < f32(glyph_h) * scale_f {
@@ -203,6 +256,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 break;
                             }
                         }
+                    }
+                }
+            }
+            case 5u: { // Texture — sample from texture array
+                let tex_idx = u32(cmd.params.y);
+                let half = cmd.size * 0.5;
+                if abs(p.x) < half.x && abs(p.y) < half.y {
+                    let uv = (p + half) / cmd.size;
+                    let tex = texture_bank[tex_idx];
+                    let color_sample = textureSample(tex_array, tex_sampler, uv, i32(tex.layer));
+                    let blend_alpha = color_sample.a * cmd.color.a;
+                    if blend_alpha > 0.001 {
+                        let tinted = vec4<f32>(color_sample.rgb * cmd.color.rgb, blend_alpha);
+                        result = blend_over(result, tinted);
                     }
                 }
             }
@@ -219,14 +286,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
 
         // Animation: params.z = anim_bank index (0 = none, 1+ = AnimBank[idx-1])
-        // Branchless — pure math for GPU coherence.
         var anim_alpha: f32 = 1.0;
         let anim_idx = u32(cmd.params.z);
         let has_anim = step(0.5, f32(anim_idx));
         if has_anim > 0.0 {
             let a = anim_bank[max(anim_idx, 1u) - 1u];
 
-            // Read enable from int_bank (or 1.0 if no enable_ref)
             let has_enable = step(0.5, f32(a.enable_ref));
             let slot = a.enable_ref & 0xFFFFu;
             let pack = slot / 4u;
@@ -234,22 +299,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let bank_val = f32(uniforms.int_bank[min(pack, 3u)][min(comp, 3u)]);
             let enabled = mix(1.0, bank_val, has_enable);
 
-            // Pulse from sin wave + duty cycle
             let time_s = uniforms.time_delta.x / 1000.0;
             let phase = sin(time_s * a.freq * 6.283185);
             let threshold = 1.0 - a.duty * 2.0;
             let pulse = smoothstep(0.0, 0.1, phase - threshold);
 
-            // freq=0 → just use enabled (static), freq>0 → pulse
             let has_freq = step(0.001, a.freq);
             anim_alpha = mix(enabled, enabled * pulse, has_freq);
         }
 
-        // Shape fill with anti-aliased edge
-        let fill_alpha = cmd.color.a * anim_alpha * (1.0 - smoothstep(-0.5, 0.5, d));
-        if fill_alpha > 0.001 {
-            let shape_color = vec4<f32>(cmd.color.rgb, fill_alpha);
-            result = blend_over(result, shape_color);
+        // Shape fill with anti-aliased edge (skip for texture type — already blended)
+        if ty != 5u {
+            let fill_alpha = cmd.color.a * anim_alpha * (1.0 - smoothstep(-0.5, 0.5, d));
+            if fill_alpha > 0.001 {
+                let shape_color = vec4<f32>(cmd.color.rgb, fill_alpha);
+                result = blend_over(result, shape_color);
+            }
         }
     }
 

@@ -9,12 +9,32 @@ pub const DRAW_TYPE_SLAB: f32 = 1.0;
 pub const DRAW_TYPE_CIRCLE: f32 = 2.0;
 pub const DRAW_TYPE_LINE: f32 = 3.0;
 pub const DRAW_TYPE_TEXT: f32 = 4.0;
+pub const DRAW_TYPE_TEXTURE: f32 = 5.0;
+pub const DRAW_TYPE_RIBBON_BEGIN: f32 = 6.0;
+pub const DRAW_TYPE_RIBBON_END: f32 = 7.0;
 
 /// Maximum draw commands per frame.
 pub const MAX_DRAW_CMDS: usize = 4096;
 
 /// Maximum animation bank entries.
 pub const MAX_ANIMS: usize = 32;
+
+/// Maximum texture bank entries.
+pub const MAX_TEXTURES: usize = 8;
+
+/// GPU texture descriptor — stored in texture_bank, 16 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuTexture {
+    pub width: u32,
+    pub height: u32,
+    pub layer: u32,      // index into texture_2d_array
+    pub flags: u32,      // format, filtering mode
+}
+
+impl GpuTexture {
+    pub const NONE: Self = Self { width: 0, height: 0, layer: 0, flags: 0 };
+}
 
 /// Animation descriptor — stored in AnimBank, referenced by SdfDrawCmd.params[2].
 /// 16 bytes, GPU-uploadable.

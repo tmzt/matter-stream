@@ -45,7 +45,7 @@ struct JsxNode {
 /// An arrow-function component definition.
 #[derive(Debug, Clone)]
 struct ComponentDef {
-    params: Vec<String>,
+    _params: Vec<String>,
     body: Vec<JsxNode>,
 }
 
@@ -64,7 +64,7 @@ enum StateBackend {
 #[derive(Debug, Clone)]
 struct StateBinding {
     name: String,
-    setter_name: String,
+    _setter_name: String,
     backend: StateBackend,
 }
 
@@ -92,7 +92,7 @@ impl AsmCompiler {
         let packed_ref = (BANK_INT as u32) << 16 | slot as u32;
         self.state_bindings.push(StateBinding {
             name: name.to_string(),
-            setter_name: setter_name.to_string(),
+            _setter_name: setter_name.to_string(),
             backend: StateBackend::IntBank { packed_ref, initial_value: initial },
         });
         packed_ref
@@ -102,13 +102,13 @@ impl AsmCompiler {
     fn alloc_atomic_hook(&mut self, name: &str, setter_name: &str, atomic_slot: u32) {
         self.state_bindings.push(StateBinding {
             name: name.to_string(),
-            setter_name: setter_name.to_string(),
+            _setter_name: setter_name.to_string(),
             backend: StateBackend::UserAtomic { slot: atomic_slot },
         });
     }
 
     /// Look up a state binding by variable name.
-    fn resolve_state(&self, name: &str) -> Option<&StateBinding> {
+    fn _resolve_state(&self, name: &str) -> Option<&StateBinding> {
         self.state_bindings.iter().find(|b| b.name == name)
     }
 
@@ -216,7 +216,7 @@ impl AsmCompiler {
         // Extract JSX body from the arrow function
         let body_nodes = self.extract_arrow_body(arrow)?;
 
-        self.components.insert(name, ComponentDef { params, body: body_nodes });
+        self.components.insert(name, ComponentDef { _params: params, body: body_nodes });
         Ok(())
     }
 

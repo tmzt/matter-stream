@@ -26,10 +26,14 @@ optional = true
 path = "../matterstream-ui-gpu"
 optional = true
 
+[dependencies.matterstream-ui-cpu-compute]
+path = "../matterstream-ui-cpu-compute"
+optional = true
+
 [features]
 compiler = ["dep:matterstream-compiler"]
-ui-softbuffer = ["dep:matterstream-ui-soft"]
-ui-gpu = ["dep:matterstream-ui-gpu"]
+ui-softbuffer = ["dep:matterstream-ui-soft", "dep:matterstream-ui-cpu-compute"]
+ui-gpu = ["dep:matterstream-ui-gpu", "dep:matterstream-ui-cpu-compute"]
 
 
 [dev-dependencies]
