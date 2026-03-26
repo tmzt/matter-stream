@@ -34,11 +34,12 @@ impl<'a> VmHandle<'a> {
 
     /// Resolve a string table index to a string.
     pub fn resolve_str(&self, idx: u32) -> Result<String, RpnError> {
+        let effective_idx = idx + self.vm.string_base_offset;
         self.vm
             .string_table
-            .get(idx as usize)
+            .get(effective_idx as usize)
             .cloned()
-            .ok_or(RpnError::InvalidStringIndex(idx))
+            .ok_or(RpnError::InvalidStringIndex(effective_idx))
     }
 
     /// Read a control register.

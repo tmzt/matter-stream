@@ -20,6 +20,19 @@ use matterstream_vm_arena::TripleArena;
 /// Native hook function signature for VM-escape dispatch.
 pub type NativeHookFn = fn(vm: &mut RpnVm, arenas: &mut TripleArena) -> Result<(), RpnError>;
 
+/// Descriptor for a loaded component (from a package archive).
+#[derive(Clone, Debug)]
+pub struct ComponentEntry {
+    /// Index into `RpnVm::loaded_bytecodes`.
+    pub bytecode_id: u16,
+    /// Byte offset within the bytecode blob.
+    pub offset: u32,
+    /// Length in bytes.
+    pub length: u32,
+    /// Base offset added to string table indices during execution.
+    pub string_base: u32,
+}
+
 use crate::event::{VmEvent, VmEventType};
 use crate::ui_vm::{
     VqlOutput, VqlField, VQL_OUTPUT_MAX,
@@ -676,6 +689,8 @@ pub enum RpnError {
     ObjTypeNoActiveDef,
     CardLimitExceeded,
     CardNoActiveDef,
+    ComponentNotFound(u128),
+    ComponentDepthExceeded,
     OidNotFound { hi: u64, lo: u64 },
     OidSecurityViolation { hi: u64, lo: u64, required: &'static str, actual: &'static str },
     OidNoIndicesLoaded,
@@ -729,6 +744,8 @@ impl fmt::Display for RpnError {
             RpnError::ObjTypeNoActiveDef => write!(f, "RPN no active object type definition"),
             RpnError::CardLimitExceeded => write!(f, "RPN card definition limit exceeded"),
             RpnError::CardNoActiveDef => write!(f, "RPN no active card definition"),
+            RpnError::ComponentNotFound(fqa) => write!(f, "RPN component not found: {:#034x}", fqa),
+            RpnError::ComponentDepthExceeded => write!(f, "RPN component nesting depth exceeded (max 16)"),
             RpnError::OidNotFound { hi, lo } => {
                 write!(f, "RPN OID not found: {:#018x}:{:#018x}", hi, lo)
             }
@@ -837,6 +854,16 @@ pub struct RpnVm {
     /// Native hook dispatch table (system/internal packages only).
     pub native_hooks: Vec<NativeHookFn>,
 
+    // ── Component import state ─────────────────────────────────────────
+    /// Component registry: FQA (u128) → entry descriptor.
+    pub component_table: std::collections::HashMap<u128, ComponentEntry>,
+    /// Loaded bytecode blobs from packages (indexed by bytecode_id).
+    pub loaded_bytecodes: Vec<Vec<u8>>,
+    /// String base offset — added to string table indices during component execution.
+    pub string_base_offset: u32,
+    /// Component nesting depth guard (max 16).
+    pub component_depth: u8,
+
     /// External OR page handlers — (fourcc, handler) pairs, linear scanned.
     or_pages: Vec<(u32, Box<dyn OrPageHandler>)>,
 
@@ -889,6 +916,10 @@ impl RpnVm {
             sdf_draws: Vec::new(),
             oid_indices: Vec::new(),
             native_hooks: Vec::new(),
+            component_table: std::collections::HashMap::new(),
+            loaded_bytecodes: Vec::new(),
+            string_base_offset: 0,
+            component_depth: 0,
             or_pages: Vec::new(),
             #[cfg(feature = "ui")]
             ui_draws: Vec::new(),
@@ -972,10 +1003,11 @@ impl RpnVm {
     }
 
     fn resolve_str(&self, idx: u32) -> Result<String, RpnError> {
+        let effective_idx = idx + self.string_base_offset;
         self.string_table
-            .get(idx as usize)
+            .get(effective_idx as usize)
             .cloned()
-            .ok_or(RpnError::InvalidStringIndex(idx))
+            .ok_or(RpnError::InvalidStringIndex(effective_idx))
     }
 
     #[cfg(feature = "ui")]
@@ -1317,6 +1349,34 @@ impl RpnVm {
             }
             self.step(bytecode, arenas)?;
             if self.trace.halted {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Execute bytecode without resetting VM state.
+    /// Used by ExecComponent for recursive component calls.
+    fn execute_inner(
+        &mut self,
+        bytecode: &[u8],
+        arenas: &mut TripleArena,
+    ) -> Result<(), RpnError> {
+        let saved_halted = self.trace.halted;
+        self.trace.halted = false;
+        self.pc = 0;
+        let mut cycles = 0usize;
+
+        while self.pc < bytecode.len() {
+            cycles += 1;
+            if cycles > self.max_cycles {
+                return Err(RpnError::CycleLimitExceeded);
+            }
+            self.step(bytecode, arenas)?;
+            if self.trace.halted {
+                // Halt inside component = return from component, not kill VM
+                self.trace.halted = saved_halted;
                 break;
             }
         }
@@ -1801,8 +1861,56 @@ impl RpnVm {
                 self.pc += 1;
             }
             RpnOp::ExecComponent => {
-                // Stub: enter component's ordinal scope
-                self.pc += 1;
+                // Pop FQA, look up component, execute with state isolation
+                let fqa_val = self.stack.pop().ok_or(RpnError::StackUnderflow)?;
+                let fqa_key = match fqa_val {
+                    RpnValue::Fqa(f) => f.0,
+                    RpnValue::U64(v) => v as u128,
+                    RpnValue::U32(v) => v as u128,
+                    _ => return Err(RpnError::TypeMismatch),
+                };
+                let entry = self.component_table.get(&fqa_key)
+                    .ok_or(RpnError::ComponentNotFound(fqa_key))?
+                    .clone();
+                if self.component_depth >= 16 {
+                    return Err(RpnError::ComponentDepthExceeded);
+                }
+
+                // Save context
+                let saved_pc = self.pc;
+                let saved_string_base = self.string_base_offset;
+                let saved_depth = self.component_depth;
+
+                // UI state isolation
+                #[cfg(feature = "ui")]
+                {
+                    self.ui_state_stack.push(self.ui_state);
+                    self.transform_stack.push(MAT4_IDENTITY);
+                }
+
+                // Enter component
+                self.string_base_offset = entry.string_base;
+                self.component_depth += 1;
+
+                let bc = self.loaded_bytecodes[entry.bytecode_id as usize].clone();
+                let component_bc = &bc[entry.offset as usize..(entry.offset + entry.length) as usize];
+                let result = self.execute_inner(component_bc, arenas);
+
+                // Restore context
+                self.pc = saved_pc + 1;
+                self.string_base_offset = saved_string_base;
+                self.component_depth = saved_depth;
+
+                #[cfg(feature = "ui")]
+                {
+                    self.transform_stack.pop();
+                    if let Some(state) = self.ui_state_stack.pop() {
+                        self.ui_state = state;
+                    }
+                }
+
+                result?;
+                return Ok(()); // pc already advanced
             }
             // ── UserCall (0x60): unprivileged escape ──
             RpnOp::UserCall => {

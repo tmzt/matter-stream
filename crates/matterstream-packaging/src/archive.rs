@@ -246,6 +246,16 @@ impl MtsmArchive {
         }
     }
 
+    /// Get the .ctab member (component table), if present.
+    pub fn ctab(&self) -> Option<&ArchiveMember> {
+        self.members.iter().find(|m| m.fourcc == FourCC::Ctab)
+    }
+
+    /// Get the .stab member (string table), if present.
+    pub fn stab(&self) -> Option<&ArchiveMember> {
+        self.members.iter().find(|m| m.fourcc == FourCC::Stab)
+    }
+
     /// Get all .odat (embedding data) members.
     pub fn oid_data_members(&self) -> Vec<&ArchiveMember> {
         self.members
