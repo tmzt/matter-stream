@@ -101,6 +101,11 @@ fn run() {
     }
 
     println!("Executed: {} SDF draw commands", vm.sdf_draws.len());
+    for (i, cmd) in vm.sdf_draws.iter().enumerate() {
+        println!("  [{i}] ty={} pos=({},{}) size=({},{}) color=({:.2},{:.2},{:.2},{:.2})",
+            cmd.params[0] as u32, cmd.pos[0], cmd.pos[1], cmd.size[0], cmd.size[1],
+            cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]);
+    }
 
     // Render with GPU SDF pipeline if available
     #[cfg(feature = "ui-gpu")]
@@ -119,7 +124,7 @@ fn run() {
             event_loop.create_window(
                 Window::default_attributes()
                     .with_title(&format!("run-tsx [GPU]: {}", file_path))
-                    .with_inner_size(winit::dpi::LogicalSize::new(400, 300)),
+                    .with_inner_size(winit::dpi::LogicalSize::new(1024, 120)),
             ).unwrap(),
         );
 
@@ -192,7 +197,7 @@ fn run() {
             event_loop.create_window(
                 Window::default_attributes()
                     .with_title(&format!("run-tsx: {}", file_path))
-                    .with_inner_size(winit::dpi::LogicalSize::new(400, 300)),
+                    .with_inner_size(winit::dpi::LogicalSize::new(1024, 120)),
             ).unwrap(),
         );
 
