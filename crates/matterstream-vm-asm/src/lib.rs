@@ -428,6 +428,12 @@ impl Asm {
         self.raw(mtui::TEXT_STR)
     }
 
+    /// Conditional push: reads bank[slot], pushes true_val if != 0, else false_val.
+    pub fn push_if(&mut self, bank_id: u32, slot: u32, true_val: u32, false_val: u32) -> &mut Self {
+        self.push32(bank_id).push32(slot).push32(true_val).push32(false_val);
+        self.op(RpnOp::PushIf)
+    }
+
     pub fn ui_push_state(&mut self) -> &mut Self { self.raw(mtui::PUSH_STATE) }
     pub fn ui_pop_state(&mut self) -> &mut Self { self.raw(mtui::POP_STATE) }
 
