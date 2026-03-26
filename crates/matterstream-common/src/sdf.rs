@@ -29,6 +29,10 @@ pub struct SdfDrawCmd {
     pub size: [f32; 2],
     pub color: [f32; 4],
     pub params: [f32; 4],
+    /// Animation binding: [freq_slot, duty_slot, enable_slot, reserved].
+    /// Each slot is a packed ref (bank_type << 16 | index) as f32 bits.
+    /// If all zero, no animation — static rendering.
+    pub anim: [f32; 4],
 }
 
 impl SdfDrawCmd {
@@ -37,6 +41,7 @@ impl SdfDrawCmd {
         size: [0.0; 2],
         color: [0.0; 4],
         params: [0.0; 4],
+        anim: [0.0; 4],
     };
 
     /// Draw type from params[0].
@@ -92,6 +97,7 @@ pub fn sd_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32, thicknes
 
 /// Evaluate the SDF for a single draw command at pixel position (px, py).
 /// Returns (distance, color) — negative distance means inside.
+/// For animated evaluation, use `sdf_eval_animated`.
 pub fn sdf_eval(cmd: &SdfDrawCmd, px: f32, py: f32) -> (f32, [f32; 4]) {
     let cx = cmd.pos[0] + cmd.size[0] * 0.5;
     let cy = cmd.pos[1] + cmd.size[1] * 0.5;
@@ -116,6 +122,70 @@ pub fn sdf_eval(cmd: &SdfDrawCmd, px: f32, py: f32) -> (f32, [f32; 4]) {
 }
 
 /// Unpack a u32 RGBA (0xRRGGBBAA) to [f32; 4] (0.0-1.0).
+/// Evaluate SDF with time-based animation.
+/// `time_ms` = elapsed milliseconds from GlobalUniforms.
+/// `scalar_bank` / `int_bank` = current ComponentUniforms bank values.
+/// Returns (distance, animated_color) with alpha modulated by animation.
+pub fn sdf_eval_animated(
+    cmd: &SdfDrawCmd,
+    px: f32,
+    py: f32,
+    time_ms: f32,
+    scalar_bank: &[f32],
+    int_bank: &[i32],
+) -> (f32, [f32; 4]) {
+    let (d, mut color) = sdf_eval(cmd, px, py);
+
+    // Check if animation is active (any non-zero anim slot)
+    let has_anim = cmd.anim[0] != 0.0 || cmd.anim[1] != 0.0 || cmd.anim[2] != 0.0;
+    if has_anim {
+        // Read animation params from banks via packed refs
+        let freq = read_scalar_from_ref(cmd.anim[0], scalar_bank);
+        let duty = read_scalar_from_ref(cmd.anim[1], scalar_bank);
+        let enabled = read_int_from_ref(cmd.anim[2], int_bank) as f32;
+
+        // Time-based pulse: sin wave with duty cycle threshold
+        let time_s = time_ms / 1000.0;
+        let phase = (time_s * freq * std::f32::consts::TAU).sin();
+        let threshold = 1.0 - duty * 2.0;
+        let pulse = smoothstep(0.0, 0.1, phase - threshold);
+
+        color[3] *= enabled * pulse;
+    }
+
+    (d, color)
+}
+
+/// Smoothstep interpolation (matches WGSL smoothstep).
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Read a scalar value from a packed bank ref stored as f32 bits.
+fn read_scalar_from_ref(ref_bits: f32, scalar_bank: &[f32]) -> f32 {
+    let packed = ref_bits.to_bits();
+    let bank_type = (packed >> 16) as u16;
+    let slot = (packed & 0xFFFF) as usize;
+    if bank_type == 0 && slot < scalar_bank.len() {
+        scalar_bank[slot]
+    } else {
+        0.0
+    }
+}
+
+/// Read an int value from a packed bank ref stored as f32 bits.
+fn read_int_from_ref(ref_bits: f32, int_bank: &[i32]) -> i32 {
+    let packed = ref_bits.to_bits();
+    let bank_type = (packed >> 16) as u16;
+    let slot = (packed & 0xFFFF) as usize;
+    if bank_type == 1 && slot < int_bank.len() {
+        int_bank[slot]
+    } else {
+        0
+    }
+}
+
 pub fn color_u32_to_f32(rgba: u32) -> [f32; 4] {
     [
         ((rgba >> 24) & 0xFF) as f32 / 255.0,
@@ -162,7 +232,7 @@ mod tests {
             pos: [10.0, 10.0],
             size: [20.0, 20.0],
             color: [1.0, 0.0, 0.0, 1.0],
-            params: [DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
+            params: [DRAW_TYPE_BOX, 0.0, 0.0, 0.0], anim: [0.0; 4],
         };
         let (d, _) = sdf_eval(&cmd, 20.0, 20.0); // center
         assert!(d < 0.0);

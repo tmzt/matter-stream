@@ -71,11 +71,12 @@ struct GpuDrawCmd {
     size: [f32; 2],
     color: [f32; 4],
     params: [f32; 4],
+    anim: [f32; 4],
 }
 
 impl From<&SdfDrawCmd> for GpuDrawCmd {
     fn from(cmd: &SdfDrawCmd) -> Self {
-        Self { pos: cmd.pos, size: cmd.size, color: cmd.color, params: cmd.params }
+        Self { pos: cmd.pos, size: cmd.size, color: cmd.color, params: cmd.params, anim: cmd.anim }
     }
 }
 
@@ -216,6 +217,19 @@ impl GpuSdfRenderer {
         height: u32,
         draws: &[SdfDrawCmd],
     ) {
+        self.render_animated(device, queue, target, width, height, draws, 0.0);
+    }
+
+    pub fn render_animated(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        draws: &[SdfDrawCmd],
+        time_ms: f32,
+    ) {
         let count = draws.len().min(self.max_cmds as usize);
 
         // Upload draw commands (convert to GPU-safe wrapper type)
@@ -237,6 +251,7 @@ impl GpuSdfRenderer {
 
         // Upload uniforms
         let mut uniforms = MinimalUniforms::default();
+        uniforms.time_delta = [time_ms, 0.0, 0.0, 0.0];
         uniforms.resolution = [width as f32, height as f32, 1.0, 0.0];
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 

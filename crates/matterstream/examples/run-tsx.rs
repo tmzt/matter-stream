@@ -146,6 +146,7 @@ fn run() {
         surface.configure(&device, &config);
 
         let renderer = GpuSdfRenderer::new(&device, surface_format);
+        let start_time = std::time::Instant::now();
 
         event_loop.run(move |event, elwt| {
             elwt.set_control_flow(ControlFlow::Wait);
@@ -166,7 +167,8 @@ fn run() {
                             _ => { surface.configure(&device, &config); return; }
                         };
                         let view = frame.texture.create_view(&Default::default());
-                        renderer.render(&device, &queue, &view, size.width, size.height, &sdf_draws);
+                        let time_ms = start_time.elapsed().as_millis() as f32;
+                        renderer.render_animated(&device, &queue, &view, size.width, size.height, &sdf_draws, time_ms);
                         frame.present();
                     }
                 }
@@ -188,7 +190,7 @@ fn run() {
     {
         use std::num::NonZeroU32;
         use std::sync::Arc;
-        use matterstream_ui_soft::render_sdf_with_font;
+        use matterstream_ui_soft::render_sdf_full;
         use matterstream_packaging::fnta::builtin_font;
         use softbuffer::{Context, Surface};
         use winit::event::{Event, WindowEvent};
@@ -221,6 +223,7 @@ fn run() {
 
         let context = Context::new(window.clone()).unwrap();
         let mut surface = Surface::new(&context, window.clone()).unwrap();
+        let start_time = std::time::Instant::now();
         window.request_redraw();
 
         event_loop.run(move |event, elwt| {
@@ -251,7 +254,12 @@ fn run() {
                     surface.resize(NonZeroU32::new(pw).unwrap(), NonZeroU32::new(ph).unwrap()).unwrap();
 
                     let mut log_buf = vec![0x00181818u32; (lw * lh) as usize];
-                    render_sdf_with_font(&vm.sdf_draws, &mut log_buf, lw, lh, &string_table, Some(&font));
+                    let time_ms = start_time.elapsed().as_millis() as f32;
+                    render_sdf_full(
+                        &vm.sdf_draws, &mut log_buf, lw, lh,
+                        time_ms, &vm.scalar_bank, &vm.int_bank,
+                        &string_table, Some(&font),
+                    );
 
                     let mut buffer = surface.buffer_mut().unwrap();
                     for py in 0..ph {

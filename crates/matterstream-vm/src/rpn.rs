@@ -2074,7 +2074,7 @@ impl RpnVm {
                 self.push_sdf_draw(matterstream_common::SdfDrawCmd {
                     pos: [x as f32, y as f32], size: [w as f32, h as f32],
                     color: matterstream_common::color_u32_to_f32(color),
-                    params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
+                    params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0], anim: [0.0; 4],
                 });
             }),
             // 0x02 Slab
@@ -2090,7 +2090,7 @@ impl RpnVm {
                 self.push_sdf_draw(matterstream_common::SdfDrawCmd {
                     pos: [x as f32, y as f32], size: [w as f32, h as f32],
                     color: matterstream_common::color_u32_to_f32(color),
-                    params: [matterstream_common::DRAW_TYPE_SLAB, radius as f32, 0.0, 0.0],
+                    params: [matterstream_common::DRAW_TYPE_SLAB, radius as f32, 0.0, 0.0], anim: [0.0; 4],
                 });
             }),
             // 0x03 Circle
@@ -2105,7 +2105,7 @@ impl RpnVm {
                 self.push_sdf_draw(matterstream_common::SdfDrawCmd {
                     pos: [(x - r as i32) as f32, (y - r as i32) as f32], size: [d, d],
                     color: matterstream_common::color_u32_to_f32(color),
-                    params: [matterstream_common::DRAW_TYPE_CIRCLE, r as f32, 0.0, 0.0],
+                    params: [matterstream_common::DRAW_TYPE_CIRCLE, r as f32, 0.0, 0.0], anim: [0.0; 4],
                 });
             }),
             // 0x04 Text
@@ -2120,7 +2120,7 @@ impl RpnVm {
                 self.push_sdf_draw(matterstream_common::SdfDrawCmd {
                     pos: [x as f32, y as f32], size: [(size * 4) as f32, size as f32],
                     color: matterstream_common::color_u32_to_f32(color),
-                    params: [matterstream_common::DRAW_TYPE_TEXT, 0.0, 0.0, slot as f32],
+                    params: [matterstream_common::DRAW_TYPE_TEXT, 0.0, 0.0, slot as f32], anim: [0.0; 4],
                 });
             }),
             // 0x05 PushState
@@ -2162,7 +2162,7 @@ impl RpnVm {
                 self.push_sdf_draw(matterstream_common::SdfDrawCmd {
                     pos: [x1 as f32, y1 as f32], size: [x2 as f32, y2 as f32],
                     color: matterstream_common::color_u32_to_f32(color),
-                    params: [matterstream_common::DRAW_TYPE_LINE, 0.0, 0.0, 0.0],
+                    params: [matterstream_common::DRAW_TYPE_LINE, 0.0, 0.0, 0.0], anim: [0.0; 4],
                 });
             }),
             // 0x09 TextStr — pops [x, y, size, bank_id, str_idx]
@@ -2180,7 +2180,7 @@ impl RpnVm {
                 self.push_sdf_draw(matterstream_common::SdfDrawCmd {
                     pos: [x as f32, y as f32], size: [(size * 4) as f32, size as f32],
                     color: matterstream_common::color_u32_to_f32(color),
-                    params: [matterstream_common::DRAW_TYPE_TEXT, bank_id as f32, 0.0, str_idx as f32],
+                    params: [matterstream_common::DRAW_TYPE_TEXT, bank_id as f32, 0.0, str_idx as f32], anim: [0.0; 4],
                 });
             }),
             // 0x0A Action

@@ -5,7 +5,7 @@
 //!
 //! Usage: `render_ui_draws_with_font::<SoftRenderer>(...)`
 
-use matterstream_common::{Rasterizer, rgba_unpack, SdfDrawCmd, sdf_eval, DRAW_TYPE_TEXT};
+use matterstream_common::{Rasterizer, rgba_unpack, SdfDrawCmd, sdf_eval, sdf_eval_animated, DRAW_TYPE_TEXT};
 
 /// Softbuffer CPU rasterizer. Zero-sized type — all methods are static.
 pub struct SoftRenderer;
@@ -131,14 +131,12 @@ pub fn draw_line(buf: &mut [u32], width: u32, height: u32, x1: i32, y1: i32, x2:
 
 // ── SDF-based rendering (new primary path) ──────────────────────────────
 
-/// Render SdfDrawCmd list to a softbuffer pixel buffer using per-pixel SDF evaluation.
-///
-/// `buf` is in softbuffer format (0x00RRGGBB), `width` × `height` pixels.
+/// Render SdfDrawCmd list (no animation, no text).
 pub fn render_sdf(draws: &[SdfDrawCmd], buf: &mut [u32], width: u32, height: u32) {
-    render_sdf_with_font(draws, buf, width, height, &[], None);
+    render_sdf_full(draws, buf, width, height, 0.0, &[], &[], &[], None);
 }
 
-/// Render SdfDrawCmd list with font atlas support for text rendering.
+/// Render SdfDrawCmd list with font + animation support.
 pub fn render_sdf_with_font(
     draws: &[SdfDrawCmd],
     buf: &mut [u32],
@@ -147,7 +145,22 @@ pub fn render_sdf_with_font(
     string_table: &[String],
     font: Option<&matterstream_packaging::fnta::FontAtlas>,
 ) {
-    // First pass: render SDF shapes (non-text)
+    render_sdf_full(draws, buf, width, height, 0.0, &[], &[], string_table, font);
+}
+
+/// Full SDF render with animation, banks, time, text.
+pub fn render_sdf_full(
+    draws: &[SdfDrawCmd],
+    buf: &mut [u32],
+    width: u32,
+    height: u32,
+    time_ms: f32,
+    scalar_bank: &[f32],
+    int_bank: &[i32],
+    string_table: &[String],
+    font: Option<&matterstream_packaging::fnta::FontAtlas>,
+) {
+    // First pass: render SDF shapes (non-text) with animation
     for py in 0..height {
         for px in 0..width {
             let fx = px as f32 + 0.5;
@@ -156,9 +169,9 @@ pub fn render_sdf_with_font(
 
             for cmd in draws {
                 if cmd.params[0] as u32 == DRAW_TYPE_TEXT as u32 {
-                    continue; // text handled in second pass
+                    continue;
                 }
-                let (d, color) = sdf_eval(cmd, fx, fy);
+                let (d, color) = sdf_eval_animated(cmd, fx, fy, time_ms, scalar_bank, int_bank);
                 if d < 1.0 {
                     let alpha = if d < 0.0 { color[3] } else { color[3] * (1.0 - d) };
                     if alpha > 0.001 {
@@ -292,7 +305,7 @@ mod tests {
             pos: [2.0, 2.0],
             size: [6.0, 6.0],
             color: [1.0, 0.0, 0.0, 1.0],
-            params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
+            params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0], anim: [0.0; 4],
         }];
         let (w, h) = (10u32, 10u32);
         let mut buf = vec![0u32; (w * h) as usize];
@@ -310,7 +323,7 @@ mod tests {
             pos: [0.0, 0.0],
             size: [10.0, 10.0],
             color: [0.0, 1.0, 0.0, 1.0],
-            params: [matterstream_common::DRAW_TYPE_SLAB, 2.0, 0.0, 0.0],
+            params: [matterstream_common::DRAW_TYPE_SLAB, 2.0, 0.0, 0.0], anim: [0.0; 4],
         }];
         let (w, h) = (10u32, 10u32);
         let mut buf = vec![0u32; (w * h) as usize];
@@ -325,12 +338,12 @@ mod tests {
             SdfDrawCmd {
                 pos: [0.0, 0.0], size: [20.0, 20.0],
                 color: [1.0, 0.0, 0.0, 1.0],
-                params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
+                params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0], anim: [0.0; 4],
             },
             SdfDrawCmd {
                 pos: [5.0, 5.0], size: [10.0, 10.0],
                 color: [0.0, 0.0, 1.0, 1.0],
-                params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
+                params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0], anim: [0.0; 4],
             },
         ];
         let (w, h) = (20u32, 20u32);

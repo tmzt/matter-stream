@@ -15,6 +15,7 @@ struct DrawCmd {
     size: vec2<f32>,
     color: vec4<f32>,
     params: vec4<f32>,   // [ty, radius, softness, slot]
+    anim: vec4<f32>,     // [freq_ref, duty_ref, enable_ref, reserved]
 };
 
 struct RenderHeader {
@@ -168,8 +169,44 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             result = blend_over(result, shadow_color);
         }
 
+        // Animation: modulate alpha based on time + bank values
+        var anim_alpha: f32 = 1.0;
+        let has_anim = cmd.anim.x != 0.0 || cmd.anim.y != 0.0 || cmd.anim.z != 0.0;
+        if has_anim {
+            let freq_ref = bitcast<u32>(cmd.anim.x);
+            let duty_ref = bitcast<u32>(cmd.anim.y);
+            let enable_ref = bitcast<u32>(cmd.anim.z);
+
+            // Read freq from scalar_bank
+            let freq_slot = freq_ref & 0xFFFFu;
+            let freq_pack = freq_slot / 4u;
+            let freq_comp = freq_slot % 4u;
+            var freq: f32 = 0.0;
+            if freq_pack < 4u { freq = uniforms.scalar_bank[freq_pack][freq_comp]; }
+
+            // Read duty from scalar_bank
+            let duty_slot = duty_ref & 0xFFFFu;
+            let duty_pack = duty_slot / 4u;
+            let duty_comp = duty_slot % 4u;
+            var duty: f32 = 1.0;
+            if duty_pack < 4u { duty = uniforms.scalar_bank[duty_pack][duty_comp]; }
+
+            // Read enabled from int_bank
+            let enable_slot = enable_ref & 0xFFFFu;
+            let enable_pack = enable_slot / 4u;
+            let enable_comp = enable_slot % 4u;
+            var enabled: f32 = 0.0;
+            if enable_pack < 4u { enabled = f32(uniforms.int_bank[enable_pack][enable_comp]); }
+
+            let time_s = uniforms.time_delta.x / 1000.0;
+            let phase = sin(time_s * freq * 6.283185);
+            let threshold = 1.0 - duty * 2.0;
+            let pulse = smoothstep(0.0, 0.1, phase - threshold);
+            anim_alpha = enabled * pulse;
+        }
+
         // Shape fill with anti-aliased edge
-        let fill_alpha = cmd.color.a * (1.0 - smoothstep(-0.5, 0.5, d));
+        let fill_alpha = cmd.color.a * anim_alpha * (1.0 - smoothstep(-0.5, 0.5, d));
         if fill_alpha > 0.001 {
             let shape_color = vec4<f32>(cmd.color.rgb, fill_alpha);
             result = blend_over(result, shape_color);
