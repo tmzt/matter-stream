@@ -145,6 +145,7 @@ fn run() {
         surface.configure(&device, &config);
 
         let renderer = GpuSdfRenderer::new(&device, surface_format);
+        window.request_redraw();
 
         event_loop.run(move |event, elwt| {
             elwt.set_control_flow(ControlFlow::Wait);
@@ -203,6 +204,7 @@ fn run() {
 
         let context = Context::new(window.clone()).unwrap();
         let mut surface = Surface::new(&context, window.clone()).unwrap();
+        window.request_redraw();
 
         event_loop.run(move |event, elwt| {
             elwt.set_control_flow(ControlFlow::Wait);
