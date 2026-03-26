@@ -1327,6 +1327,17 @@ pub fn compile_to_asm(tsx_source: &str) -> Result<AsmOutput, String> {
 
     // Pass 3: emit Asm bytecode
     let mut asm = Asm::new();
+
+    // Emit state initialization for useState let-bindings
+    for binding in &compiler.state_bindings {
+        let bank_type = (binding.packed_ref >> 16) as u32;
+        let slot = (binding.packed_ref & 0xFFFF) as u32;
+        asm.push32(binding.initial_value as u32); // value
+        asm.push32(bank_type);                     // bank_id
+        asm.push32(slot);                          // slot
+        asm.op(matterstream_vm::rpn::RpnOp::StoreBank);
+    }
+
     emit_nodes(&mut asm, &nodes);
     asm.halt();
 
