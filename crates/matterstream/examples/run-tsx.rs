@@ -102,9 +102,30 @@ fn run() {
 
     println!("Executed: {} SDF draw commands", vm.sdf_draws.len());
     for (i, cmd) in vm.sdf_draws.iter().enumerate() {
-        println!("  [{i}] ty={} pos=({},{}) size=({},{}) color=({:.2},{:.2},{:.2},{:.2})",
+        println!("  [{i}] ty={} pos=({},{}) size=({},{}) color=({:.2},{:.2},{:.2},{:.2}) anim=({},{},{},{})",
             cmd.params[0] as u32, cmd.pos[0], cmd.pos[1], cmd.size[0], cmd.size[1],
-            cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]);
+            cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3],
+            cmd.anim[0].to_bits(), cmd.anim[1].to_bits(), cmd.anim[2].to_bits(), cmd.anim[3].to_bits());
+    }
+
+    // Demo: set up animation for mic indicator circle (last draw cmd if it's a circle)
+    // scalar_bank[0] = frequency (2.0 Hz), scalar_bank[1] = duty cycle (0.5)
+    // int_bank[0] = mic enabled (set by useMicState atomic, toggled by background thread)
+    vm.scalar_bank[0] = 2.0;  // 2 Hz pulse
+    vm.scalar_bank[1] = 0.5;  // 50% duty cycle
+    // int_bank[0] is set by useMicState / background thread
+
+    // Patch the red circle's anim field with bank refs
+    if let Some(last) = vm.sdf_draws.last_mut() {
+        if last.params[0] as u32 == matterstream_common::DRAW_TYPE_CIRCLE as u32 {
+            // freq_ref = scalar_bank[0] → packed ref = (0 << 16) | 0 = 0x00000000
+            last.anim[0] = f32::from_bits(0x0000_0000);
+            // duty_ref = scalar_bank[1] → packed ref = (0 << 16) | 1 = 0x00000001
+            last.anim[1] = f32::from_bits(0x0000_0001);
+            // enable_ref = int_bank[0] → packed ref = (1 << 16) | 0 = 0x00010000
+            last.anim[2] = f32::from_bits(0x0001_0000);
+            println!("Patched circle animation: freq=2Hz, duty=50%, enable=int_bank[0]");
+        }
     }
 
     // Render with GPU SDF pipeline if available
@@ -233,16 +254,9 @@ fn run() {
                     window.request_redraw();
                 }
                 Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
-                    // Sync mic state from background thread
-                    vm.user_atomics_readable[0].store(
-                        mic_state.load(std::sync::atomic::Ordering::Relaxed),
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
-
-                    // Re-execute bytecode each frame (picks up atomic changes)
-                    vm.string_table = string_table.clone();
-                    vm.cr_bank[1] = matterstream_vm::rpn::SECURITY_INTERNAL as u32;
-                    let _ = vm.execute(&bytecode, &mut arenas);
+                    // Sync mic state from background thread → int_bank[0]
+                    let mic_val = mic_state.load(std::sync::atomic::Ordering::Relaxed);
+                    vm.int_bank[0] = mic_val as i32;
 
                     let phys = window.inner_size();
                     let pw = phys.width.max(1);
