@@ -172,7 +172,11 @@ fn run() {
         )).expect("Failed to create device");
 
         let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps.formats[0];
+        // Prefer non-sRGB format so shader linear colors display correctly
+        let surface_format = surface_caps.formats.iter()
+            .find(|f| !f.is_srgb())
+            .copied()
+            .unwrap_or(surface_caps.formats[0]);
         let init_size = window.inner_size();
         let mut config = surface.get_default_config(&adapter, init_size.width.max(1), init_size.height.max(1)).unwrap();
         config.present_mode = wgpu::PresentMode::Fifo;
