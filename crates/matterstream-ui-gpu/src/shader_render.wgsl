@@ -14,8 +14,7 @@ struct DrawCmd {
     pos: vec2<f32>,
     size: vec2<f32>,
     color: vec4<f32>,
-    params: vec4<f32>,   // [ty, radius, softness, slot]
-    anim: vec4<f32>,     // [freq_ref, duty_ref, enable_ref, reserved]
+    params: vec4<f32>,   // [ty, radius, anim_idx, slot]
 };
 
 struct RenderHeader {
@@ -37,11 +36,19 @@ struct GpuUniforms {
     zero_page: array<vec4<u32>, 16>,
 };
 
+struct Anim {
+    freq: f32,
+    duty: f32,
+    enable_ref: u32,
+    _pad: u32,
+};
+
 // ── Bindings ──
 
 @group(0) @binding(0) var<uniform> uniforms: GpuUniforms;
 @group(0) @binding(1) var<storage, read> draw_cmds: array<DrawCmd>;
 @group(0) @binding(2) var<storage, read> header: RenderHeader;
+@group(0) @binding(3) var<storage, read> anim_bank: array<Anim>;
 
 // ── Vertex shader: full-screen triangle ──
 
@@ -169,40 +176,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             result = blend_over(result, shadow_color);
         }
 
-        // Animation: modulate alpha based on time + bank values
+        // Animation: params.z = anim_bank index (0 = none, 1+ = AnimBank[idx-1])
+        // Branchless — pure math for GPU coherence.
         var anim_alpha: f32 = 1.0;
-        let has_anim = cmd.anim.x != 0.0 || cmd.anim.y != 0.0 || cmd.anim.z != 0.0;
-        if has_anim {
-            let freq_ref = bitcast<u32>(cmd.anim.x);
-            let duty_ref = bitcast<u32>(cmd.anim.y);
-            let enable_ref = bitcast<u32>(cmd.anim.z);
+        let anim_idx = u32(cmd.params.z);
+        let has_anim = step(0.5, f32(anim_idx));
+        if has_anim > 0.0 {
+            let a = anim_bank[max(anim_idx, 1u) - 1u];
 
-            // Read freq from scalar_bank
-            let freq_slot = freq_ref & 0xFFFFu;
-            let freq_pack = freq_slot / 4u;
-            let freq_comp = freq_slot % 4u;
-            var freq: f32 = 0.0;
-            if freq_pack < 4u { freq = uniforms.scalar_bank[freq_pack][freq_comp]; }
+            // Read enable from int_bank (or 1.0 if no enable_ref)
+            let has_enable = step(0.5, f32(a.enable_ref));
+            let slot = a.enable_ref & 0xFFFFu;
+            let pack = slot / 4u;
+            let comp = slot % 4u;
+            let bank_val = f32(uniforms.int_bank[min(pack, 3u)][min(comp, 3u)]);
+            let enabled = mix(1.0, bank_val, has_enable);
 
-            // Read duty from scalar_bank
-            let duty_slot = duty_ref & 0xFFFFu;
-            let duty_pack = duty_slot / 4u;
-            let duty_comp = duty_slot % 4u;
-            var duty: f32 = 1.0;
-            if duty_pack < 4u { duty = uniforms.scalar_bank[duty_pack][duty_comp]; }
-
-            // Read enabled from int_bank
-            let enable_slot = enable_ref & 0xFFFFu;
-            let enable_pack = enable_slot / 4u;
-            let enable_comp = enable_slot % 4u;
-            var enabled: f32 = 0.0;
-            if enable_pack < 4u { enabled = f32(uniforms.int_bank[enable_pack][enable_comp]); }
-
+            // Pulse from sin wave + duty cycle
             let time_s = uniforms.time_delta.x / 1000.0;
-            let phase = sin(time_s * freq * 6.283185);
-            let threshold = 1.0 - duty * 2.0;
+            let phase = sin(time_s * a.freq * 6.283185);
+            let threshold = 1.0 - a.duty * 2.0;
             let pulse = smoothstep(0.0, 0.1, phase - threshold);
-            anim_alpha = enabled * pulse;
+
+            // freq=0 → just use enabled (static), freq>0 → pulse
+            let has_freq = step(0.001, a.freq);
+            anim_alpha = mix(enabled, enabled * pulse, has_freq);
         }
 
         // Shape fill with anti-aliased edge

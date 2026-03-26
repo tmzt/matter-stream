@@ -108,23 +108,21 @@ fn run() {
             cmd.anim[0].to_bits(), cmd.anim[1].to_bits(), cmd.anim[2].to_bits(), cmd.anim[3].to_bits());
     }
 
-    // Demo: set up animation for mic indicator circle (last draw cmd if it's a circle)
-    // scalar_bank[0] = frequency (2.0 Hz), scalar_bank[1] = duty cycle (0.5)
-    // int_bank[0] = mic enabled (set by useMicState atomic, toggled by background thread)
-    vm.scalar_bank[0] = 2.0;  // 2 Hz pulse
-    vm.scalar_bank[1] = 0.5;  // 50% duty cycle
-    // int_bank[0] is set by useMicState / background thread
+    // Set up AnimBank[0]: 2Hz pulse, 50% duty, enabled by int_bank[0]
+    // int_bank[0] = mic state (toggled by background thread)
+    let mut anim_bank = vec![matterstream_common::Anim::NONE; 1];
+    anim_bank[0] = matterstream_common::Anim {
+        freq: 2.0,
+        duty: 0.5,
+        enable_ref: 0x0001_0000, // int_bank[0] (bank_type=1, slot=0)
+        _pad: 0,
+    };
 
-    // Patch the red circle's anim field with bank refs
+    // Patch the red circle to use AnimBank[0] → params[2] = 1 (1-based index)
     if let Some(last) = vm.sdf_draws.last_mut() {
         if last.params[0] as u32 == matterstream_common::DRAW_TYPE_CIRCLE as u32 {
-            // freq_ref = scalar_bank[0] → packed ref = (0 << 16) | 0 = 0x00000000
-            last.anim[0] = f32::from_bits(0x0000_0000);
-            // duty_ref = scalar_bank[1] → packed ref = (0 << 16) | 1 = 0x00000001
-            last.anim[1] = f32::from_bits(0x0000_0001);
-            // enable_ref = int_bank[0] → packed ref = (1 << 16) | 0 = 0x00010000
-            last.anim[2] = f32::from_bits(0x0001_0000);
-            println!("Patched circle animation: freq=2Hz, duty=50%, enable=int_bank[0]");
+            last.params[2] = 1.0; // AnimBank[0]
+            println!("Circle animation: AnimBank[0] freq=2Hz duty=50% enable=int_bank[0]");
         }
     }
 
@@ -139,6 +137,7 @@ fn run() {
         use winit::window::Window;
 
         let sdf_draws = vm.sdf_draws.clone();
+        let gpu_anim_bank = anim_bank.clone();
 
         let event_loop = EventLoop::new().unwrap();
         let window = Arc::new(
@@ -189,7 +188,7 @@ fn run() {
                         };
                         let view = frame.texture.create_view(&Default::default());
                         let time_ms = start_time.elapsed().as_millis() as f32;
-                        renderer.render_animated(&device, &queue, &view, size.width, size.height, &sdf_draws, time_ms);
+                        renderer.render_full(&device, &queue, &view, size.width, size.height, &sdf_draws, time_ms, &vm.scalar_bank, &vm.int_bank, &gpu_anim_bank);
                         frame.present();
                     }
                 }
@@ -271,7 +270,7 @@ fn run() {
                     let time_ms = start_time.elapsed().as_millis() as f32;
                     render_sdf_full(
                         &vm.sdf_draws, &mut log_buf, lw, lh,
-                        time_ms, &vm.scalar_bank, &vm.int_bank,
+                        time_ms, &anim_bank, &vm.int_bank,
                         &string_table, Some(&font),
                     );
 

@@ -5,7 +5,7 @@
 //!
 //! Usage: `render_ui_draws_with_font::<SoftRenderer>(...)`
 
-use matterstream_common::{Rasterizer, rgba_unpack, SdfDrawCmd, sdf_eval, sdf_eval_animated, DRAW_TYPE_TEXT};
+use matterstream_common::{Rasterizer, rgba_unpack, SdfDrawCmd, Anim, sdf_eval, sdf_eval_animated, DRAW_TYPE_TEXT};
 
 /// Softbuffer CPU rasterizer. Zero-sized type — all methods are static.
 pub struct SoftRenderer;
@@ -155,7 +155,7 @@ pub fn render_sdf_full(
     width: u32,
     height: u32,
     time_ms: f32,
-    scalar_bank: &[f32],
+    anim_bank: &[Anim],
     int_bank: &[i32],
     string_table: &[String],
     font: Option<&matterstream_packaging::fnta::FontAtlas>,
@@ -171,7 +171,7 @@ pub fn render_sdf_full(
                 if cmd.params[0] as u32 == DRAW_TYPE_TEXT as u32 {
                     continue;
                 }
-                let (d, color) = sdf_eval_animated(cmd, fx, fy, time_ms, scalar_bank, int_bank);
+                let (d, color) = sdf_eval_animated(cmd, fx, fy, time_ms, anim_bank, int_bank);
                 if d < 1.0 {
                     let alpha = if d < 0.0 { color[3] } else { color[3] * (1.0 - d) };
                     if alpha > 0.001 {
@@ -305,7 +305,7 @@ mod tests {
             pos: [2.0, 2.0],
             size: [6.0, 6.0],
             color: [1.0, 0.0, 0.0, 1.0],
-            params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0], anim: [0.0; 4],
+            params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
         }];
         let (w, h) = (10u32, 10u32);
         let mut buf = vec![0u32; (w * h) as usize];
@@ -323,7 +323,7 @@ mod tests {
             pos: [0.0, 0.0],
             size: [10.0, 10.0],
             color: [0.0, 1.0, 0.0, 1.0],
-            params: [matterstream_common::DRAW_TYPE_SLAB, 2.0, 0.0, 0.0], anim: [0.0; 4],
+            params: [matterstream_common::DRAW_TYPE_SLAB, 2.0, 0.0, 0.0],
         }];
         let (w, h) = (10u32, 10u32);
         let mut buf = vec![0u32; (w * h) as usize];
@@ -338,12 +338,12 @@ mod tests {
             SdfDrawCmd {
                 pos: [0.0, 0.0], size: [20.0, 20.0],
                 color: [1.0, 0.0, 0.0, 1.0],
-                params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0], anim: [0.0; 4],
+                params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
             },
             SdfDrawCmd {
                 pos: [5.0, 5.0], size: [10.0, 10.0],
                 color: [0.0, 0.0, 1.0, 1.0],
-                params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0], anim: [0.0; 4],
+                params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
             },
         ];
         let (w, h) = (20u32, 20u32);

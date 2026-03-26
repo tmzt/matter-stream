@@ -14,11 +14,22 @@ use matterstream_common::SdfDrawCmd;
 
 /// GPU SDF renderer. Holds pipeline state and buffers.
 /// Does NOT own the wgpu device — attaches to an existing context.
+/// GPU Anim struct matching WGSL layout.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GpuAnim {
+    freq: f32,
+    duty: f32,
+    enable_ref: u32,
+    _pad: u32,
+}
+
 pub struct GpuSdfRenderer {
     pipeline: wgpu::RenderPipeline,
     draw_cmd_buffer: wgpu::Buffer,
     header_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
+    anim_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     max_cmds: u32,
 }
@@ -71,12 +82,11 @@ struct GpuDrawCmd {
     size: [f32; 2],
     color: [f32; 4],
     params: [f32; 4],
-    anim: [f32; 4],
 }
 
 impl From<&SdfDrawCmd> for GpuDrawCmd {
     fn from(cmd: &SdfDrawCmd) -> Self {
-        Self { pos: cmd.pos, size: cmd.size, color: cmd.color, params: cmd.params, anim: cmd.anim }
+        Self { pos: cmd.pos, size: cmd.size, color: cmd.color, params: cmd.params }
     }
 }
 
@@ -114,6 +124,13 @@ impl GpuSdfRenderer {
             mapped_at_creation: false,
         });
 
+        let anim_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("anim_bank"),
+            size: (matterstream_common::MAX_ANIMS as u64) * std::mem::size_of::<GpuAnim>() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Bind group layout
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("sdf_render_layout"),
@@ -148,6 +165,16 @@ impl GpuSdfRenderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -158,6 +185,7 @@ impl GpuSdfRenderer {
                 wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: draw_cmd_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: header_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: anim_buffer.as_entire_binding() },
             ],
         });
 
@@ -201,6 +229,7 @@ impl GpuSdfRenderer {
             draw_cmd_buffer,
             header_buffer,
             uniform_buffer,
+            anim_buffer,
             bind_group,
             max_cmds: MAX_DRAW_CMDS,
         }
@@ -230,6 +259,22 @@ impl GpuSdfRenderer {
         draws: &[SdfDrawCmd],
         time_ms: f32,
     ) {
+        self.render_full(device, queue, target, width, height, draws, time_ms, &[0.0; 16], &[0; 16], &[]);
+    }
+
+    pub fn render_full(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        draws: &[SdfDrawCmd],
+        time_ms: f32,
+        scalar_bank: &[f32],
+        int_bank: &[i32],
+        anim_bank: &[matterstream_common::Anim],
+    ) {
         let count = draws.len().min(self.max_cmds as usize);
 
         // Upload draw commands (convert to GPU-safe wrapper type)
@@ -249,11 +294,27 @@ impl GpuSdfRenderer {
         };
         queue.write_buffer(&self.header_buffer, 0, bytemuck::bytes_of(&header));
 
-        // Upload uniforms
+        // Upload uniforms with bank values
         let mut uniforms = MinimalUniforms::default();
         uniforms.time_delta = [time_ms, 0.0, 0.0, 0.0];
         uniforms.resolution = [width as f32, height as f32, 1.0, 0.0];
+        // Pack scalar_bank into vec4 groups
+        for (i, val) in scalar_bank.iter().take(16).enumerate() {
+            uniforms.scalar_bank[i / 4][i % 4] = *val;
+        }
+        // Pack int_bank into ivec4 groups
+        for (i, val) in int_bank.iter().take(16).enumerate() {
+            uniforms.int_bank[i / 4][i % 4] = *val;
+        }
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+        // Upload anim bank
+        if !anim_bank.is_empty() {
+            let gpu_anims: Vec<GpuAnim> = anim_bank.iter().map(|a| GpuAnim {
+                freq: a.freq, duty: a.duty, enable_ref: a.enable_ref, _pad: 0,
+            }).collect();
+            queue.write_buffer(&self.anim_buffer, 0, bytemuck::cast_slice(&gpu_anims));
+        }
 
         // Render pass
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
