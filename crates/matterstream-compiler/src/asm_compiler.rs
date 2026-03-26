@@ -68,8 +68,20 @@ struct StateBinding {
     backend: StateBackend,
 }
 
+/// Maps import paths to component OIDs for cross-package resolution.
+pub struct ImportMap {
+    /// "@chitin/ui-kit" → { "StatusBar" → Oid, "InboxCard" → Oid, ... }
+    pub packages: HashMap<String, HashMap<String, matterstream_vm_addressing::oid::Oid>>,
+}
+
+impl ImportMap {
+    pub fn new() -> Self { Self { packages: HashMap::new() } }
+}
+
 struct AsmCompiler {
     components: HashMap<String, ComponentDef>,
+    /// External components from import statements (name → OID).
+    external_components: HashMap<String, matterstream_vm_addressing::oid::Oid>,
     /// useState bindings: name → packed ref.
     state_bindings: Vec<StateBinding>,
     /// Next free IntBank slot for useState(bool/int).
@@ -80,6 +92,7 @@ impl AsmCompiler {
     fn new() -> Self {
         Self {
             components: HashMap::new(),
+            external_components: HashMap::new(),
             state_bindings: Vec::new(),
             next_int_slot: 0,
         }
@@ -115,16 +128,44 @@ impl AsmCompiler {
     /// First pass: collect component definitions and useState let-bindings.
     fn collect_components<'a>(&mut self, program: &Program<'a>) -> Result<(), String> {
         for stmt in &program.body {
-            if let Statement::VariableDeclaration(decl) = stmt {
-                for declarator in &decl.declarations {
-                    // Try as component definition first
-                    self.try_collect_component(declarator)?;
-                    // Try as useState let-binding
-                    self.try_collect_use_state(declarator);
+            match stmt {
+                Statement::VariableDeclaration(decl) => {
+                    for declarator in &decl.declarations {
+                        self.try_collect_component(declarator)?;
+                        self.try_collect_use_state(declarator);
+                    }
                 }
+                // Import statements are collected but only resolved when ImportMap is provided
+                _ => {}
             }
         }
         Ok(())
+    }
+
+    /// Collect import statements and resolve them against an ImportMap.
+    fn collect_imports<'a>(&mut self, program: &Program<'a>, import_map: &ImportMap) {
+        for stmt in &program.body {
+            if let Statement::ImportDeclaration(import) = stmt {
+                let source = import.source.value.as_str();
+                if let Some(pkg_map) = import_map.packages.get(source) {
+                    // Named imports: import { A, B } from "path"
+                    if let Some(specifiers) = &import.specifiers {
+                        for specifier in specifiers.iter() {
+                            if let ImportDeclarationSpecifier::ImportSpecifier(spec) = specifier {
+                                let local_name = spec.local.name.to_string();
+                                let imported_name = match &spec.imported {
+                                    ModuleExportName::Identifier(id) => id.name.to_string(),
+                                    _ => local_name.clone(),
+                                };
+                                if let Some(oid) = pkg_map.get(&imported_name) {
+                                    self.external_components.insert(local_name, *oid);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Recognize `const [name, setName] = useState(initialValue)` let-bindings.
@@ -318,9 +359,19 @@ impl AsmCompiler {
         // Extract props
         let props = self.extract_props(&element.opening_element.attributes, ctx)?;
 
-        // Check if this is a composite component
+        // Check if this is a composite component (inline)
         if let Some(comp) = self.components.get(&tag) {
             return self.expand_component(comp, &props, ctx);
+        }
+
+        // Check if this is an external (imported) component
+        if let Some(oid) = self.external_components.get(&tag) {
+            let oid_u128 = oid.to_u128();
+            return Ok(vec![JsxNode {
+                tag: format!("__ext:{}", oid_u128),
+                props,
+                children: Vec::new(),
+            }]);
         }
 
         // Lower children
@@ -1346,6 +1397,18 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
             return;
         }
         _ => {
+            // Check for external component (__ext:OID)
+            if node.tag.starts_with("__ext:") {
+                let oid_str = &node.tag[6..];
+                if let Ok(oid_val) = oid_str.parse::<u128>() {
+                    // Push OID and resolve to FQA via .osym
+                    asm.push128(oid_val);
+                    asm.oid_import();
+                    // Execute the component
+                    asm.op(matterstream_vm::rpn::RpnOp::ExecComponent);
+                    return;
+                }
+            }
             // Unknown tag — emit children only
         }
     }
@@ -1361,6 +1424,58 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
 /// Two-pass compilation:
 /// 1. Collect arrow-function component definitions (`const Name = ({...}) => ...`)
 /// 2. Lower top-level JSX expressions, expanding components inline, then emit Asm
+/// Compile TSX source with import resolution.
+///
+/// Import statements (`import { X } from "path"`) are resolved against the
+/// ImportMap. External components emit OidImport + ExecComponent bytecode
+/// instead of inline expansion.
+pub fn compile_to_asm_with_imports(tsx_source: &str, imports: &ImportMap) -> Result<AsmOutput, String> {
+    let allocator = Allocator::default();
+    let source_type = SourceType::from_path("card.tsx")
+        .map_err(|e| format!("SourceType error: {:?}", e))?;
+    let ret = Parser::new(&allocator, tsx_source, source_type).parse();
+
+    if !ret.errors.is_empty() {
+        let msgs: Vec<String> = ret.errors.into_iter().map(|e| format!("{:?}", e)).collect();
+        return Err(msgs.join("\n"));
+    }
+
+    let mut compiler = AsmCompiler::new();
+    compiler.collect_components(&ret.program)?;
+    compiler.collect_imports(&ret.program, imports);
+
+    let nodes = compiler.lower_program(&ret.program)?;
+    let mut asm = Asm::new();
+
+    for binding in &compiler.state_bindings {
+        match &binding.backend {
+            StateBackend::IntBank { packed_ref, initial_value } => {
+                let bank_type = (packed_ref >> 16) as u32;
+                let slot = (packed_ref & 0xFFFF) as u32;
+                asm.push32(*initial_value as u32);
+                asm.push32(bank_type);
+                asm.push32(slot);
+                asm.op(matterstream_vm::rpn::RpnOp::StoreBank);
+            }
+            StateBackend::UserAtomic { slot } => {
+                asm.read_user_atomic(*slot);
+                let local_bank = BANK_INT as u32;
+                let local_slot = (compiler.state_bindings.iter()
+                    .position(|b| b.name == binding.name)
+                    .unwrap()) as u32;
+                asm.push32(local_bank);
+                asm.push32(local_slot);
+                asm.op(matterstream_vm::rpn::RpnOp::StoreBank);
+            }
+        }
+    }
+
+    emit_nodes(&mut asm, &nodes);
+    asm.halt();
+
+    asm.finish().map_err(|e| format!("asm error: {:?}", e))
+}
+
 pub fn compile_to_asm(tsx_source: &str) -> Result<AsmOutput, String> {
     let allocator = Allocator::default();
     let source_type = SourceType::from_path("card.tsx")

@@ -345,6 +345,12 @@ impl Asm {
         self
     }
 
+    /// OID import: pops OID (u128) from stack, resolves to FQA via .osym, pushes FQA.
+    pub fn oid_import(&mut self) -> &mut Self {
+        self.tokens.push(AsmToken::UserCall(user_call::OID_IMPORT, 0));
+        self
+    }
+
     /// Read from UserAtomicReadable[slot] → pushes u32 to stack.
     pub fn read_user_atomic(&mut self, slot: u32) -> &mut Self {
         self.push32(slot);
