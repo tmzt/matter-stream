@@ -770,6 +770,10 @@ pub struct RpnVm {
     pub objtype_outputs: Vec<ObjectTypeDef>,
     objtype_active: Option<ObjectTypeDef>,
 
+    // ── SDF draw output ──────────────────────────────────────────────────
+    /// SDF draw commands produced by MTUI ops — unified GPU-uploadable format.
+    pub sdf_draws: Vec<matterstream_common::SdfDrawCmd>,
+
     // ── OID import state ────────────────────────────────────────────────
     /// Loaded .osym indices — raw bytes, binary searched directly.
     pub oid_indices: Vec<Vec<u8>>,
@@ -825,6 +829,7 @@ impl RpnVm {
             skill_active_llm_use_case: LlmUseCase::General,
             objtype_outputs: Vec::new(),
             objtype_active: None,
+            sdf_draws: Vec::new(),
             oid_indices: Vec::new(),
             native_hooks: Vec::new(),
             #[cfg(feature = "ui")]
@@ -936,6 +941,13 @@ impl RpnVm {
             self.ui_draws.push(cmd);
         }
         Ok(())
+    }
+
+    /// Push an SdfDrawCmd to the draw list (always available, not feature-gated).
+    fn push_sdf_draw(&mut self, cmd: matterstream_common::SdfDrawCmd) {
+        if self.sdf_draws.len() < matterstream_common::MAX_DRAW_CMDS {
+            self.sdf_draws.push(cmd);
+        }
     }
 
     fn read_u8(bytecode: &[u8], pos: usize) -> Result<u8, RpnError> {
@@ -1223,6 +1235,7 @@ impl RpnVm {
         self.skill_active_llm_use_case = LlmUseCase::General;
         self.objtype_outputs.clear();
         self.objtype_active = None;
+        self.sdf_draws.clear();
         // UI state reset
         #[cfg(feature = "ui")]
         {
@@ -1960,7 +1973,13 @@ impl RpnVm {
                 let raw_y = self.pop_u32_coerce()? as i32;
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_draw(UiDrawCmd::Box { x, y, w, h, color: self.ui_state.color })?;
+                let color = self.ui_state.color;
+                self.push_draw(UiDrawCmd::Box { x, y, w, h, color })?;
+                self.push_sdf_draw(matterstream_common::SdfDrawCmd {
+                    pos: [x as f32, y as f32], size: [w as f32, h as f32],
+                    color: matterstream_common::color_u32_to_f32(color),
+                    params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
+                });
             }),
             // 0x02 Slab
             0x02 => ui_op!(self, pops: 5, payload: 0, {
@@ -1970,7 +1989,13 @@ impl RpnVm {
                 let raw_y = self.pop_u32_coerce()? as i32;
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_draw(UiDrawCmd::Slab { x, y, w, h, radius, color: self.ui_state.color })?;
+                let color = self.ui_state.color;
+                self.push_draw(UiDrawCmd::Slab { x, y, w, h, radius, color })?;
+                self.push_sdf_draw(matterstream_common::SdfDrawCmd {
+                    pos: [x as f32, y as f32], size: [w as f32, h as f32],
+                    color: matterstream_common::color_u32_to_f32(color),
+                    params: [matterstream_common::DRAW_TYPE_SLAB, radius as f32, 0.0, 0.0],
+                });
             }),
             // 0x03 Circle
             0x03 => ui_op!(self, pops: 3, payload: 0, {
@@ -1978,7 +2003,14 @@ impl RpnVm {
                 let raw_y = self.pop_u32_coerce()? as i32;
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_draw(UiDrawCmd::Circle { x, y, r, color: self.ui_state.color })?;
+                let color = self.ui_state.color;
+                self.push_draw(UiDrawCmd::Circle { x, y, r, color })?;
+                let d = (r * 2) as f32;
+                self.push_sdf_draw(matterstream_common::SdfDrawCmd {
+                    pos: [(x - r as i32) as f32, (y - r as i32) as f32], size: [d, d],
+                    color: matterstream_common::color_u32_to_f32(color),
+                    params: [matterstream_common::DRAW_TYPE_CIRCLE, r as f32, 0.0, 0.0],
+                });
             }),
             // 0x04 Text
             0x04 => ui_op!(self, pops: 4, payload: 0, {
@@ -2023,7 +2055,13 @@ impl RpnVm {
                 let raw_x1 = self.pop_u32_coerce()? as i32;
                 let (x1, y1) = self.transform_point(raw_x1, raw_y1);
                 let (x2, y2) = self.transform_point(raw_x2, raw_y2);
-                self.push_draw(UiDrawCmd::Line { x1, y1, x2, y2, color: self.ui_state.color })?;
+                let color = self.ui_state.color;
+                self.push_draw(UiDrawCmd::Line { x1, y1, x2, y2, color })?;
+                self.push_sdf_draw(matterstream_common::SdfDrawCmd {
+                    pos: [x1 as f32, y1 as f32], size: [x2 as f32, y2 as f32],
+                    color: matterstream_common::color_u32_to_f32(color),
+                    params: [matterstream_common::DRAW_TYPE_LINE, 0.0, 0.0, 0.0],
+                });
             }),
             // 0x09 TextStr
             0x09 => ui_op!(self, pops: 4, payload: 0, {
