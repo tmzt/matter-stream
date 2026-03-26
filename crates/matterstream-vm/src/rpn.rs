@@ -2019,7 +2019,13 @@ impl RpnVm {
                 let raw_y = self.pop_u32_coerce()? as i32;
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_draw(UiDrawCmd::Text { x, y, size, slot, color: self.ui_state.color })?;
+                let color = self.ui_state.color;
+                self.push_draw(UiDrawCmd::Text { x, y, size, slot, color })?;
+                self.push_sdf_draw(matterstream_common::SdfDrawCmd {
+                    pos: [x as f32, y as f32], size: [(size * 4) as f32, size as f32],
+                    color: matterstream_common::color_u32_to_f32(color),
+                    params: [matterstream_common::DRAW_TYPE_TEXT, 0.0, 0.0, slot as f32],
+                });
             }),
             // 0x05 PushState
             0x05 => ui_op!(self, pops: 0, payload: 0, {
@@ -2070,7 +2076,13 @@ impl RpnVm {
                 let raw_y = self.pop_u32_coerce()? as i32;
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_draw(UiDrawCmd::TextStr { x, y, size, str_idx, color: self.ui_state.color })?;
+                let color = self.ui_state.color;
+                self.push_draw(UiDrawCmd::TextStr { x, y, size, str_idx, color })?;
+                self.push_sdf_draw(matterstream_common::SdfDrawCmd {
+                    pos: [x as f32, y as f32], size: [(size * 4) as f32, size as f32],
+                    color: matterstream_common::color_u32_to_f32(color),
+                    params: [matterstream_common::DRAW_TYPE_TEXT, 0.0, 0.0, str_idx as f32],
+                });
             }),
             // 0x0A Action
             0x0A => ui_op!(self, pops: 5, payload: 0, {

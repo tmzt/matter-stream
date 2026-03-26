@@ -5,7 +5,7 @@
 //!
 //! Usage: `render_ui_draws_with_font::<SoftRenderer>(...)`
 
-use matterstream_common::{Rasterizer, rgba_unpack};
+use matterstream_common::{Rasterizer, rgba_unpack, SdfDrawCmd, sdf_eval};
 
 /// Softbuffer CPU rasterizer. Zero-sized type — all methods are static.
 pub struct SoftRenderer;
@@ -129,6 +129,44 @@ pub fn draw_line(buf: &mut [u32], width: u32, height: u32, x1: i32, y1: i32, x2:
     }
 }
 
+// ── SDF-based rendering (new primary path) ──────────────────────────────
+
+/// Render SdfDrawCmd list to a softbuffer pixel buffer using per-pixel SDF evaluation.
+/// Produces pixel-identical output to the GPU fragment shader.
+///
+/// `buf` is in softbuffer format (0x00RRGGBB), `width` × `height` pixels.
+pub fn render_sdf(draws: &[SdfDrawCmd], buf: &mut [u32], width: u32, height: u32) {
+    for py in 0..height {
+        for px in 0..width {
+            let fx = px as f32 + 0.5;
+            let fy = py as f32 + 0.5;
+            let idx = (py * width + px) as usize;
+
+            // Evaluate each draw command front-to-back, blend over
+            for cmd in draws {
+                let (d, color) = sdf_eval(cmd, fx, fy);
+                if d < 1.0 {
+                    // Smoothstep antialiasing at the edge (matching shader)
+                    let alpha = if d < 0.0 { color[3] } else { color[3] * (1.0 - d) };
+                    if alpha > 0.001 {
+                        let src_rgba = f32_color_to_softbuffer(color[0], color[1], color[2], alpha);
+                        buf[idx] = blend_pixel(buf[idx], src_rgba);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Convert f32 RGBA (0.0-1.0) to u32 0xRRGGBBAA for blend_pixel input.
+fn f32_color_to_softbuffer(r: f32, g: f32, b: f32, a: f32) -> u32 {
+    let ri = (r * 255.0).clamp(0.0, 255.0) as u32;
+    let gi = (g * 255.0).clamp(0.0, 255.0) as u32;
+    let bi = (b * 255.0).clamp(0.0, 255.0) as u32;
+    let ai = (a * 255.0).clamp(0.0, 255.0) as u32;
+    (ri << 24) | (gi << 16) | (bi << 8) | ai
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +208,61 @@ mod tests {
         draw_filled_circle(&mut buf, w, h, 5, 5, 2, rgba(0, 255, 0, 255));
         assert_eq!(buf[(5 * w + 5) as usize], 0x0000FF00);
         assert_eq!(buf[0], 0);
+    }
+
+    #[test]
+    fn sdf_render_box() {
+        let draws = vec![SdfDrawCmd {
+            pos: [2.0, 2.0],
+            size: [6.0, 6.0],
+            color: [1.0, 0.0, 0.0, 1.0],
+            params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
+        }];
+        let (w, h) = (10u32, 10u32);
+        let mut buf = vec![0u32; (w * h) as usize];
+        render_sdf(&draws, &mut buf, w, h);
+        // Center of the box should be red
+        assert_eq!(buf[(5 * w + 5) as usize], 0x00FF0000);
+        // Well outside should be black
+        assert_eq!(buf[(0 * w + 0) as usize], 0);
+        assert_eq!(buf[(9 * w + 9) as usize], 0);
+    }
+
+    #[test]
+    fn sdf_render_slab() {
+        let draws = vec![SdfDrawCmd {
+            pos: [0.0, 0.0],
+            size: [10.0, 10.0],
+            color: [0.0, 1.0, 0.0, 1.0],
+            params: [matterstream_common::DRAW_TYPE_SLAB, 2.0, 0.0, 0.0],
+        }];
+        let (w, h) = (10u32, 10u32);
+        let mut buf = vec![0u32; (w * h) as usize];
+        render_sdf(&draws, &mut buf, w, h);
+        // Center should be green
+        assert_eq!(buf[(5 * w + 5) as usize], 0x0000FF00);
+    }
+
+    #[test]
+    fn sdf_render_multiple() {
+        let draws = vec![
+            SdfDrawCmd {
+                pos: [0.0, 0.0], size: [20.0, 20.0],
+                color: [1.0, 0.0, 0.0, 1.0],
+                params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
+            },
+            SdfDrawCmd {
+                pos: [5.0, 5.0], size: [10.0, 10.0],
+                color: [0.0, 0.0, 1.0, 1.0],
+                params: [matterstream_common::DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
+            },
+        ];
+        let (w, h) = (20u32, 20u32);
+        let mut buf = vec![0u32; (w * h) as usize];
+        render_sdf(&draws, &mut buf, w, h);
+        // Center of inner box should be blue (drawn on top of red)
+        assert_eq!(buf[(10 * w + 10) as usize], 0x000000FF);
+        // Corner should be red (only outer box)
+        assert_eq!(buf[(1 * w + 1) as usize], 0x00FF0000);
     }
 }
