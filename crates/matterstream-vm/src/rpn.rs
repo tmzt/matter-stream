@@ -346,6 +346,10 @@ pub enum UserCallOp {
     OidImport      = 0x10,
     OidCall        = 0x11,
     OidCosineMatch = 0x12,
+    /// Read from UserAtomicReadable[slot] → pushes u32.
+    ReadUserAtomic       = 0x20,
+    /// Write value to UserAtomicSubmitSemaphore[slot] (fire-and-forget).
+    SubmitUserSemaphore  = 0x21,
 }
 
 /// SystemCall sub-op identifiers.
@@ -755,6 +759,12 @@ pub struct RpnVm {
     pub string_table: Vec<String>,
     /// Mutable string bank (runtime-writable, 256 nullable slots).
     pub string_bank: Vec<Option<String>>,
+
+    // ── User-space atomics (temporary until full permission system) ──────
+    /// Readable atomics: host writes, bytecode reads. 256 slots.
+    pub user_atomics_readable: Vec<std::sync::atomic::AtomicU32>,
+    /// Submit semaphores: bytecode writes (fire-and-forget), host reads+clears. 256 slots.
+    pub user_atomics_submit: Vec<std::sync::atomic::AtomicU32>,
     // Event queue
     pub event_queue: VecDeque<VmEvent>,
     // Frame counter
@@ -823,6 +833,8 @@ impl RpnVm {
             zero_page: [0; 256],
             string_table: Vec::new(),
             string_bank: vec![None; 256],
+            user_atomics_readable: (0..256).map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
+            user_atomics_submit: (0..256).map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
             event_queue: VecDeque::new(),
             frame_count: 0,
             rng: SimpleRng::new(0xDEAD_BEEF),
@@ -1901,6 +1913,24 @@ impl RpnVm {
             0x12 => {
                 // Stub: push 0 as match score
                 self.push(RpnValue::U64(0))?;
+            }
+            // 0x20 ReadUserAtomic — read from user_atomics_readable[slot]
+            0x20 => {
+                let slot = self.pop_u32_coerce()? as usize;
+                let val = if slot < self.user_atomics_readable.len() {
+                    self.user_atomics_readable[slot].load(std::sync::atomic::Ordering::Relaxed)
+                } else {
+                    0
+                };
+                self.push(RpnValue::U32(val))?;
+            }
+            // 0x21 SubmitUserSemaphore — write to user_atomics_submit[slot]
+            0x21 => {
+                let val = self.pop_u32_coerce()?;
+                let slot = self.pop_u32_coerce()? as usize;
+                if slot < self.user_atomics_submit.len() {
+                    self.user_atomics_submit[slot].store(val, std::sync::atomic::Ordering::Relaxed);
+                }
             }
             _ => {
                 return Err(RpnError::InvalidUserCallAction(action_op));

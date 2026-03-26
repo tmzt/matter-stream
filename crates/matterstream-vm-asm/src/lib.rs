@@ -101,6 +101,8 @@ pub mod user_call {
     pub const OID_IMPORT: u64 = 0x10;
     pub const OID_CALL: u64 = 0x11;
     pub const OID_COSINE_MATCH: u64 = 0x12;
+    pub const READ_USER_ATOMIC: u64 = 0x20;
+    pub const SUBMIT_USER_SEMAPHORE: u64 = 0x21;
 }
 
 // ── SystemCall sub-op IDs ──────────────────────────────────────────────
@@ -336,6 +338,21 @@ impl Asm {
     }
     pub fn rand(&mut self) -> &mut Self {
         self.tokens.push(AsmToken::UserCall(user_call::RAND, 0));
+        self
+    }
+
+    /// Read from UserAtomicReadable[slot] → pushes u32 to stack.
+    pub fn read_user_atomic(&mut self, slot: u32) -> &mut Self {
+        self.push32(slot);
+        self.tokens.push(AsmToken::UserCall(user_call::READ_USER_ATOMIC, 0));
+        self
+    }
+
+    /// Submit a value to UserAtomicSubmitSemaphore[slot] (fire-and-forget).
+    pub fn submit_user_semaphore(&mut self, slot: u32, value: u32) -> &mut Self {
+        self.push32(slot);
+        self.push32(value);
+        self.tokens.push(AsmToken::UserCall(user_call::SUBMIT_USER_SEMAPHORE, 0));
         self
     }
 
