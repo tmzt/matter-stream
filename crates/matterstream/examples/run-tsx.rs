@@ -102,10 +102,10 @@ fn run() {
 
     println!("Executed: {} SDF draw commands", vm.sdf_draws.len());
     for (i, cmd) in vm.sdf_draws.iter().enumerate() {
-        println!("  [{i}] ty={} pos=({},{}) size=({},{}) color=({:.2},{:.2},{:.2},{:.2}) anim=({},{},{},{})",
+        println!("  [{i}] ty={} pos=({},{}) size=({},{}) color=({:.2},{:.2},{:.2},{:.2}) anim_idx={}",
             cmd.params[0] as u32, cmd.pos[0], cmd.pos[1], cmd.size[0], cmd.size[1],
             cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3],
-            cmd.anim[0].to_bits(), cmd.anim[1].to_bits(), cmd.anim[2].to_bits(), cmd.anim[3].to_bits());
+            cmd.params[2] as u32);
     }
 
     // Set up AnimBank[0]: 2Hz pulse, 50% duty, enabled by int_bank[0]
