@@ -1704,17 +1704,20 @@ impl RpnVm {
                 self.pc += 1;
             }
             RpnOp::PushIfElse => {
+                // Pops [packed_ref, true_val, false_val]
+                // packed_ref = u16 bank_type << 16 | u16 slot
                 let false_val = self.pop_u32_coerce()?;
                 let true_val = self.pop_u32_coerce()?;
-                let slot = self.pop_u32_coerce()?;
-                let bank_id = self.pop_u32_coerce()?;
+                let packed_ref = self.pop_u32_coerce()?;
+                let bank_type = (packed_ref >> 16) as u16;
+                let slot = (packed_ref & 0xFFFF) as u16;
 
-                let condition = match bank_id {
-                    BANK_INT => {
-                        (slot as usize) < self.int_bank.len() && self.int_bank[slot as usize] != 0
-                    }
+                let condition = match bank_type as u32 {
                     BANK_SCALAR => {
                         (slot as usize) < self.scalar_bank.len() && self.scalar_bank[slot as usize] != 0.0
+                    }
+                    BANK_INT => {
+                        (slot as usize) < self.int_bank.len() && self.int_bank[slot as usize] != 0
                     }
                     _ => false,
                 };

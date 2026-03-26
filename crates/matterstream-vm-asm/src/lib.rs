@@ -428,10 +428,16 @@ impl Asm {
         self.raw(mtui::TEXT_STR)
     }
 
-    /// Conditional push: reads bank[slot], pushes true_val if != 0, else false_val.
-    pub fn push_if_else(&mut self, bank_id: u32, slot: u32, true_val: u32, false_val: u32) -> &mut Self {
-        self.push32(bank_id).push32(slot).push32(true_val).push32(false_val);
+    /// Conditional push: reads bank[slot] via packed ref, pushes true_val if != 0, else false_val.
+    /// packed_ref = (bank_type as u32) << 16 | (slot as u32)
+    pub fn push_if_else(&mut self, packed_ref: u32, true_val: u32, false_val: u32) -> &mut Self {
+        self.push32(packed_ref).push32(true_val).push32(false_val);
         self.op(RpnOp::PushIfElse)
+    }
+
+    /// Helper: create a packed binding ref from bank type and slot.
+    pub fn pack_ref(bank_type: u16, slot: u16) -> u32 {
+        (bank_type as u32) << 16 | slot as u32
     }
 
     pub fn ui_push_state(&mut self) -> &mut Self { self.raw(mtui::PUSH_STATE) }

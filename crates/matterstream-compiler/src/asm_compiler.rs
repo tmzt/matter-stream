@@ -20,7 +20,14 @@ use matterstream_vm_asm::{Asm, AsmOutput};
 
 // ── Intermediate representation ──────────────────────────────────────────
 
-/// A prop value — either a string literal or a resolved numeric value.
+/// Bank type constants for packed refs (u16 bank_type << 16 | u16 slot).
+const BANK_INT: u16 = 1;
+#[allow(dead_code)]
+const BANK_SCALAR: u16 = 0;
+#[allow(dead_code)]
+const BANK_STRING: u16 = 5;
+
+/// A prop value — string literal or resolved numeric value.
 #[derive(Debug, Clone)]
 pub enum PropValue {
     Str(String),
@@ -44,28 +51,117 @@ struct ComponentDef {
 
 // ── OXC → JsxNode lowering ──────────────────────────────────────────────
 
+/// A useState binding: variable name → packed bank ref.
+#[derive(Debug, Clone)]
+struct StateBinding {
+    name: String,
+    setter_name: String,
+    packed_ref: u32,
+    initial_value: i64,
+}
+
 struct AsmCompiler {
     components: HashMap<String, ComponentDef>,
+    /// useState bindings: name → packed ref.
+    state_bindings: Vec<StateBinding>,
+    /// Next free IntBank slot for useState(bool/int).
+    next_int_slot: u16,
 }
 
 impl AsmCompiler {
     fn new() -> Self {
         Self {
             components: HashMap::new(),
+            state_bindings: Vec::new(),
+            next_int_slot: 0,
         }
     }
 
-    /// First pass: collect arrow-function component definitions from
-    /// `const Name = ({ params }) => ( JSX );` variable declarations.
+    /// Allocate an IntBank slot for useState. Returns packed ref.
+    fn alloc_int_state(&mut self, name: &str, setter_name: &str, initial: i64) -> u32 {
+        let slot = self.next_int_slot;
+        self.next_int_slot += 1;
+        let packed_ref = (BANK_INT as u32) << 16 | slot as u32;
+        self.state_bindings.push(StateBinding {
+            name: name.to_string(),
+            setter_name: setter_name.to_string(),
+            packed_ref,
+            initial_value: initial,
+        });
+        packed_ref
+    }
+
+    /// Look up a state binding by variable name. Returns packed ref if found.
+    fn resolve_state(&self, name: &str) -> Option<u32> {
+        self.state_bindings.iter().find(|b| b.name == name).map(|b| b.packed_ref)
+    }
+
+    /// First pass: collect component definitions and useState let-bindings.
     fn collect_components<'a>(&mut self, program: &Program<'a>) -> Result<(), String> {
         for stmt in &program.body {
             if let Statement::VariableDeclaration(decl) = stmt {
                 for declarator in &decl.declarations {
+                    // Try as component definition first
                     self.try_collect_component(declarator)?;
+                    // Try as useState let-binding
+                    self.try_collect_use_state(declarator);
                 }
             }
         }
         Ok(())
+    }
+
+    /// Recognize `const [name, setName] = useState(initialValue)` let-bindings.
+    fn try_collect_use_state<'a>(&mut self, declarator: &VariableDeclarator<'a>) {
+        // LHS must be array destructuring: [name, setName]
+        let elements = match &declarator.id.kind {
+            BindingPatternKind::ArrayPattern(arr) => &arr.elements,
+            _ => return,
+        };
+        if elements.len() != 2 { return; }
+
+        let name = match &elements[0] {
+            Some(pat) => match &pat.kind {
+                BindingPatternKind::BindingIdentifier(id) => id.name.to_string(),
+                _ => return,
+            },
+            None => return,
+        };
+        let setter_name = match &elements[1] {
+            Some(pat) => match &pat.kind {
+                BindingPatternKind::BindingIdentifier(id) => id.name.to_string(),
+                _ => return,
+            },
+            None => return,
+        };
+
+        // RHS must be useState(initialValue)
+        let init = match &declarator.init {
+            Some(init) => init,
+            None => return,
+        };
+        let call = match init {
+            Expression::CallExpression(call) => call,
+            _ => return,
+        };
+        let callee_name = match &call.callee {
+            Expression::Identifier(id) => id.name.as_str(),
+            _ => return,
+        };
+        if callee_name != "useState" { return; }
+
+        // Extract initial value (default: 0/false)
+        let initial = if let Some(arg) = call.arguments.first() {
+            match arg {
+                Argument::BooleanLiteral(b) => if b.value { 1 } else { 0 },
+                Argument::NumericLiteral(n) => n.value as i64,
+                _ => 0,
+            }
+        } else {
+            0
+        };
+
+        self.alloc_int_state(&name, &setter_name, initial);
     }
 
     fn try_collect_component<'a>(
