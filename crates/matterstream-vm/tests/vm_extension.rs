@@ -1,9 +1,12 @@
-//! Tests for VM extension: control registers, VQL0, and SKLL opcodes.
+//! Tests for VM extension: control registers, VQL0, and external OR page dispatch.
 
-use matterstream_vm::rpn::{RpnOp, RpnVm, SkllOp, VqlOp};
+use std::any::Any;
+use matterstream_vm::rpn::{RpnOp, RpnVm, RpnValue, RpnError, VqlOp};
+use matterstream_vm::or_page::OrPageHandler;
+use matterstream_vm::vm_handle::VmHandle;
 use matterstream_vm::ui_vm::{
-    VqlField, LlmUseCase, SkillStep,
-    CR_OUTPUT_MODE, FOURCC_MTUI, FOURCC_VQL0, FOURCC_SKLL,
+    VqlField, LlmUseCase,
+    CR_OUTPUT_MODE, FOURCC_MTUI, FOURCC_VQL0,
 };
 use matterstream_vm_arena::TripleArena;
 
@@ -195,285 +198,142 @@ fn test_vql_multiple_queries() {
     assert_eq!(vm.vql_outputs.len(), 2);
 }
 
-// ── SKLL tests ──────────────────────────────────────────────────────────
+// ── External OR page handler tests ──────────────────────────────────────
 
-#[test]
-fn test_skill_basic() {
-    // 0="onboard", 1="validate", 2="provision"
-    let mut vm = make_vm_with_strings(&["onboard", "validate", "provision"]);
-    let mut arena = TripleArena::new();
+const FOURCC_TEST: u32 = 0x54455354; // "TEST"
 
-    let mut bytecode = Vec::new();
-    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
-    // SkillBegin "onboard" (str_idx=0)
-    push32(&mut bytecode, 0);
-    bytecode.push(SkllOp::Begin.byte());
-    // SkillStep "validate" (str_idx=1)
-    push32(&mut bytecode, 1);
-    bytecode.push(SkllOp::Step.byte());
-    // SkillStep "provision" (str_idx=2)
-    push32(&mut bytecode, 2);
-    bytecode.push(SkllOp::Step.byte());
-    bytecode.push(SkllOp::End.byte());
-    bytecode.push(RpnOp::Halt as u8);
-
-    vm.execute(&bytecode, &mut arena).unwrap();
-    assert_eq!(vm.skill_outputs.len(), 1);
-    assert_eq!(vm.skill_outputs[0].name, "onboard");
-    assert_eq!(vm.skill_outputs[0].steps.len(), 2);
-    assert_eq!(
-        vm.skill_outputs[0].steps[0],
-        SkillStep::Deterministic { name: "validate".into() }
-    );
+/// Simple test handler that records sub_ops and pops values from the stack.
+struct TestPageHandler {
+    dispatched: Vec<u8>,
+    popped_values: Vec<u32>,
 }
 
-#[test]
-fn test_skill_llm_step_with_replaceables() {
-    // 0="summarize", 1="Summarize {{user}}", 2="user", 3="Unknown"
-    let mut vm = make_vm_with_strings(&[
-        "summarize",
-        "Summarize {{user}}",
-        "user",
-        "Unknown",
-    ]);
-    let mut arena = TripleArena::new();
-
-    let mut bytecode = Vec::new();
-    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
-    push32(&mut bytecode, 0);
-    bytecode.push(SkllOp::Begin.byte());
-    // LlmStep with prompt
-    push32(&mut bytecode, 1);
-    bytecode.push(SkllOp::LlmStep.byte());
-    // Replaceable: name="user", default="Unknown"
-    push32(&mut bytecode, 2);
-    push32(&mut bytecode, 3);
-    bytecode.push(SkllOp::Replaceable.byte());
-    bytecode.push(SkllOp::End.byte());
-    bytecode.push(RpnOp::Halt as u8);
-
-    vm.execute(&bytecode, &mut arena).unwrap();
-    assert_eq!(vm.skill_outputs.len(), 1);
-    assert_eq!(vm.skill_outputs[0].steps.len(), 1);
-    match &vm.skill_outputs[0].steps[0] {
-        SkillStep::Llm { prompt, replaceables, model, use_case } => {
-            assert_eq!(prompt, "Summarize {{user}}");
-            assert_eq!(replaceables.len(), 1);
-            assert_eq!(replaceables[0].name, "user");
-            assert_eq!(replaceables[0].default, "Unknown");
-            assert_eq!(*model, None);
-            assert_eq!(*use_case, LlmUseCase::General);
+impl TestPageHandler {
+    fn new() -> Self {
+        Self {
+            dispatched: Vec::new(),
+            popped_values: Vec::new(),
         }
-        _ => panic!("Expected LLM step"),
+    }
+}
+
+impl OrPageHandler for TestPageHandler {
+    fn dispatch(
+        &mut self,
+        sub_op: u8,
+        vm: &mut VmHandle,
+        _arenas: &mut TripleArena,
+    ) -> Result<(), RpnError> {
+        self.dispatched.push(sub_op);
+        // Sub-op 0x00: pop a u32 and record it
+        if sub_op == 0x00 {
+            let val = vm.pop_u32()?;
+            self.popped_values.push(val);
+        }
+        // Sub-op 0x01: push a result onto the stack
+        if sub_op == 0x01 {
+            vm.push(RpnValue::U32(0xBEEF))?;
+        }
+        // Sub-op 0xFF: return error
+        if sub_op == 0x7F {
+            return Err(RpnError::InvalidOrPage(FOURCC_TEST));
+        }
+        Ok(())
+    }
+
+    fn gas_cost(&self, sub_op: u8) -> u64 {
+        match sub_op {
+            0x00 => 50,
+            0x01 => 25,
+            _ => 0, // use default
+        }
+    }
+
+    fn as_any(self: Box<Self>) -> Box<dyn Any> {
+        self
     }
 }
 
 #[test]
-fn test_skill_llm_with_model_and_use_case() {
-    // 0="classify", 1="Classify this", 2="claude-haiku"
-    let mut vm = make_vm_with_strings(&["classify", "Classify this", "claude-haiku"]);
+fn test_external_or_page_dispatch() {
+    let mut vm = RpnVm::new();
     let mut arena = TripleArena::new();
 
+    vm.register_or_page(FOURCC_TEST, Box::new(TestPageHandler::new()));
+
     let mut bytecode = Vec::new();
-    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
-    push32(&mut bytecode, 0);
-    bytecode.push(SkllOp::Begin.byte());
-    // LlmStep
-    push32(&mut bytecode, 1);
-    bytecode.push(SkllOp::LlmStep.byte());
-    // Set model
-    push32(&mut bytecode, 2);
-    bytecode.push(SkllOp::LlmModel.byte());
-    // Set use case = Routing (1)
-    push32(&mut bytecode, 1);
-    bytecode.push(SkllOp::LlmUseCase.byte());
-    bytecode.push(SkllOp::End.byte());
+    emit_set_cr(&mut bytecode, 0, FOURCC_TEST as u64);
+    // Push a value, then dispatch sub-op 0x00 (which pops it)
+    push32(&mut bytecode, 42);
+    bytecode.push(0x80); // OR page sub-op 0x00
+    // Dispatch sub-op 0x01 (which pushes 0xBEEF)
+    bytecode.push(0x81); // OR page sub-op 0x01
     bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
-    match &vm.skill_outputs[0].steps[0] {
-        SkillStep::Llm { model, use_case, .. } => {
-            assert_eq!(model.as_deref(), Some("claude-haiku"));
-            assert_eq!(*use_case, LlmUseCase::Routing);
-        }
-        _ => panic!("Expected LLM step"),
-    }
+
+    // Take the handler back and verify
+    let handler: Box<TestPageHandler> = vm.take_or_page(FOURCC_TEST).unwrap();
+    assert_eq!(handler.dispatched, vec![0x00, 0x01]);
+    assert_eq!(handler.popped_values, vec![42]);
+
+    // Verify the push from sub-op 0x01 left a value on the stack
+    assert_eq!(vm.stack.len(), 1);
+    assert_eq!(vm.stack[0].as_u32(), Some(0xBEEF));
 }
 
 #[test]
-fn test_skill_invoke_action() {
-    let mut vm = make_vm_with_strings(&["my_skill", "send_email"]);
+fn test_external_or_page_unregistered_fourcc() {
+    let mut vm = RpnVm::new();
     let mut arena = TripleArena::new();
 
     let mut bytecode = Vec::new();
-    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
-    push32(&mut bytecode, 0);
-    bytecode.push(SkllOp::Begin.byte());
-    push32(&mut bytecode, 1);
-    bytecode.push(SkllOp::Invoke.byte());
-    bytecode.push(SkllOp::End.byte());
+    emit_set_cr(&mut bytecode, 0, FOURCC_TEST as u64);
+    bytecode.push(0x80); // OR page sub-op 0x00
     bytecode.push(RpnOp::Halt as u8);
 
-    vm.execute(&bytecode, &mut arena).unwrap();
-    assert_eq!(
-        vm.skill_outputs[0].steps[0],
-        SkillStep::InvokeAction { name: "send_email".into() }
-    );
-}
-
-#[test]
-fn test_skill_invoke_symbol() {
-    let mut vm = make_vm_with_strings(&["my_skill"]);
-    let mut arena = TripleArena::new();
-
-    let mut bytecode = Vec::new();
-    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
-    push32(&mut bytecode, 0);
-    bytecode.push(SkllOp::Begin.byte());
-    push32(&mut bytecode, 0x42);
-    bytecode.push(SkllOp::InvokeSymbol.byte());
-    bytecode.push(SkllOp::End.byte());
-    bytecode.push(RpnOp::Halt as u8);
-
-    vm.execute(&bytecode, &mut arena).unwrap();
-    assert_eq!(
-        vm.skill_outputs[0].steps[0],
-        SkillStep::InvokeSymbol { symbol: 0x42 }
-    );
-}
-
-#[test]
-fn test_skill_no_active_def_error() {
-    let mut vm = make_vm_with_strings(&["x"]);
-    let mut arena = TripleArena::new();
-
-    let mut bytecode = Vec::new();
-    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
-    push32(&mut bytecode, 0);
-    bytecode.push(SkllOp::Step.byte());
-    bytecode.push(RpnOp::Halt as u8);
-
+    // Should error — no handler registered for FOURCC_TEST
     assert!(vm.execute(&bytecode, &mut arena).is_err());
 }
 
 #[test]
-fn test_skill_mixed_steps() {
-    // 0="pipeline", 1="fetch", 2="Analyze {{data}}", 3="data", 4="", 5="store"
-    let mut vm = make_vm_with_strings(&[
-        "pipeline", "fetch", "Analyze {{data}}", "data", "", "store",
-    ]);
+fn test_external_or_page_gas_metering() {
+    let mut vm = RpnVm::with_gas(200);
     let mut arena = TripleArena::new();
 
-    let mut bytecode = Vec::new();
-    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
-    push32(&mut bytecode, 0);
-    bytecode.push(SkllOp::Begin.byte());
-    // Deterministic step "fetch"
-    push32(&mut bytecode, 1);
-    bytecode.push(SkllOp::Step.byte());
-    // LLM step with replaceable
-    push32(&mut bytecode, 2);
-    bytecode.push(SkllOp::LlmStep.byte());
-    push32(&mut bytecode, 3);
-    push32(&mut bytecode, 4);
-    bytecode.push(SkllOp::Replaceable.byte());
-    // Use case = DeepResearch (3)
-    push32(&mut bytecode, 3);
-    bytecode.push(SkllOp::LlmUseCase.byte());
-    // Deterministic step "store" — should flush LLM step first
-    push32(&mut bytecode, 5);
-    bytecode.push(SkllOp::Step.byte());
-    bytecode.push(SkllOp::End.byte());
-    bytecode.push(RpnOp::Halt as u8);
+    vm.register_or_page(FOURCC_TEST, Box::new(TestPageHandler::new()));
 
-    vm.execute(&bytecode, &mut arena).unwrap();
-    assert_eq!(vm.skill_outputs[0].steps.len(), 3);
-    assert_eq!(
-        vm.skill_outputs[0].steps[0],
-        SkillStep::Deterministic { name: "fetch".into() }
-    );
-    match &vm.skill_outputs[0].steps[1] {
-        SkillStep::Llm { prompt, replaceables, use_case, .. } => {
-            assert_eq!(prompt, "Analyze {{data}}");
-            assert_eq!(replaceables.len(), 1);
-            assert_eq!(*use_case, LlmUseCase::DeepResearch);
-        }
-        _ => panic!("Expected LLM step"),
+    let mut bytecode = Vec::new();
+    emit_set_cr(&mut bytecode, 0, FOURCC_TEST as u64);
+    // Sub-op 0x01 costs 25 gas each, dispatch 5 times = 125 gas
+    for _ in 0..5 {
+        bytecode.push(0x81);
     }
-    assert_eq!(
-        vm.skill_outputs[0].steps[2],
-        SkillStep::Deterministic { name: "store".into() }
-    );
-}
-
-// ── Nested skill tests ──────────────────────────────────────────────────
-
-#[test]
-fn test_nested_skills() {
-    // 0="parent", 1="child_a", 2="child_b", 3="step_p", 4="step_a", 5="step_b"
-    let mut vm = make_vm_with_strings(&[
-        "parent", "child_a", "child_b", "step_p", "step_a", "step_b",
-    ]);
-    let mut arena = TripleArena::new();
-
-    let mut bytecode = Vec::new();
-    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
-    // Begin parent skill
-    push32(&mut bytecode, 0);
-    bytecode.push(SkllOp::Begin.byte());
-    push32(&mut bytecode, 3);
-    bytecode.push(SkllOp::Step.byte());
-    // Nested: child_a
-    push32(&mut bytecode, 1);
-    bytecode.push(SkllOp::Begin.byte());
-    push32(&mut bytecode, 4);
-    bytecode.push(SkllOp::Step.byte());
-    bytecode.push(SkllOp::End.byte());
-    // Nested: child_b
-    push32(&mut bytecode, 2);
-    bytecode.push(SkllOp::Begin.byte());
-    push32(&mut bytecode, 5);
-    bytecode.push(SkllOp::Step.byte());
-    bytecode.push(SkllOp::End.byte());
-    // End parent skill
-    bytecode.push(SkllOp::End.byte());
     bytecode.push(RpnOp::Halt as u8);
 
+    // Should succeed — 125 + overhead < 200
     vm.execute(&bytecode, &mut arena).unwrap();
-    // Should have 3 skills: child_a, child_b, parent (in order of SkillEnd)
-    assert_eq!(vm.skill_outputs.len(), 3);
-    assert_eq!(vm.skill_outputs[0].name, "child_a");
-    assert_eq!(vm.skill_outputs[0].steps.len(), 1);
-    assert_eq!(vm.skill_outputs[1].name, "child_b");
-    assert_eq!(vm.skill_outputs[1].steps.len(), 1);
-    assert_eq!(vm.skill_outputs[2].name, "parent");
-    assert_eq!(vm.skill_outputs[2].steps.len(), 1);
+    assert!(vm.trace.gas_consumed > 0);
 }
 
 #[test]
-fn test_sibling_skills() {
-    // 0="alpha", 1="beta", 2="s1", 3="s2"
-    let mut vm = make_vm_with_strings(&["alpha", "beta", "s1", "s2"]);
+fn test_external_or_page_string_resolution() {
+    let mut vm = make_vm_with_strings(&["hello", "world"]);
     let mut arena = TripleArena::new();
 
+    vm.register_or_page(FOURCC_TEST, Box::new(TestPageHandler::new()));
+
     let mut bytecode = Vec::new();
-    emit_set_cr(&mut bytecode, 0, FOURCC_SKLL as u64);
+    emit_set_cr(&mut bytecode, 0, FOURCC_TEST as u64);
+    // Push string index 0, then sub-op 0x00 pops it
     push32(&mut bytecode, 0);
-    bytecode.push(SkllOp::Begin.byte());
-    push32(&mut bytecode, 2);
-    bytecode.push(SkllOp::Step.byte());
-    bytecode.push(SkllOp::End.byte());
-    push32(&mut bytecode, 1);
-    bytecode.push(SkllOp::Begin.byte());
-    push32(&mut bytecode, 3);
-    bytecode.push(SkllOp::Step.byte());
-    bytecode.push(SkllOp::End.byte());
+    bytecode.push(0x80);
     bytecode.push(RpnOp::Halt as u8);
 
     vm.execute(&bytecode, &mut arena).unwrap();
-    assert_eq!(vm.skill_outputs.len(), 2);
-    assert_eq!(vm.skill_outputs[0].name, "alpha");
-    assert_eq!(vm.skill_outputs[1].name, "beta");
+
+    let handler: Box<TestPageHandler> = vm.take_or_page(FOURCC_TEST).unwrap();
+    assert_eq!(handler.popped_values, vec![0]); // string index, not the string itself
 }
 
 // ── LlmUseCase enum tests ──────────────────────────────────────────────

@@ -23,10 +23,11 @@ pub type NativeHookFn = fn(vm: &mut RpnVm, arenas: &mut TripleArena) -> Result<(
 use crate::event::{VmEvent, VmEventType};
 use crate::ui_vm::{
     VqlOutput, VqlField, VQL_OUTPUT_MAX,
-    SkillDef, SkillStep, SkillReplaceable, LlmUseCase, CronSpec, SKILL_OUTPUT_MAX,
     ObjectTypeDef, ObjectFieldDef, OBJECT_TYPE_MAX,
-    FOURCC_MTUI, FOURCC_VQL0, FOURCC_SKLL,
+    FOURCC_MTUI, FOURCC_VQL0,
 };
+use crate::or_page::OrPageHandler;
+use crate::vm_handle::VmHandle;
 #[cfg(feature = "ui")]
 use crate::ui_vm::{
     UiDrawCmd, UiDrawState, UI_DRAW_CMD_MAX, UI_STATE_STACK_MAX,
@@ -291,6 +292,37 @@ impl SkllOp {
     pub fn byte(self) -> u8 { 0x80 + self as u8 }
 }
 
+/// SKLS OR page: Skill execution operations (host callbacks).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum SklsOp {
+    SetModel          = 0x00,
+    AppendToPrompt    = 0x01,
+    ExecutePrompt     = 0x02,
+    ForwardToModel    = 0x03,
+    QueueSkill        = 0x04,
+    QueueAction       = 0x05,
+    ExecuteSkill      = 0x06,
+    ExecuteAction     = 0x07,
+}
+
+impl SklsOp {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0x00 => Some(Self::SetModel),
+            0x01 => Some(Self::AppendToPrompt),
+            0x02 => Some(Self::ExecutePrompt),
+            0x03 => Some(Self::ForwardToModel),
+            0x04 => Some(Self::QueueSkill),
+            0x05 => Some(Self::QueueAction),
+            0x06 => Some(Self::ExecuteSkill),
+            0x07 => Some(Self::ExecuteAction),
+            _ => None,
+        }
+    }
+    pub fn byte(self) -> u8 { 0x80 + self as u8 }
+}
+
 /// OBJT OR page: Object type definition operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -483,9 +515,11 @@ pub struct GasConfig {
     pub cost_cr: u64,
     pub cost_vql: u64,
     pub cost_skill: u64,
+    pub cost_skls: u64,
     pub cost_user_call: u64,
     pub cost_system_call: u64,
     pub cost_block: u64,
+    pub cost_or_page_default: u64,
 }
 
 impl GasConfig {
@@ -508,11 +542,14 @@ impl GasConfig {
             cost_bank: 3,
             cost_event: 5,
             cost_cr: 2,
-            cost_vql: 5,
-            cost_skill: 5,
-            cost_user_call: 10,
+            cost_vql: 100,
+            cost_skill: 100,
+            cost_skls: 100,
+            cost_user_call: 50,
+
             cost_system_call: 20,
             cost_block: 5,
+            cost_or_page_default: 100,
         }
     }
 
@@ -551,15 +588,14 @@ impl GasConfig {
         }
     }
 
-    /// Gas cost for an OR page opcode, based on CR[0].
-    pub fn cost_of_or_page(&self, cr0: u32) -> u64 {
+    /// Gas cost for a built-in OR page opcode. Returns None for unregistered FourCCs.
+    pub fn cost_of_or_page_builtin(&self, cr0: u32) -> Option<u64> {
         match cr0 {
-            FOURCC_MTUI => self.cost_ui,
-            FOURCC_VQL0 => self.cost_vql,
-            FOURCC_SKLL => self.cost_skill,
-            FOURCC_OBJT => self.cost_skill,
-            FOURCC_CARD => self.cost_ui,
-            _ => self.cost_ui,
+            FOURCC_MTUI => Some(self.cost_ui),
+            FOURCC_VQL0 => Some(self.cost_vql),
+            FOURCC_OBJT => Some(self.cost_skill),
+            FOURCC_CARD => Some(self.cost_ui),
+            _ => None,
         }
     }
 }
@@ -787,14 +823,6 @@ pub struct RpnVm {
     // VQL state
     pub vql_outputs: Vec<VqlOutput>,
     vql_active: Option<VqlOutput>,
-    // SKLL state
-    pub skill_outputs: Vec<SkillDef>,
-    skill_active: Option<SkillDef>,
-    skill_stack: Vec<SkillDef>,
-    skill_active_llm_prompt: Option<String>,
-    skill_active_llm_replaceables: Vec<SkillReplaceable>,
-    skill_active_llm_model: Option<String>,
-    skill_active_llm_use_case: LlmUseCase,
     // Object type state
     pub objtype_outputs: Vec<ObjectTypeDef>,
     objtype_active: Option<ObjectTypeDef>,
@@ -808,6 +836,9 @@ pub struct RpnVm {
     pub oid_indices: Vec<Vec<u8>>,
     /// Native hook dispatch table (system/internal packages only).
     pub native_hooks: Vec<NativeHookFn>,
+
+    /// External OR page handlers — (fourcc, handler) pairs, linear scanned.
+    or_pages: Vec<(u32, Box<dyn OrPageHandler>)>,
 
     // ── UI state (requires "ui" feature) ────────────────────────────────
     #[cfg(feature = "ui")]
@@ -853,18 +884,12 @@ impl RpnVm {
             cr_bank: [FOURCC_MTUI, 0, 0, 0, 0, 0, 0, 0],
             vql_outputs: Vec::new(),
             vql_active: None,
-            skill_outputs: Vec::new(),
-            skill_active: None,
-            skill_stack: Vec::new(),
-            skill_active_llm_prompt: None,
-            skill_active_llm_replaceables: Vec::new(),
-            skill_active_llm_model: None,
-            skill_active_llm_use_case: LlmUseCase::General,
             objtype_outputs: Vec::new(),
             objtype_active: None,
             sdf_draws: Vec::new(),
             oid_indices: Vec::new(),
             native_hooks: Vec::new(),
+            or_pages: Vec::new(),
             #[cfg(feature = "ui")]
             ui_draws: Vec::new(),
             #[cfg(feature = "ui")]
@@ -907,6 +932,22 @@ impl RpnVm {
         Ok(())
     }
 
+    /// Register an external OR page handler by FourCC.
+    pub fn register_or_page(&mut self, fourcc: u32, handler: Box<dyn OrPageHandler>) {
+        if let Some(entry) = self.or_pages.iter_mut().find(|(f, _)| *f == fourcc) {
+            entry.1 = handler;
+        } else {
+            self.or_pages.push((fourcc, handler));
+        }
+    }
+
+    /// Remove and return an external OR page handler by FourCC, downcasting to a concrete type.
+    pub fn take_or_page<T: 'static>(&mut self, fourcc: u32) -> Option<Box<T>> {
+        let idx = self.or_pages.iter().position(|(f, _)| *f == fourcc)?;
+        let (_, handler) = self.or_pages.swap_remove(idx);
+        handler.as_any().downcast::<T>().ok()
+    }
+
     /// Public push for native hooks (VM-escape).
     pub fn push_value(&mut self, val: RpnValue) -> Result<(), RpnError> {
         self.push(val)
@@ -935,21 +976,6 @@ impl RpnVm {
             .get(idx as usize)
             .cloned()
             .ok_or(RpnError::InvalidStringIndex(idx))
-    }
-
-    /// Flush the pending LLM step (prompt + replaceables + model + use_case) into the active skill.
-    fn flush_llm_step(&mut self) -> Result<(), RpnError> {
-        if let Some(prompt) = self.skill_active_llm_prompt.take() {
-            let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-            skill.steps.push(SkillStep::Llm {
-                prompt,
-                replaceables: std::mem::take(&mut self.skill_active_llm_replaceables),
-                model: self.skill_active_llm_model.take(),
-                use_case: self.skill_active_llm_use_case,
-            });
-            self.skill_active_llm_use_case = LlmUseCase::General;
-        }
-        Ok(())
     }
 
     #[cfg(feature = "ui")]
@@ -1043,8 +1069,18 @@ impl RpnVm {
     }
 
     /// Consume gas for an OR page opcode (cost depends on CR[0]).
-    fn consume_gas_or_page(&mut self) -> Result<(), RpnError> {
-        let cost = self.gas.cost_of_or_page(self.cr_bank[0]);
+    fn consume_gas_or_page(&mut self, sub_op: u8) -> Result<(), RpnError> {
+        let cr0 = self.cr_bank[0];
+        let cost = self.gas.cost_of_or_page_builtin(cr0).unwrap_or_else(|| {
+            self.or_pages
+                .iter()
+                .find(|(f, _)| *f == cr0)
+                .map(|(_, h)| {
+                    let c = h.gas_cost(sub_op);
+                    if c == 0 { self.gas.cost_or_page_default } else { c }
+                })
+                .unwrap_or(self.gas.cost_or_page_default)
+        });
         self.trace.gas_consumed += cost;
         if self.trace.gas_consumed > self.gas.gas_budget {
             return Err(RpnError::GasExhausted {
@@ -1259,13 +1295,6 @@ impl RpnVm {
         self.cr_bank = [FOURCC_MTUI, security, 0, 0, 0, 0, 0, 0];
         self.vql_outputs.clear();
         self.vql_active = None;
-        self.skill_outputs.clear();
-        self.skill_active = None;
-        self.skill_stack.clear();
-        self.skill_active_llm_prompt = None;
-        self.skill_active_llm_replaceables.clear();
-        self.skill_active_llm_model = None;
-        self.skill_active_llm_use_case = LlmUseCase::General;
         self.objtype_outputs.clear();
         self.objtype_active = None;
         self.sdf_draws.clear();
@@ -1315,7 +1344,7 @@ impl RpnVm {
 
         // ── OR page dispatch (0x80+) ─────────────────────────────────
         if op_byte >= 0x80 {
-            self.consume_gas_or_page()?;
+            self.consume_gas_or_page(op_byte - 0x80)?;
             self.trace.opcodes_executed += 1;
             return self.dispatch_or_page(op_byte, bytecode, arenas);
         }
@@ -2038,7 +2067,7 @@ impl RpnVm {
         &mut self,
         op_byte: u8,
         _bytecode: &[u8],
-        _arenas: &mut TripleArena,
+        arenas: &mut TripleArena,
     ) -> Result<(), RpnError> {
         let sub_op = op_byte - 0x80;
         let cr0 = self.cr_bank[0];
@@ -2046,10 +2075,22 @@ impl RpnVm {
         match cr0 {
             FOURCC_MTUI => self.dispatch_or_mtui(sub_op),
             FOURCC_VQL0 => self.dispatch_or_vql(sub_op),
-            FOURCC_SKLL => self.dispatch_or_skll(sub_op),
             FOURCC_OBJT => self.dispatch_or_objt(sub_op),
             FOURCC_CARD => self.dispatch_or_card(sub_op),
-            _ => Err(RpnError::InvalidOrPage(cr0)),
+            _ => {
+                let idx = self.or_pages.iter().position(|(f, _)| *f == cr0);
+                if let Some(i) = idx {
+                    let (_, mut handler) = self.or_pages.swap_remove(i);
+                    let mut handle = VmHandle { vm: self };
+                    let result = handler.dispatch(sub_op, &mut handle, arenas);
+                    self.or_pages.push((cr0, handler));
+                    // Advance PC — external handlers don't manage PC
+                    self.pc += 1;
+                    result
+                } else {
+                    Err(RpnError::InvalidOrPage(cr0))
+                }
+            }
         }
     }
 
@@ -2237,7 +2278,7 @@ impl RpnVm {
                 let raw_y = self.pop_u32_coerce()? as i32;
                 let raw_x = self.pop_u32_coerce()? as i32;
                 let (x, y) = self.transform_point(raw_x, raw_y);
-                self.push_sdf_draw(SdfDrawCmd {
+                self.push_sdf_draw(matterstream_common::SdfDrawCmd {
                     pos: [x as f32, y as f32],
                     size: [w, h],
                     color: [0.0; 4],
@@ -2246,7 +2287,7 @@ impl RpnVm {
             }),
             // 0x0F RibbonEnd — pops 0
             0x0F => ui_op!(self, pops: 0, payload: 0, {
-                self.push_sdf_draw(SdfDrawCmd {
+                self.push_sdf_draw(matterstream_common::SdfDrawCmd {
                     pos: [0.0; 2],
                     size: [0.0; 2],
                     color: [0.0; 4],
@@ -2344,167 +2385,6 @@ impl RpnVm {
     }
 
     /// OR page: SKLL sub-ops
-    /// 0x00 SkillBegin, 0x01 SkillEnd, 0x02 SkillStep,
-    /// 0x03 SkillLlmStep, 0x04 SkillReplaceable, 0x05 SkillInvoke,
-    /// 0x06 SkillInvokeSymbol, 0x07 SkillLlmModel, 0x08 SkillLlmUseCase,
-    /// 0x09 SkillSetShortDesc, 0x0A SkillSetLongDesc,
-    /// 0x0B SkillCronInterval, 0x0C SkillCronJitter,
-    /// 0x0D SkillForwardPrompt, 0x0E SkillAddToSystemPrompt
-    fn dispatch_or_skll(&mut self, sub_op: u8) -> Result<(), RpnError> {
-        match sub_op {
-            // 0x00 SkillBegin
-            0x00 => {
-                if self.skill_outputs.len() >= SKILL_OUTPUT_MAX {
-                    return Err(RpnError::SkillLimitExceeded);
-                }
-                let name_idx = self.pop_u32_coerce()?;
-                let name = self.resolve_str(name_idx)?;
-                if let Some(parent) = self.skill_active.take() {
-                    self.skill_stack.push(parent);
-                }
-                self.skill_active = Some(SkillDef::new(name));
-                self.pc += 1;
-            }
-            // 0x01 SkillEnd
-            0x01 => {
-                self.flush_llm_step()?;
-                let skill = self.skill_active.take().ok_or(RpnError::SkillNoActiveDef)?;
-                self.skill_outputs.push(skill);
-                self.skill_active = self.skill_stack.pop();
-                self.pc += 1;
-            }
-            // 0x02 SkillStep
-            0x02 => {
-                self.flush_llm_step()?;
-                let name_idx = self.pop_u32_coerce()?;
-                let name = self.resolve_str(name_idx)?;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                skill.steps.push(SkillStep::Deterministic { name });
-                self.pc += 1;
-            }
-            // 0x03 SkillLlmStep
-            0x03 => {
-                self.flush_llm_step()?;
-                let prompt_idx = self.pop_u32_coerce()?;
-                let prompt = self.resolve_str(prompt_idx)?;
-                self.skill_active_llm_prompt = Some(prompt);
-                self.pc += 1;
-            }
-            // 0x04 SkillReplaceable
-            0x04 => {
-                let default_idx = self.pop_u32_coerce()?;
-                let name_idx = self.pop_u32_coerce()?;
-                let name = self.resolve_str(name_idx)?;
-                let default = self.resolve_str(default_idx)?;
-                if self.skill_active_llm_prompt.is_none() {
-                    return Err(RpnError::SkillNoActiveLlmStep);
-                }
-                self.skill_active_llm_replaceables.push(SkillReplaceable { name, default });
-                self.pc += 1;
-            }
-            // 0x05 SkillInvoke
-            0x05 => {
-                self.flush_llm_step()?;
-                let name_idx = self.pop_u32_coerce()?;
-                let name = self.resolve_str(name_idx)?;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                skill.steps.push(SkillStep::InvokeAction { name });
-                self.pc += 1;
-            }
-            // 0x06 SkillInvokeSymbol
-            0x06 => {
-                self.flush_llm_step()?;
-                let symbol = self.pop_u32_coerce()?;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                skill.steps.push(SkillStep::InvokeSymbol { symbol });
-                self.pc += 1;
-            }
-            // 0x07 SkillLlmModel
-            0x07 => {
-                let model_idx = self.pop_u32_coerce()?;
-                let model = self.resolve_str(model_idx)?;
-                if self.skill_active_llm_prompt.is_none() {
-                    return Err(RpnError::SkillNoActiveLlmStep);
-                }
-                self.skill_active_llm_model = Some(model);
-                self.pc += 1;
-            }
-            // 0x08 SkillLlmUseCase
-            0x08 => {
-                let use_case_val = self.pop_u32_coerce()? as u8;
-                let use_case = LlmUseCase::from_u8(use_case_val)
-                    .unwrap_or(LlmUseCase::General);
-                if self.skill_active_llm_prompt.is_none() {
-                    return Err(RpnError::SkillNoActiveLlmStep);
-                }
-                self.skill_active_llm_use_case = use_case;
-                self.pc += 1;
-            }
-            // 0x09 SkillSetShortDesc
-            0x09 => {
-                let str_idx = self.pop_u32_coerce()?;
-                let desc = self.resolve_str(str_idx)?;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                skill.short_description = desc;
-                self.pc += 1;
-            }
-            // 0x0A SkillSetLongDesc
-            0x0A => {
-                let str_idx = self.pop_u32_coerce()?;
-                let desc = self.resolve_str(str_idx)?;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                skill.long_description = desc;
-                self.pc += 1;
-            }
-            // 0x0B SkillCronInterval
-            0x0B => {
-                let hi = self.pop_u32_coerce()? as u64;
-                let lo = self.pop_u32_coerce()? as u64;
-                let interval_ms = (hi << 32) | lo;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                match &mut skill.cron {
-                    Some(spec) => spec.interval_ms = interval_ms,
-                    None => skill.cron = Some(CronSpec { interval_ms, jitter_ms: 0 }),
-                }
-                self.pc += 1;
-            }
-            // 0x0C SkillCronJitter
-            0x0C => {
-                let hi = self.pop_u32_coerce()? as u64;
-                let lo = self.pop_u32_coerce()? as u64;
-                let jitter_ms = (hi << 32) | lo;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                match &mut skill.cron {
-                    Some(spec) => spec.jitter_ms = jitter_ms,
-                    None => skill.cron = Some(CronSpec { interval_ms: 0, jitter_ms }),
-                }
-                self.pc += 1;
-            }
-            // 0x0D SkillForwardPrompt
-            0x0D => {
-                self.flush_llm_step()?;
-                let dest_idx = self.pop_u32_coerce()?;
-                let dest = self.resolve_str(dest_idx)?;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                skill.steps.push(SkillStep::ForwardPrompt { dest });
-                self.pc += 1;
-            }
-            // 0x0E SkillAddToSystemPrompt
-            0x0E => {
-                self.flush_llm_step()?;
-                let content_idx = self.pop_u32_coerce()?;
-                let content = self.resolve_str(content_idx)?;
-                let skill = self.skill_active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
-                skill.steps.push(SkillStep::AddToSystemPrompt { content });
-                self.pc += 1;
-            }
-            _ => {
-                self.pc += 1;
-            }
-        }
-        Ok(())
-    }
-
     /// OR page: OBJT sub-ops
     /// 0x00 ObjTypeBegin, 0x01 ObjTypeEnd, 0x02 ObjTypeSetShortDesc,
     /// 0x03 ObjTypeSetLongDesc, 0x04 ObjTypeField
@@ -2523,9 +2403,6 @@ impl RpnVm {
             // 0x01 ObjTypeEnd
             0x01 => {
                 let def = self.objtype_active.take().ok_or(RpnError::ObjTypeNoActiveDef)?;
-                if let Some(skill) = self.skill_active.as_mut() {
-                    skill.object_types.push(def.clone());
-                }
                 self.objtype_outputs.push(def);
                 self.pc += 1;
             }
@@ -2585,9 +2462,6 @@ impl RpnVm {
                 self.card_capturing = false;
                 let mut card = self.card_active.take().ok_or(RpnError::CardNoActiveDef)?;
                 card.string_table = self.string_table.clone();
-                if let Some(skill) = self.skill_active.as_mut() {
-                    skill.cards.push(card.clone());
-                }
                 self.card_outputs.push(card);
             }),
             // 0x02 CardSetShortDesc

@@ -34,6 +34,8 @@ pub const FOURCC_MTUI: u32 = 0x4D545549;
 pub const FOURCC_VQL0: u32 = 0x56514C30;
 /// FourCC: Skill / invocable logic.
 pub const FOURCC_SKLL: u32 = 0x534B4C4C;
+/// FourCC: Skill execution / host callbacks.
+pub const FOURCC_SKLS: u32 = 0x534B4C53;
 
 // ── VQL (Vesicle Query Language) types ──────────────────────────────────
 

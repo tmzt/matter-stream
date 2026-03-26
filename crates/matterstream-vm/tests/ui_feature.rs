@@ -111,25 +111,63 @@ mod with_ui {
     }
 
     /// Pattern from tsx_detect.rs: skill output extraction after execution.
+    /// SKLL is now an external OR page handler — this test verifies the
+    /// external handler dispatch works correctly with the ui feature enabled.
     #[test]
     fn skill_output_extraction() {
+        use std::any::Any;
+        use matterstream_vm::or_page::OrPageHandler;
+        use matterstream_vm::vm_handle::VmHandle;
+        use matterstream_vm::rpn::RpnError;
+        use matterstream_vm::ui_vm::{SkillDef, SkillStep, FOURCC_SKLL};
+
+        /// Minimal inline SKLL handler for testing.
+        struct TestSkllHandler {
+            outputs: Vec<SkillDef>,
+            active: Option<SkillDef>,
+        }
+        impl TestSkllHandler {
+            fn new() -> Self { Self { outputs: Vec::new(), active: None } }
+        }
+        impl OrPageHandler for TestSkllHandler {
+            fn dispatch(&mut self, sub_op: u8, vm: &mut VmHandle, _: &mut TripleArena) -> Result<(), RpnError> {
+                match sub_op {
+                    0x00 => { // Begin
+                        let idx = vm.pop_u32()?;
+                        let name = vm.resolve_str(idx)?;
+                        self.active = Some(SkillDef::new(name));
+                    }
+                    0x01 => { // End
+                        let skill = self.active.take().ok_or(RpnError::SkillNoActiveDef)?;
+                        self.outputs.push(skill);
+                    }
+                    0x02 => { // Step
+                        let idx = vm.pop_u32()?;
+                        let name = vm.resolve_str(idx)?;
+                        let skill = self.active.as_mut().ok_or(RpnError::SkillNoActiveDef)?;
+                        skill.steps.push(SkillStep::Deterministic { name });
+                    }
+                    _ => {}
+                }
+                Ok(())
+            }
+            fn gas_cost(&self, _: u8) -> u64 { 100 }
+            fn as_any(self: Box<Self>) -> Box<dyn Any> { self }
+        }
+
         let mut vm = RpnVm::new();
         let mut arenas = TripleArena::new();
+        vm.register_or_page(FOURCC_SKLL, Box::new(TestSkllHandler::new()));
 
-        // SkillBegin (name_idx=0) + Step(name_idx=1, action_idx=2) + SkillEnd
         let mut bc = Vec::new();
-
-        // SetCR to SKLL mode (inline: [u8 cr_idx][u64 value])
         bc.push(RpnOp::SetCR as u8);
-        bc.push(0u8); // CR index 0
-        bc.extend_from_slice(&(matterstream_vm::ui_vm::FOURCC_SKLL as u64).to_le_bytes());
+        bc.push(0u8);
+        bc.extend_from_slice(&(FOURCC_SKLL as u64).to_le_bytes());
 
-        // SkillBegin with name string index 0
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&0u32.to_le_bytes());
         bc.push(SkllOp::Begin.byte());
 
-        // SkillStep with name string index 1
         bc.push(RpnOp::Push32 as u8);
         bc.extend_from_slice(&1u32.to_le_bytes());
         bc.push(SkllOp::Step.byte());
@@ -143,9 +181,10 @@ mod with_ui {
         ];
         vm.execute(&bc, &mut arenas).unwrap();
 
-        assert_eq!(vm.skill_outputs.len(), 1);
-        assert_eq!(vm.skill_outputs[0].name, "my_skill");
-        assert_eq!(vm.skill_outputs[0].steps.len(), 1);
+        let handler: Box<TestSkllHandler> = vm.take_or_page(FOURCC_SKLL).unwrap();
+        assert_eq!(handler.outputs.len(), 1);
+        assert_eq!(handler.outputs[0].name, "my_skill");
+        assert_eq!(handler.outputs[0].steps.len(), 1);
     }
 
     /// Pattern from session.rs: multiple draw types in sequence.
