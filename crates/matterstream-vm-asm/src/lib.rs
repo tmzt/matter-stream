@@ -103,6 +103,8 @@ pub mod user_call {
     pub const OID_COSINE_MATCH: u64 = 0x12;
     pub const READ_USER_ATOMIC: u64 = 0x20;
     pub const SUBMIT_USER_SEMAPHORE: u64 = 0x21;
+    pub const SHARED_STRING_GET: u64 = 0x22;
+    pub const SHARED_STRING_SET: u64 = 0x23;
 }
 
 // ── SystemCall sub-op IDs ──────────────────────────────────────────────
@@ -353,6 +355,22 @@ impl Asm {
         self.push32(slot);
         self.push32(value);
         self.tokens.push(AsmToken::UserCall(user_call::SUBMIT_USER_SEMAPHORE, 0));
+        self
+    }
+
+    /// Get shared string[shared_slot] → string_bank[local_slot]. Mutex-protected full copy.
+    pub fn shared_string_get(&mut self, shared_slot: u32, local_slot: u32) -> &mut Self {
+        self.push32(shared_slot);
+        self.push32(local_slot);
+        self.tokens.push(AsmToken::UserCall(user_call::SHARED_STRING_GET, 0));
+        self
+    }
+
+    /// Set shared string[shared_slot] from string_bank[local_slot]. Mutex-protected full copy.
+    pub fn shared_string_set(&mut self, local_slot: u32, shared_slot: u32) -> &mut Self {
+        self.push32(local_slot);
+        self.push32(shared_slot);
+        self.tokens.push(AsmToken::UserCall(user_call::SHARED_STRING_SET, 0));
         self
     }
 

@@ -350,6 +350,10 @@ pub enum UserCallOp {
     ReadUserAtomic       = 0x20,
     /// Write value to UserAtomicSubmitSemaphore[slot] (fire-and-forget).
     SubmitUserSemaphore  = 0x21,
+    /// Get shared string[slot] → copy to string_bank[local_slot]. Mutex-protected.
+    SharedStringGet      = 0x22,
+    /// Set shared string[slot] from string_bank[local_slot]. Mutex-protected.
+    SharedStringSet      = 0x23,
 }
 
 /// SystemCall sub-op identifiers.
@@ -765,6 +769,9 @@ pub struct RpnVm {
     pub user_atomics_readable: Vec<std::sync::atomic::AtomicU32>,
     /// Submit semaphores: bytecode writes (fire-and-forget), host reads+clears. 256 slots.
     pub user_atomics_submit: Vec<std::sync::atomic::AtomicU32>,
+    /// Shared string table: mutex-protected, nullable. Host and bytecode can both read/write.
+    /// Full copy on get/set — no partial access.
+    pub user_shared_strings: Vec<std::sync::Mutex<Option<String>>>,
     // Event queue
     pub event_queue: VecDeque<VmEvent>,
     // Frame counter
@@ -835,6 +842,7 @@ impl RpnVm {
             string_bank: vec![None; 256],
             user_atomics_readable: (0..256).map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
             user_atomics_submit: (0..256).map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
+            user_shared_strings: (0..256).map(|_| std::sync::Mutex::new(None)).collect(),
             event_queue: VecDeque::new(),
             frame_count: 0,
             rng: SimpleRng::new(0xDEAD_BEEF),
@@ -1930,6 +1938,32 @@ impl RpnVm {
                 let slot = self.pop_u32_coerce()? as usize;
                 if slot < self.user_atomics_submit.len() {
                     self.user_atomics_submit[slot].store(val, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            // 0x22 SharedStringGet — copy shared_strings[shared_slot] → string_bank[local_slot]
+            0x22 => {
+                let local_slot = self.pop_u32_coerce()? as usize;
+                let shared_slot = self.pop_u32_coerce()? as usize;
+                let val = if shared_slot < self.user_shared_strings.len() {
+                    self.user_shared_strings[shared_slot].lock().unwrap().clone()
+                } else {
+                    None
+                };
+                if local_slot < self.string_bank.len() {
+                    self.string_bank[local_slot] = val;
+                }
+            }
+            // 0x23 SharedStringSet — copy string_bank[local_slot] → shared_strings[shared_slot]
+            0x23 => {
+                let shared_slot = self.pop_u32_coerce()? as usize;
+                let local_slot = self.pop_u32_coerce()? as usize;
+                let val = if local_slot < self.string_bank.len() {
+                    self.string_bank[local_slot].clone()
+                } else {
+                    None
+                };
+                if shared_slot < self.user_shared_strings.len() {
+                    *self.user_shared_strings[shared_slot].lock().unwrap() = val;
                 }
             }
             _ => {
