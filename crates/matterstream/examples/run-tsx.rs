@@ -136,7 +136,7 @@ fn run() {
         use winit::event_loop::{EventLoop, ControlFlow};
         use winit::window::Window;
 
-        let sdf_draws = vm.sdf_draws.clone();
+        let mut sdf_draws = vm.sdf_draws.clone();
         let gpu_anim_bank = anim_bank.clone();
         let mut gpu_int_bank = vm.int_bank;
         let mut gpu_scalar_bank = vm.scalar_bank;
