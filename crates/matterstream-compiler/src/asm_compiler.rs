@@ -1125,6 +1125,25 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                 }
             }
         }
+        // ── Ribbon view: scrollable card container ──────────────────
+        "RibbonView" => {
+            let x = get_num_prop(&node.props, "x").unwrap_or(0) as i32;
+            let y = get_num_prop(&node.props, "y").unwrap_or(0) as i32;
+            let w = get_num_prop(&node.props, "w").unwrap_or(360) as u32;
+            let h = get_num_prop(&node.props, "h").unwrap_or(400) as u32;
+            let scroll_bank = get_num_prop(&node.props, "scrollBank").unwrap_or(0) as u32;
+            let card_width = get_num_prop(&node.props, "cardWidth").unwrap_or(w as i64) as u32;
+            let scroll_dir = if get_str_prop(&node.props, "direction").as_deref() == Some("vertical") { 1u32 } else { 0u32 };
+            asm.ui_ribbon_begin(x, y, w, h, scroll_bank, scroll_dir, card_width);
+            asm.ui_push_state();
+            asm.ui_apply_offset(x, y);
+            for child in &node.children {
+                emit_node(asm, child);
+            }
+            asm.ui_pop_state();
+            asm.ui_ribbon_end();
+            return;
+        }
         // ── VQL0: Query / Vesicle tags ────────────────────────────────
         "Query" => {
             asm.set_output_mode(FOURCC_VQL0);
