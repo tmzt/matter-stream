@@ -41,8 +41,12 @@ pub struct GpuSdfRenderer {
     glyph_bitmap_buffer: wgpu::Buffer,
     char_buffer_gpu: wgpu::Buffer,
     texture_bank_buffer: wgpu::Buffer,
+    // Held for ownership — referenced via bind_group, not read through self
+    #[allow(dead_code)]
     tex_array: wgpu::Texture,
+    #[allow(dead_code)]
     tex_array_view: wgpu::TextureView,
+    #[allow(dead_code)]
     tex_sampler: wgpu::Sampler,
     bind_group: wgpu::BindGroup,
     max_cmds: u32,

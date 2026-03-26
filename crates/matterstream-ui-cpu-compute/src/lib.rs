@@ -7,7 +7,7 @@
 //! A GPU compute shader could replace this with identical output.
 
 use matterstream_common::{
-    RenderFrame, SdfDrawCmd, Anim, GpuFont, GpuTexture,
+    RenderFrame, SdfDrawCmd, Anim, GpuFont,
     pack_bitmap, pack_strings, DRAW_TYPE_TEXT,
 };
 

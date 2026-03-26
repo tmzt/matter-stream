@@ -155,8 +155,15 @@ fn run() {
         let sdf_draws = vm.sdf_draws.clone();
         let string_table = asm_output.string_table.clone();
         let gpu_anim_bank = anim_bank.clone();
-        let gpu_scalar_bank = vm.scalar_bank;
+        let mut gpu_scalar_bank = vm.scalar_bank;
         let mut gpu_int_bank = vm.int_bank;
+
+        // Ribbon drag state
+        let mut drag_active = false;
+        let mut drag_start_x: f32 = 0.0;
+        let mut drag_start_scroll: f32 = 0.0;
+        let mut last_mouse_x: f32 = 0.0;
+        let mut last_drag_velocity: f32 = 0.0;
 
         let event_loop = EventLoop::new().unwrap();
         let window = Arc::new(
@@ -237,6 +244,37 @@ fn run() {
                 Event::WindowEvent { event: WindowEvent::Resized(_), .. } => {
                     window.request_redraw();
                 }
+                Event::WindowEvent { event: WindowEvent::MouseInput { state, button, .. }, .. } => {
+                    if button == winit::event::MouseButton::Left {
+                        match state {
+                            winit::event::ElementState::Pressed => {
+                                drag_active = true;
+                                drag_start_x = last_mouse_x;
+                                drag_start_scroll = gpu_scalar_bank[0];
+                                gpu_scalar_bank[3] = 1.0; // PHYSICS_DRAGGING
+                            }
+                            winit::event::ElementState::Released => {
+                                drag_active = false;
+                                gpu_scalar_bank[1] = last_drag_velocity;
+                                // Snap target = nearest card boundary (card_width from RIBBON_BEGIN params[3])
+                                let card_w = 360.0f32; // default, could read from draw commands
+                                let pos = gpu_scalar_bank[0];
+                                let snap = (pos / card_w).round() * card_w;
+                                gpu_scalar_bank[2] = snap;
+                                gpu_scalar_bank[3] = 2.0; // PHYSICS_DECELERATING
+                            }
+                        }
+                    }
+                }
+                Event::WindowEvent { event: WindowEvent::CursorMoved { position, .. }, .. } => {
+                    let mx = position.x as f32;
+                    if drag_active {
+                        let delta = mx - drag_start_x;
+                        last_drag_velocity = mx - last_mouse_x; // approx velocity (px/frame)
+                        gpu_scalar_bank[0] = drag_start_scroll + delta;
+                    }
+                    last_mouse_x = mx;
+                }
                 _ => (),
             }
         }).unwrap();
@@ -262,8 +300,15 @@ fn run() {
         let sdf_draws = vm.sdf_draws.clone();
         let string_table = asm_output.string_table.clone();
         let soft_anim_bank = anim_bank.clone();
-        let soft_scalar_bank = vm.scalar_bank;
+        let mut soft_scalar_bank = vm.scalar_bank;
         let mut soft_int_bank = vm.int_bank;
+
+        // Ribbon drag state
+        let mut drag_active = false;
+        let mut drag_start_x: f32 = 0.0;
+        let mut drag_start_scroll: f32 = 0.0;
+        let mut last_mouse_x: f32 = 0.0;
+        let mut last_drag_velocity: f32 = 0.0;
 
         let event_loop = EventLoop::new().unwrap();
         let window = Arc::new(
@@ -319,6 +364,36 @@ fn run() {
                 }
                 Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                     elwt.exit();
+                }
+                Event::WindowEvent { event: WindowEvent::MouseInput { state, button, .. }, .. } => {
+                    if button == winit::event::MouseButton::Left {
+                        match state {
+                            winit::event::ElementState::Pressed => {
+                                drag_active = true;
+                                drag_start_x = last_mouse_x;
+                                drag_start_scroll = soft_scalar_bank[0];
+                                soft_scalar_bank[3] = 1.0;
+                            }
+                            winit::event::ElementState::Released => {
+                                drag_active = false;
+                                soft_scalar_bank[1] = last_drag_velocity;
+                                let card_w = 360.0f32;
+                                let pos = soft_scalar_bank[0];
+                                let snap = (pos / card_w).round() * card_w;
+                                soft_scalar_bank[2] = snap;
+                                soft_scalar_bank[3] = 2.0;
+                            }
+                        }
+                    }
+                }
+                Event::WindowEvent { event: WindowEvent::CursorMoved { position, .. }, .. } => {
+                    let mx = position.x as f32;
+                    if drag_active {
+                        let delta = mx - drag_start_x;
+                        last_drag_velocity = mx - last_mouse_x;
+                        soft_scalar_bank[0] = drag_start_scroll + delta;
+                    }
+                    last_mouse_x = mx;
                 }
                 _ => (),
             }
