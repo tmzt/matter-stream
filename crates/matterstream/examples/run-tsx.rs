@@ -102,7 +102,79 @@ fn run() {
 
     println!("Executed: {} SDF draw commands", vm.sdf_draws.len());
 
-    // Render with SDF pipeline if softbuffer available
+    // Render with GPU SDF pipeline if available
+    #[cfg(feature = "ui-gpu")]
+    {
+        use std::num::NonZeroU32;
+        use std::sync::Arc;
+        use matterstream_ui_gpu::GpuSdfRenderer;
+        use winit::event::{Event, WindowEvent};
+        use winit::event_loop::{EventLoop, ControlFlow};
+        use winit::window::Window;
+
+        let sdf_draws = vm.sdf_draws.clone();
+
+        let event_loop = EventLoop::new().unwrap();
+        let window = Arc::new(
+            event_loop.create_window(
+                Window::default_attributes()
+                    .with_title(&format!("run-tsx [GPU]: {}", file_path))
+                    .with_inner_size(winit::dpi::LogicalSize::new(400, 300)),
+            ).unwrap(),
+        );
+
+        let instance = wgpu::Instance::default();
+        let surface = instance.create_surface(window.clone()).unwrap();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            compatible_surface: Some(&surface),
+            ..Default::default()
+        })).expect("No suitable GPU adapter found");
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor::default(),
+        )).expect("Failed to create device");
+
+        let surface_caps = surface.get_capabilities(&adapter);
+        let surface_format = surface_caps.formats[0];
+        let mut config = surface.get_default_config(&adapter, 400, 300).unwrap();
+        config.present_mode = wgpu::PresentMode::Fifo;
+        surface.configure(&device, &config);
+
+        let renderer = GpuSdfRenderer::new(&device, surface_format);
+
+        event_loop.run(move |event, elwt| {
+            elwt.set_control_flow(ControlFlow::Wait);
+            match event {
+                Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
+                    let size = window.inner_size();
+                    if size.width > 0 && size.height > 0 {
+                        config.width = size.width;
+                        config.height = size.height;
+                        surface.configure(&device, &config);
+
+                        let frame = match surface.get_current_texture() {
+                            wgpu::CurrentSurfaceTexture::Success(t)
+                            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+                            _ => { surface.configure(&device, &config); return; }
+                        };
+                        let view = frame.texture.create_view(&Default::default());
+                        renderer.render(&device, &queue, &view, size.width, size.height, &sdf_draws);
+                        frame.present();
+                    }
+                }
+                Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                    elwt.exit();
+                }
+                Event::WindowEvent { event: WindowEvent::Resized(_), .. } => {
+                    window.request_redraw();
+                }
+                _ => (),
+            }
+        }).unwrap();
+
+        return; // GPU path handles the event loop
+    }
+
+    // Fallback: render with CPU SDF if softbuffer available
     #[cfg(feature = "ui-softbuffer")]
     {
         use std::num::NonZeroU32;

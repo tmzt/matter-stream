@@ -22,14 +22,21 @@ optional = true
 path = "../matterstream-compiler"
 optional = true
 
+[dependencies.matterstream-ui-gpu]
+path = "../matterstream-ui-gpu"
+optional = true
+
 [features]
 compiler = ["dep:matterstream-compiler"]
 ui-softbuffer = ["dep:matterstream-ui-soft"]
+ui-gpu = ["dep:matterstream-ui-gpu"]
 
 
 [dev-dependencies]
 matterstream-common = { path = "../matterstream-common" }
 matterstream-ui = { path = "../matterstream-ui" }
+wgpu = "29"
+pollster = "0.4"
 async-io = "2.6.0"
 smol = "2"
 tempfile = "3"
