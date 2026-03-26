@@ -179,6 +179,7 @@ fn run() {
             .unwrap_or(surface_caps.formats[0]);
         let init_size = window.inner_size();
         let mut config = surface.get_default_config(&adapter, init_size.width.max(1), init_size.height.max(1)).unwrap();
+        config.format = surface_format;
         config.present_mode = wgpu::PresentMode::Fifo;
         surface.configure(&device, &config);
 
