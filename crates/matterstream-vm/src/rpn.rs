@@ -142,10 +142,10 @@ pub enum RpnOp {
     DictGet       = 0x4A,
     Explode       = 0x4C,
     ExplodeMapped = 0x4D,
-    /// PushIf: conditional push based on bank value.
+    /// PushIfElse: conditional push based on bank value.
     /// Pops [cond_bank, cond_slot, true_val, false_val].
     /// Pushes true_val if banks[cond_bank][cond_slot] != 0, else false_val.
-    PushIf = 0x4E,
+    PushIfElse = 0x4E,
 
     // ── Blocks + components (0x50-0x55, stubs) ──
     DefineBlock     = 0x50,
@@ -419,7 +419,7 @@ impl RpnOp {
             0x4A => Some(RpnOp::DictGet),
             0x4C => Some(RpnOp::Explode),
             0x4D => Some(RpnOp::ExplodeMapped),
-            0x4E => Some(RpnOp::PushIf),
+            0x4E => Some(RpnOp::PushIfElse),
             0x50 => Some(RpnOp::DefineBlock),
             0x51 => Some(RpnOp::CallBlock),
             0x52 => Some(RpnOp::LoopOver),
@@ -530,7 +530,7 @@ impl GasConfig {
             | RpnOp::LoadBankComp | RpnOp::StoreBankComp => self.cost_bank,
             RpnOp::DictNew | RpnOp::DictSet | RpnOp::DictGet => self.cost_dict,
             RpnOp::Explode | RpnOp::ExplodeMapped => self.cost_dict,
-            RpnOp::PushIf => self.cost_compare,
+            RpnOp::PushIfElse => self.cost_compare,
             RpnOp::DefineBlock | RpnOp::CallBlock | RpnOp::LoopOver | RpnOp::MapOver
             | RpnOp::DefineComponent | RpnOp::ExecComponent => self.cost_block,
             RpnOp::UserCall | RpnOp::CoprocessorCall => self.cost_user_call,
@@ -1703,7 +1703,7 @@ impl RpnVm {
                 let _count = self.pop_u32_coerce()?;
                 self.pc += 1;
             }
-            RpnOp::PushIf => {
+            RpnOp::PushIfElse => {
                 let false_val = self.pop_u32_coerce()?;
                 let true_val = self.pop_u32_coerce()?;
                 let slot = self.pop_u32_coerce()?;
