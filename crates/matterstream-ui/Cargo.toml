@@ -1,6 +1,6 @@
 [package]
 name = "matterstream-ui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "UI types, CPU-side rasterizer, hit testing, and action collection"
 license = "Apache-2.0"
