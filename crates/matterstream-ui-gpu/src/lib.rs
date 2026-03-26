@@ -275,6 +275,23 @@ impl GpuSdfRenderer {
         int_bank: &[i32],
         anim_bank: &[matterstream_common::Anim],
     ) {
+        self.render_full_scaled(device, queue, target, width, height, 1.0, draws, time_ms, scalar_bank, int_bank, anim_bank);
+    }
+
+    pub fn render_full_scaled(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        scale: f32,
+        draws: &[SdfDrawCmd],
+        time_ms: f32,
+        scalar_bank: &[f32],
+        int_bank: &[i32],
+        anim_bank: &[matterstream_common::Anim],
+    ) {
         let count = draws.len().min(self.max_cmds as usize);
 
         // Upload draw commands (convert to GPU-safe wrapper type)
@@ -297,7 +314,7 @@ impl GpuSdfRenderer {
         // Upload uniforms with bank values
         let mut uniforms = MinimalUniforms::default();
         uniforms.time_delta = [time_ms, 0.0, 0.0, 0.0];
-        uniforms.resolution = [width as f32, height as f32, 1.0, 0.0];
+        uniforms.resolution = [width as f32, height as f32, scale, 0.0];
         // Pack scalar_bank into vec4 groups
         for (i, val) in scalar_bank.iter().take(16).enumerate() {
             uniforms.scalar_bank[i / 4][i % 4] = *val;

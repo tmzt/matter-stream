@@ -65,10 +65,12 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
     let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
     out.position = vec4<f32>(x, y, 0.0, 1.0);
-    // UV: map clip space to pixel coordinates
+    // UV: map clip space to logical pixel coordinates
+    // resolution.xy = physical pixels, resolution.z = scale factor
+    let scale = max(uniforms.resolution.z, 1.0);
     out.uv = vec2<f32>(
-        (x + 1.0) * 0.5 * uniforms.resolution.x,
-        (1.0 - (y + 1.0) * 0.5) * uniforms.resolution.y
+        (x + 1.0) * 0.5 * uniforms.resolution.x / scale,
+        (1.0 - (y + 1.0) * 0.5) * uniforms.resolution.y / scale
     );
     return out;
 }

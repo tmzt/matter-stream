@@ -204,11 +204,10 @@ fn run() {
                         };
                         let view = frame.texture.create_view(&Default::default());
                         let time_ms = start_time.elapsed().as_millis() as f32;
-                        // Pass logical resolution (physical / scale) so SDF coords match
-                        let scale = window.scale_factor() as u32;
-                        let lw = phys.width / scale;
-                        let lh = phys.height / scale;
-                        renderer.render_full(&device, &queue, &view, lw, lh, &sdf_draws, time_ms, &gpu_scalar_bank, &gpu_int_bank, &gpu_anim_bank);
+                        // Pass physical resolution — shader maps clip space to pixel coords
+                        // SdfDrawCmd positions are in logical pixels, shader needs to scale
+                        let scale = window.scale_factor() as f32;
+                        renderer.render_full_scaled(&device, &queue, &view, phys.width, phys.height, scale, &sdf_draws, time_ms, &gpu_scalar_bank, &gpu_int_bank, &gpu_anim_bank);
                         frame.present();
                     }
                 }
