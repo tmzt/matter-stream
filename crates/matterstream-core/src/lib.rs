@@ -4,10 +4,7 @@
 //! VM_SPEC subsystems (addressing, arena, packaging, SCL) live in their own crates.
 
 pub mod builder;
-#[cfg(feature = "compiler")]
-pub mod asm_compiler;
-#[cfg(feature = "compiler")]
-pub mod compiler;
+// Compiler moved to matterstream-compiler crate
 pub mod ops;
 pub mod parser;
 pub mod registers;
@@ -21,10 +18,6 @@ pub mod tier3;
 pub mod ui_vm;
 
 pub use builder::StreamBuilder;
-#[cfg(feature = "compiler")]
-pub use asm_compiler::compile_to_asm;
-#[cfg(feature = "compiler")]
-pub use compiler::Compiler;
 pub use ops::{Op, OpsHeader, Primitive, RsiPointer};
 pub use parser::Parser;
 pub use registers::RegisterFile;

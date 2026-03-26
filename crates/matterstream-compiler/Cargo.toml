@@ -1,0 +1,16 @@
+[package]
+name = "matterstream-compiler"
+version = "0.2.0"
+edition = "2021"
+description = "TSX to msm1 bytecode compiler"
+license = "Apache-2.0"
+
+[dependencies]
+matterstream-vm = { path = "../matterstream-vm" }
+matterstream-vm-asm = { path = "../matterstream-vm-asm" }
+matterstream-vm-addressing = { path = "../matterstream-vm-addressing" }
+matterstream-common = { path = "../matterstream-common" }
+oxc_parser = "0.13"
+oxc_allocator = "0.13"
+oxc_ast = "0.13"
+oxc_span = "0.13"

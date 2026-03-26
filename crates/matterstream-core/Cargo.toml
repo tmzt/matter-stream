@@ -13,28 +13,6 @@ matterstream-packaging = { path = "../matterstream-packaging" }
 matterstream-vm = { path = "../matterstream-vm" }
 futures = "0.3"
 
-[features]
-compiler = ["dep:oxc_parser", "dep:oxc_allocator", "dep:oxc_ast", "dep:oxc_span", "dep:matterstream-vm-asm"]
-
-[dependencies.oxc_parser]
-version = "0.13"
-optional = true
-
-[dependencies.oxc_allocator]
-version = "0.13"
-optional = true
-
-[dependencies.oxc_ast]
-version = "0.13"
-optional = true
-
-[dependencies.oxc_span]
-version = "0.13"
-optional = true
-
-[dependencies.matterstream-vm-asm]
-path = "../matterstream-vm-asm"
-optional = true
 
 [dev-dependencies]
 async-io = "2.6.0"

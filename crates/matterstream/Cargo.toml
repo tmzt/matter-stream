@@ -18,8 +18,12 @@ matterstream-vm-scl = { path = "../matterstream-vm-scl" }
 path = "../matterstream-ui-soft"
 optional = true
 
+[dependencies.matterstream-compiler]
+path = "../matterstream-compiler"
+optional = true
+
 [features]
-compiler = ["matterstream-core/compiler"]
+compiler = ["dep:matterstream-compiler"]
 ui-softbuffer = ["dep:matterstream-ui-soft"]
 
 
