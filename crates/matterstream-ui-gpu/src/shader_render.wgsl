@@ -360,14 +360,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             let sd = msdf_median(sample.r, sample.g, sample.b);
 
                             // Anti-aliased edge.
-                            // Convention: <0.5 = inside glyph, >0.5 = outside.
-                            // Invert so inside → high alpha.
-                            let screen_px_range = px_range * glyph_scale;
-                            let screen_dist = screen_px_range * (0.5 - sd);
-                            let alpha = clamp(screen_dist + 0.5, 0.0, 1.0);
-
+                            // MSDF as mask: sd > 0.5 = inside glyph
+                            let alpha = clamp(px_range * (sd - 0.5) + 0.5, 0.0, 1.0);
                             if alpha > 0.01 {
-                                d = -1.0;
                                 let glyph_color = vec4<f32>(cmd.color.rgb, cmd.color.a * alpha);
                                 result = blend_over(result, glyph_color);
                             }

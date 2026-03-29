@@ -351,8 +351,8 @@ impl FontAtlasBuilder {
 /// Map raw MSDF signed distance to u8.
 /// Map raw MSDF distance to u8 [0,255].
 /// Map raw MSDF distance to u8 [0,255].
-/// msdfgen: positive = outside glyph, negative = inside.
-/// We preserve the sign; shader handles the convention.
+/// msdfgen with TrueType: positive = outside, negative = inside.
+/// No sign flip — store raw normalized distance. Shader handles convention.
 fn msdf_to_u8(value: f32, inv_range: f32) -> u8 {
     let normalized = (value * inv_range + 0.5).clamp(0.0, 1.0);
     (normalized * 255.0) as u8
