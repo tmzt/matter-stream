@@ -91,6 +91,8 @@ pub enum FourCC {
     Symb,
     Osym,
     Odat,
+    Ctab,
+    Stab,
 }
 
 impl FourCC {
@@ -104,6 +106,8 @@ impl FourCC {
             FourCC::Symb => "symb",
             FourCC::Osym => "osym",
             FourCC::Odat => "odat",
+            FourCC::Ctab => "ctab",
+            FourCC::Stab => "stab",
         }
     }
 
@@ -117,6 +121,8 @@ impl FourCC {
             "symb" => Some(FourCC::Symb),
             "osym" => Some(FourCC::Osym),
             "odat" => Some(FourCC::Odat),
+            "ctab" => Some(FourCC::Ctab),
+            "stab" => Some(FourCC::Stab),
             _ => None,
         }
     }

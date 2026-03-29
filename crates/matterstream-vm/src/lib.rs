@@ -1,8 +1,11 @@
 pub mod rpn;
 pub mod ui_vm;
+pub mod skill_host;
 pub mod event;
 pub mod host;
 pub mod hooks;
+pub mod or_page;
+pub mod vm_handle;
 #[cfg(feature = "ui")]
 pub mod gpu;
 
