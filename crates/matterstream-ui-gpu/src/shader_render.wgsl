@@ -338,18 +338,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let local_x = effective_pixel.x - gx;
                     let local_y = effective_pixel.y - gy;
 
-                    // Hit-test: advance width horizontally, full em square vertically
+                    // Hit-test: advance width horizontally, em square vertically
                     if local_x >= 0.0 && local_x < advance_px &&
                        local_y >= 0.0 && local_y < text_h * 1.2 {
                         // Map screen position to atlas UV.
-                        // The atlas cell was autoframed to contain the glyph bbox.
-                        // Map the advance width to the atlas cell, centered.
-                        // X: map [0, advance_px] → atlas cell with bearing offset
-                        let norm_x = local_x / (advance_x_norm * text_h); // normalized [0, ~1]
+                        // autoframe maps glyph bbox to fill the atlas cell.
+                        // X: proportional map, no mirror
+                        let norm_x = local_x / (advance_x_norm * text_h);
                         let atlas_local_x = norm_x * atlas_gw;
-                        // Y: map [0, text_h*1.2] → atlas cell
+                        // Y: proportional map, flipped (font Y up → screen Y down)
                         let norm_y = local_y / (text_h * 1.2);
-                        let atlas_local_y = norm_y * atlas_gh;
+                        let atlas_local_y = (1.0 - norm_y) * atlas_gh;
 
                         if atlas_local_x >= 0.0 && atlas_local_x < atlas_gw &&
                            atlas_local_y >= 0.0 && atlas_local_y < atlas_gh {
