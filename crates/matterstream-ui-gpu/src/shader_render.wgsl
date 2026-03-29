@@ -338,17 +338,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let local_x = effective_pixel.x - gx;
                     let local_y = effective_pixel.y - gy;
 
-                    // Hit-test: advance width horizontally, em square vertically
-                    if local_x >= 0.0 && local_x < advance_px &&
+                    // Hit-test: full glyph bitmap width horizontally, em square vertically
+                    let screen_glyph_w = atlas_gw * glyph_scale;
+                    if local_x >= 0.0 && local_x < max(advance_px, screen_glyph_w) &&
                        local_y >= 0.0 && local_y < text_h * 1.2 {
                         // Map screen position to atlas UV.
                         // autoframe maps glyph bbox to fill the atlas cell.
-                        // X: proportional map, no mirror
-                        let norm_x = local_x / (advance_x_norm * text_h);
-                        let atlas_local_x = norm_x * atlas_gw;
-                        // Y: proportional map, flipped (font Y up → screen Y down)
-                        let norm_y = local_y / (text_h * 1.2);
-                        let atlas_local_y = (1.0 - norm_y) * atlas_gh;
+                        // Uniform scale: map screen pixels to atlas pixels
+                        // Use the same scale for X and Y to preserve aspect ratio
+                        let atlas_local_x = local_x / glyph_scale;
+                        // Y: flipped (font Y up → screen Y down)
+                        let atlas_local_y = atlas_gh - local_y / glyph_scale;
 
                         if atlas_local_x >= 0.0 && atlas_local_x < atlas_gw &&
                            atlas_local_y >= 0.0 && atlas_local_y < atlas_gh {
