@@ -7,7 +7,7 @@ use matterstream_common::pipeline::RenderFrame;
 use matterstream_font::atlas::FontAtlasBuilder;
 use matterstream_font::shaper::TextShaper;
 use matterstream_mtd1::mtd1_format::{BankedStyle, Command32, Mtd1Document};
-use matterstream_mtd1::mtd1_to_sdf::mtd1_to_sdf_msdf;
+use matterstream_mtd1::mtd1_to_sdf::mtd1_to_sdf;
 
 fn load_system_font() -> Option<Vec<u8>> {
     let paths = [
@@ -129,7 +129,7 @@ fn wgpu_msdf_tufte_render() {
         doc.instructions.push(Command32::draw_shape(h, w));
     }
 
-    let sdf_frame = mtd1_to_sdf_msdf(&doc, &gid_to_idx, &std_advances, font_size, px_range);
+    let sdf_frame = mtd1_to_sdf(&doc, &gid_to_idx, &std_advances, font_size, px_range);
     println!("MSDF: {} draws, {} chars", sdf_frame.draws.len(), sdf_frame.char_buffer.len());
 
     // wgpu headless

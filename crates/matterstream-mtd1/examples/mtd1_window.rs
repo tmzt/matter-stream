@@ -13,7 +13,7 @@ use matterstream_common::sdf::{SdfDrawCmd, DRAW_TYPE_MSDF_TEXT};
 use matterstream_font::atlas::FontAtlasBuilder;
 use matterstream_font::shaper::TextShaper;
 use matterstream_mtd1::mtd1_format::{BankedStyle, Command32, Mtd1Document};
-use matterstream_mtd1::mtd1_to_sdf::mtd1_to_sdf_msdf;
+use matterstream_mtd1::mtd1_to_sdf::mtd1_to_sdf;
 use matterstream_ui_gpu::GpuSdfRenderer;
 
 /// Load a system font suitable for Tufte-style data display.
@@ -161,7 +161,7 @@ fn build_scene() -> PreparedScene {
         doc.instructions.push(Command32::draw_shape(h, w));
     }
 
-    let sdf_frame = mtd1_to_sdf_msdf(&doc, &glyph_id_to_table_index, &standard_advances, font_size, px_range);
+    let sdf_frame = mtd1_to_sdf(&doc, &glyph_id_to_table_index, &standard_advances, font_size, px_range);
 
     println!(
         "Compiled: {} instructions → {} SdfDrawCmds, {} chars, {} MSDF text draws",
