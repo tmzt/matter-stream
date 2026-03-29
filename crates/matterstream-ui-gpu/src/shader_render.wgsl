@@ -331,16 +331,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let screen_h = atlas_gh * glyph_scale;
 
                     // Glyph position.
-                    // The atlas cell covers the full glyph bbox (autoframed).
-                    // bearing_y_norm = fraction of em above the baseline.
-                    // Baseline sits at text_y + 0.75 * text_h (configurable via bearing_y offset).
+                    // With uniform em-square projection, every atlas cell has the
+                    // baseline at the same relative position (75% from top).
+                    // No per-glyph bearing offset needed — just map the cell to
+                    // the text line directly.
                     let gx = text_x + cursor_x;
-                    let baseline_y = text_y + text_h * 0.75;
-                    // Offset from baseline: the atlas cell top = baseline - bearing_y * text_h
-                    // bearing_y_norm is the glyph's ascent as fraction of em.
-                    // For autoframed glyphs, the cell maps the full bbox, so offset
-                    // by bearing to align the baseline.
-                    let gy = baseline_y - bearing_y_norm * text_h;
+                    let gy = text_y;
 
                     let local_x = effective_pixel.x - gx;
                     let local_y = effective_pixel.y - gy;
