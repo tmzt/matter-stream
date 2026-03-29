@@ -253,32 +253,43 @@ impl FontAtlasBuilder {
             // Pack into atlas
             let (atlas_x, atlas_y) = packer.pack(padded, padded);
 
-            // Generate MSDF via v0.18 face
-            let mut bitmap: Bitmap<Rgb<f32>> = Bitmap::new(gs, gs);
+            // Skip non-printing glyphs (space, control chars) — no outlines to render.
+            // They get a zero-filled atlas cell; the shader uses advance-only for spacing.
             let gid18 = ttf_parser_018::GlyphId(glyph_id);
+            let has_outline = face18.glyph_shape(gid18).is_some()
+                && face25.glyph_bounding_box(gid25).is_some();
 
-            if let Some(mut shape) = face18.glyph_shape(gid18) {
-                let bound = shape.get_bound();
-                let framing = bound
-                    .autoframe(gs, gs, Range::Px(self.px_range), None)
-                    .unwrap_or_else(|| {
-                        Framing::default()
-                    });
-
-                shape.edge_coloring_simple(3.0, 0);
-                shape.generate_msdf(&mut bitmap, &framing, MsdfGeneratorConfig::default());
-                shape.correct_sign(&mut bitmap, &framing, FillRule::default());
-            }
-
-            // Convert f32 MSDF to u8
             let mut msdf_data = vec![0u8; (gs * gs * channels) as usize];
-            for y in 0..gs {
-                for x in 0..gs {
-                    let pixel = bitmap.pixel(x, y);
-                    let idx = ((y * gs + x) * channels) as usize;
-                    msdf_data[idx] = msdf_to_u8(pixel.r);
-                    msdf_data[idx + 1] = msdf_to_u8(pixel.g);
-                    msdf_data[idx + 2] = msdf_to_u8(pixel.b);
+
+            if has_outline {
+                let mut bitmap: Bitmap<Rgb<f32>> = Bitmap::new(gs, gs);
+                // Initialize to large negative distance (far outside glyph)
+                // so unfilled pixels don't render as edge/inside
+                for y in 0..gs {
+                    for x in 0..gs {
+                        *bitmap.pixel_mut(x, y) = Rgb::new(-1e6, -1e6, -1e6);
+                    }
+                }
+                if let Some(mut shape) = face18.glyph_shape(gid18) {
+                    let bound = shape.get_bound();
+                    let framing = bound
+                        .autoframe(gs, gs, Range::Px(self.px_range), None)
+                        .unwrap_or_else(|| Framing::default());
+
+                    shape.edge_coloring_simple(3.0, 0);
+                    shape.generate_msdf(&mut bitmap, &framing, MsdfGeneratorConfig::default());
+                    shape.correct_sign(&mut bitmap, &framing, FillRule::default());
+                }
+
+                let inv_range = 0.5 / self.px_range as f32;
+                for y in 0..gs {
+                    for x in 0..gs {
+                        let pixel = bitmap.pixel(x, y);
+                        let idx = ((y * gs + x) * channels) as usize;
+                        msdf_data[idx] = msdf_to_u8(pixel.r, inv_range);
+                        msdf_data[idx + 1] = msdf_to_u8(pixel.g, inv_range);
+                        msdf_data[idx + 2] = msdf_to_u8(pixel.b, inv_range);
+                    }
                 }
             }
 
@@ -342,10 +353,16 @@ impl FontAtlasBuilder {
     }
 }
 
-/// Map an MSDF distance value (typically in [0, 1]) to u8.
-/// 0.5 (128) = on the edge; <0.5 = outside; >0.5 = inside.
-fn msdf_to_u8(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0) as u8
+/// Map a raw MSDF signed distance to u8.
+/// `inv_range` = 0.5 / px_range.
+/// Map raw MSDF signed distance to u8.
+/// Map raw MSDF distance to u8 [0,255].
+/// Map raw MSDF distance to u8 [0,255].
+/// For this font/msdfgen combo, outside the glyph is positive, inside is negative.
+/// Shader expects: >0.5 = inside. So we negate.
+fn msdf_to_u8(value: f32, inv_range: f32) -> u8 {
+    let normalized = (-value * inv_range + 0.5).clamp(0.0, 1.0);
+    (normalized * 255.0) as u8
 }
 
 #[cfg(test)]

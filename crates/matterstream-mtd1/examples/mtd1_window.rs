@@ -45,6 +45,47 @@ struct PreparedScene {
     atlas_height: u32,
 }
 
+/// Check if a glyph ID corresponds to a non-printing character (space, etc.)
+/// that should advance the cursor without emitting DRAW_GLYPH.
+fn is_non_printing(shaper: &TextShaper, glyph_id: u16) -> bool {
+    // Space glyph has no outline — skip it
+    shaper.glyph_id_for_char(' ') == Some(glyph_id)
+}
+
+/// Emit shaped glyphs as DRAW_GLYPH instructions, skipping non-printing chars.
+/// Non-printing glyphs (spaces) break the glyph run and emit SET_CURSOR to
+/// jump past the gap, so the MSDF pipeline never sees them.
+fn emit_shaped_run(
+    doc: &mut Mtd1Document,
+    shaper: &TextShaper,
+    text: &str,
+    scale: f32,
+    cursor_x: &mut f32,
+    cursor_y: f32,
+) {
+    let run = shaper.shape(text);
+    let mut pending_advance: f32 = 0.0;
+
+    for g in &run.glyphs {
+        let adv_px = g.x_advance as f32 * scale;
+        if is_non_printing(shaper, g.glyph_id) {
+            // Accumulate advance for non-printing, don't emit DRAW_GLYPH
+            pending_advance += adv_px;
+        } else {
+            // If we skipped non-printing chars, emit SET_CURSOR to jump past the gap
+            if pending_advance > 0.0 {
+                *cursor_x += pending_advance;
+                doc.instructions.push(Command32::set_cursor(cursor_y as i16, *cursor_x as i16));
+                pending_advance = 0.0;
+            }
+            let adv = (adv_px + 0.5) as u16;
+            doc.instructions.push(Command32::draw_glyph(adv.max(1).min(4095), g.glyph_id));
+            *cursor_x += adv_px;
+        }
+    }
+    *cursor_x += pending_advance; // trailing space
+}
+
 fn build_scene() -> PreparedScene {
     let font_data = load_system_font();
     let shaper = TextShaper::new(font_data.clone()).expect("failed to create shaper");
@@ -98,30 +139,21 @@ fn build_scene() -> PreparedScene {
     doc.instructions.push(Command32::set_style(1));
     doc.instructions.push(Command32::set_cursor(y as i16, origin_x as i16));
 
-    let space_run = shaper.shape(" ");
-    let space_w = space_run.total_advance as f32 * scale;
-    let space_glyph = space_run.glyphs.first().map(|g| g.glyph_id).unwrap_or(0);
+    let space_w = shaper.shape(" ").total_advance as f32 * scale;
 
     let mut line_x: f32 = origin_x;
     let words: Vec<&str> = paragraph.split_whitespace().collect();
-    for (wi, word) in words.iter().enumerate() {
+    for word in &words {
         let run = shaper.shape(word);
         let word_w = run.total_advance as f32 * scale;
 
         if line_x + word_w > origin_x + max_width && line_x > origin_x {
             y += font_size * 1.4;
             line_x = origin_x;
-            doc.instructions.push(Command32::set_cursor(y as i16, origin_x as i16));
         }
-        for g in &run.glyphs {
-            let adv = (g.x_advance as f32 * scale + 0.5) as u16;
-            doc.instructions.push(Command32::draw_glyph(adv.max(1).min(4095), g.glyph_id));
-        }
-        if wi < words.len() - 1 {
-            let sadv = (space_run.glyphs.first().map(|g| g.x_advance).unwrap_or(0) as f32 * scale + 0.5) as u16;
-            doc.instructions.push(Command32::draw_glyph(sadv.max(1).min(4095), space_glyph));
-        }
-        line_x += word_w + space_w;
+        doc.instructions.push(Command32::set_cursor(y as i16, line_x as i16));
+        emit_shaped_run(&mut doc, &shaper, word, scale, &mut line_x, y);
+        line_x += space_w;
     }
 
     // Table
@@ -143,12 +175,9 @@ fn build_scene() -> PreparedScene {
         }
         doc.instructions.push(Command32::set_style(5));
         for (col, cell) in row.iter().enumerate() {
+            let mut cx = col_x[col] as f32;
             doc.instructions.push(Command32::set_cursor(y as i16, col_x[col]));
-            let run = shaper.shape(cell);
-            for g in &run.glyphs {
-                let adv = (g.x_advance as f32 * scale + 0.5) as u16;
-                doc.instructions.push(Command32::draw_glyph(adv.max(1).min(4095), g.glyph_id));
-            }
+            emit_shaped_run(&mut doc, &shaper, cell, scale, &mut cx, y);
         }
         y += font_size * 1.3;
     }

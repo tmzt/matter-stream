@@ -340,13 +340,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let local_x = effective_pixel.x - gx;
                     let local_y = effective_pixel.y - gy;
 
-                    // Hit-test: extend to full glyph bitmap width for overhanging glyphs
-                    let glyph_screen_w = atlas_gw * glyph_scale;
+                    // Hit-test: strictly within advance width to prevent overlap
                     let glyph_x_start = bearing_x_norm * text_h;
-                    let hit_left = min(0.0, glyph_x_start);
-                    let hit_right = max(advance_px, glyph_x_start + glyph_screen_w);
 
-                    if local_x >= hit_left && local_x < hit_right &&
+                    if local_x >= 0.0 && local_x < advance_px &&
                        local_y >= -2.0 && local_y < screen_h + 2.0 {
                         // Map screen position to atlas UV
                         let atlas_local_x = (local_x - glyph_x_start) / glyph_scale;
@@ -365,7 +362,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             let screen_dist = screen_px_range * (sd - 0.5);
                             let alpha = clamp(screen_dist + 0.5, 0.0, 1.0);
 
-                            if alpha > 0.001 {
+                            if alpha > 0.01 {
                                 d = -1.0;
                                 let glyph_color = vec4<f32>(cmd.color.rgb, cmd.color.a * alpha);
                                 result = blend_over(result, glyph_color);
