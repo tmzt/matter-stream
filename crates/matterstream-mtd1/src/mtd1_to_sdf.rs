@@ -169,11 +169,18 @@ pub fn mtd1_to_sdf(doc: &Mtd1Document) -> SdfFrame {
 /// The `glyph_id_to_table_index` maps font glyph IDs to indices in the
 /// GPU glyph_table (populated from `FontAtlas.glyphs`).
 ///
-/// `char_buffer` entries for MSDF are packed as: `[16b glyph_table_index | 16b x_advance_px_fixed]`
-/// where x_advance_px_fixed is in 4.12 fixed-point (value * 16).
+/// The ISA's `DRAW_GLYPH` 12-bit advance field is a **signed delta** from
+/// the glyph's standard advance (stored in the glyph table). The delta
+/// captures kerning/ligature adjustments from HarfBuzz shaping.
+///
+/// `char_buffer` entries for MSDF: `[16b glyph_table_index | 16b advance_delta_fixed]`
+/// where advance_delta_fixed is signed 1/16 px, biased by 2048 (so 0 maps to -128px, 2048 maps to 0).
+/// Standard advances per glyph (normalized to em), indexed by glyph_id.
+/// Pass from the atlas's glyph entries.
 pub fn mtd1_to_sdf_msdf(
     doc: &Mtd1Document,
     glyph_id_to_table_index: &std::collections::HashMap<u16, u16>,
+    standard_advances: &std::collections::HashMap<u16, f32>,
     font_size: f32,
     px_range: f32,
 ) -> SdfFrame {
@@ -269,13 +276,19 @@ pub fn mtd1_to_sdf_msdf(
                 }
 
                 if current_font_index > 0 {
-                    // MSDF path: pack [glyph_table_index << 16 | advance_fixed]
+                    // MSDF path: pack [glyph_table_index << 16 | advance_delta_biased]
                     let gt_idx = glyph_id_to_table_index
                         .get(&glyph_id)
                         .copied()
                         .unwrap_or(0);
-                    let advance_fixed = ((advance as f32) * 16.0) as u32 & 0xFFFF;
-                    char_buffer.push((gt_idx as u32) << 16 | advance_fixed);
+                    // Compute delta from standard advance
+                    let std_advance_norm = standard_advances.get(&glyph_id).copied().unwrap_or(0.5);
+                    let std_advance_px = std_advance_norm * font_size;
+                    let shaped_advance_px = advance as f32;
+                    let delta_px = shaped_advance_px - std_advance_px;
+                    // Encode as biased fixed-point: bias=2048 gives ±128px at 1/16 resolution
+                    let delta_fixed = ((delta_px * 16.0) as i32 + 2048).clamp(0, 0xFFFF) as u32;
+                    char_buffer.push((gt_idx as u32) << 16 | delta_fixed);
                 } else {
                     // Bitmap path: store glyph_id as codepoint
                     char_buffer.push(glyph_id as u32);

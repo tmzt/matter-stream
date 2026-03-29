@@ -286,9 +286,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 }
             }
             case 8u: { // MSDF Text — render using multi-channel signed distance field atlas
-                // params.y = px_range (distance field range in screen pixels)
+                // params.y = px_range (MSDF distance range in atlas pixels)
                 // params.w = packed (char_offset << 16 | char_count)
-                // char_buffer entries for MSDF: packed [16b glyph_table_index | 16b x_advance_px]
+                // char_buffer entries: packed [16b glyph_table_index | 16b x_advance_fixed4]
                 let px_range = max(cmd.params.y, 2.0);
                 let packed = bitcast<u32>(cmd.params.w);
                 let char_offset = packed >> 16u;
@@ -296,7 +296,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                 let text_x = cmd.pos.x;
                 let text_y = cmd.pos.y;
-                let text_h = cmd.size.y;
+                let text_h = cmd.size.y; // font size in screen pixels
 
                 let atlas_dim = vec2<f32>(textureDimensions(msdf_atlas));
 
@@ -304,51 +304,58 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                 for (var ci: u32 = 0u; ci < char_count; ci = ci + 1u) {
                     let entry = char_buffer[char_offset + ci];
-                    let gt_idx = entry >> 16u;           // glyph_table index
-                    let advance_px = f32(entry & 0xFFFFu) / 16.0; // 4.4 fixed-point px
+                    let gt_idx = entry >> 16u;
+                    // Delta from standard advance: biased by 2048, 1/16 px resolution
+                    let delta_biased = f32(entry & 0xFFFFu);
+                    let delta_px = (delta_biased - 2048.0) / 16.0;
 
-                    // Read glyph table: 2 vec4<u32> per glyph (stride = 2)
+                    // Glyph table: 2 × vec4<u32> per entry
                     let g0 = glyph_table[gt_idx * 2u];
                     let g1 = glyph_table[gt_idx * 2u + 1u];
 
-                    let atlas_x = f32(g0.y & 0xFFFFu);
-                    let atlas_y = f32(g0.y >> 16u);
-                    let atlas_w = f32(g0.z & 0xFFFFu);
-                    let atlas_h = f32(g0.z >> 16u);
+                    let atlas_gx = f32(g0.y & 0xFFFFu);
+                    let atlas_gy = f32(g0.y >> 16u);
+                    let atlas_gw = f32(g0.z & 0xFFFFu);
+                    let atlas_gh = f32(g0.z >> 16u);
 
-                    let bearing_x = bitcast<f32>(g1.x);
-                    let bearing_y = bitcast<f32>(g1.y);
+                    // Standard advance + bearings, normalized to em square
+                    let advance_x_norm = bitcast<f32>(g1.x);
+                    let bearing_x_norm = bitcast<f32>(g1.y);
+                    let bearing_y_norm = bitcast<f32>(g1.z);
 
-                    // Scale: atlas glyph pixels → screen pixels
-                    // The atlas was generated at a fixed glyph_size; scale to text_h
-                    let glyph_scale = text_h / atlas_h;
+                    // Reconstruct actual advance: standard * font_size + delta
+                    let advance_px = advance_x_norm * text_h + delta_px;
 
-                    // Glyph screen position (bearing offsets in normalized units)
-                    let gx = text_x + cursor_x + bearing_x * glyph_scale / text_h;
-                    let gy = text_y + (text_h - bearing_y * glyph_scale / text_h);
+                    // Scale from atlas pixels to screen pixels
+                    let glyph_scale = text_h / atlas_gh;
+                    let screen_w = atlas_gw * glyph_scale;
+                    let screen_h = atlas_gh * glyph_scale;
+
+                    // Glyph position: cursor + bearing offset (bearing * text_h)
+                    let gx = text_x + cursor_x + bearing_x_norm * text_h;
+                    // Baseline: text_y is top of line; glyph origin is at baseline
+                    // bearing_y_norm is top of glyph above baseline (normalized)
+                    let gy = text_y + text_h * 0.8 - bearing_y_norm * text_h;
 
                     let local_x = effective_pixel.x - gx;
                     let local_y = effective_pixel.y - gy;
 
-                    let screen_w = atlas_w * glyph_scale;
-                    let screen_h = atlas_h * glyph_scale;
-
-                    if local_x >= 0.0 && local_x < screen_w &&
-                       local_y >= 0.0 && local_y < screen_h {
-                        // Map to atlas UV
-                        let u = (atlas_x + local_x / glyph_scale) / atlas_dim.x;
-                        let v = (atlas_y + local_y / glyph_scale) / atlas_dim.y;
+                    if local_x >= -1.0 && local_x < screen_w + 1.0 &&
+                       local_y >= -1.0 && local_y < screen_h + 1.0 {
+                        // Map screen pixel to atlas UV
+                        let u = (atlas_gx + clamp(local_x / glyph_scale, 0.0, atlas_gw)) / atlas_dim.x;
+                        let v = (atlas_gy + clamp(local_y / glyph_scale, 0.0, atlas_gh)) / atlas_dim.y;
 
                         let sample = textureSample(msdf_atlas, msdf_sampler, vec2<f32>(u, v));
                         let sd = msdf_median(sample.r, sample.g, sample.b);
 
-                        // Screen-space distance for anti-aliasing
+                        // Anti-aliased edge: px_range is in atlas pixels
                         let screen_px_range = px_range * glyph_scale;
                         let screen_dist = screen_px_range * (sd - 0.5);
                         let alpha = clamp(screen_dist + 0.5, 0.0, 1.0);
 
                         if alpha > 0.001 {
-                            d = -1.0; // signal hit
+                            d = -1.0;
                             let glyph_color = vec4<f32>(cmd.color.rgb, cmd.color.a * alpha);
                             result = blend_over(result, glyph_color);
                         }

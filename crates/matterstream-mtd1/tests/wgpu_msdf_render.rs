@@ -42,9 +42,11 @@ fn wgpu_msdf_tufte_render() {
     let atlas = builder.build().expect("atlas build");
 
     let mut gid_to_idx: HashMap<u16, u16> = HashMap::new();
+    let mut std_advances: HashMap<u16, f32> = HashMap::new();
     let mut glyph_table_u32s: Vec<u32> = Vec::new();
     for (i, e) in atlas.glyphs.iter().enumerate() {
         gid_to_idx.insert(e.glyph_id, i as u16);
+        std_advances.insert(e.glyph_id, e.advance_x);
         glyph_table_u32s.extend_from_slice(&e.to_gpu_u32s());
     }
 
@@ -68,11 +70,17 @@ fn wgpu_msdf_tufte_render() {
     doc.instructions.push(Command32::set_style(1));
     doc.instructions.push(Command32::set_cursor(y as i16, origin_x as i16));
 
+    // Shape entire lines with spaces for correct inter-word spacing
+    let space_run = shaper.shape(" ");
+    let space_w = space_run.total_advance as f32 * scale;
+    let space_glyph = space_run.glyphs.first().map(|g| g.glyph_id).unwrap_or(0);
+    let _space_adv = (space_run.glyphs.first().map(|g| g.x_advance).unwrap_or(0) as f32 * scale) as u16;
+
     let mut line_x: f32 = origin_x;
-    for word in paragraph.split_whitespace() {
+    let words: Vec<&str> = paragraph.split_whitespace().collect();
+    for (wi, word) in words.iter().enumerate() {
         let run = shaper.shape(word);
         let word_w = run.total_advance as f32 * scale;
-        let space_w = shaper.shape(" ").total_advance as f32 * scale;
 
         if line_x + word_w > origin_x + max_width && line_x > origin_x {
             y += font_size * 1.4;
@@ -80,8 +88,14 @@ fn wgpu_msdf_tufte_render() {
             doc.instructions.push(Command32::set_cursor(y as i16, origin_x as i16));
         }
         for g in &run.glyphs {
-            let adv = (g.x_advance as f32 * scale) as u16;
-            doc.instructions.push(Command32::draw_glyph(adv.min(4095), g.glyph_id));
+            // Encode full sub-pixel advance: round to nearest integer
+            let adv = (g.x_advance as f32 * scale + 0.5) as u16;
+            doc.instructions.push(Command32::draw_glyph(adv.max(1).min(4095), g.glyph_id));
+        }
+        // Emit space glyph between words
+        if wi < words.len() - 1 {
+            let sadv = (space_run.glyphs.first().map(|g| g.x_advance).unwrap_or(0) as f32 * scale + 0.5) as u16;
+            doc.instructions.push(Command32::draw_glyph(sadv.max(1).min(4095), space_glyph));
         }
         line_x += word_w + space_w;
     }
@@ -100,8 +114,8 @@ fn wgpu_msdf_tufte_render() {
             doc.instructions.push(Command32::set_cursor(y as i16, col_x[ci]));
             let run = shaper.shape(cell);
             for g in &run.glyphs {
-                let adv = (g.x_advance as f32 * scale) as u16;
-                doc.instructions.push(Command32::draw_glyph(adv.min(4095), g.glyph_id));
+                let adv = (g.x_advance as f32 * scale + 0.5) as u16;
+                doc.instructions.push(Command32::draw_glyph(adv.max(1).min(4095), g.glyph_id));
             }
         }
         y += font_size * 1.3;
@@ -115,7 +129,7 @@ fn wgpu_msdf_tufte_render() {
         doc.instructions.push(Command32::draw_shape(h, w));
     }
 
-    let sdf_frame = mtd1_to_sdf_msdf(&doc, &gid_to_idx, font_size, px_range);
+    let sdf_frame = mtd1_to_sdf_msdf(&doc, &gid_to_idx, &std_advances, font_size, px_range);
     println!("MSDF: {} draws, {} chars", sdf_frame.draws.len(), sdf_frame.char_buffer.len());
 
     // wgpu headless

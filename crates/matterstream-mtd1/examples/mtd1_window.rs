@@ -61,11 +61,13 @@ fn main() {
         atlas.pixel_data.len() / 1024
     );
 
-    // Build glyph_id → table_index map and GPU glyph table
+    // Build glyph_id → table_index map, standard advances, and GPU glyph table
     let mut glyph_id_to_table_index: HashMap<u16, u16> = HashMap::new();
+    let mut standard_advances: HashMap<u16, f32> = HashMap::new();
     let mut glyph_table_u32s: Vec<u32> = Vec::new();
     for (i, entry) in atlas.glyphs.iter().enumerate() {
         glyph_id_to_table_index.insert(entry.glyph_id, i as u16);
+        standard_advances.insert(entry.glyph_id, entry.advance_x);
         let packed = entry.to_gpu_u32s();
         glyph_table_u32s.extend_from_slice(&packed);
     }
@@ -172,7 +174,7 @@ fn main() {
     }
 
     // Convert to SDF draws
-    let sdf_frame = mtd1_to_sdf_msdf(&doc, &glyph_id_to_table_index, font_size, px_range);
+    let sdf_frame = mtd1_to_sdf_msdf(&doc, &glyph_id_to_table_index, &standard_advances, font_size, px_range);
 
     println!(
         "Compiled: {} instructions → {} SdfDrawCmds, {} chars",

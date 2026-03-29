@@ -232,6 +232,7 @@ impl FontAtlasBuilder {
             glyph_id: u16,
             atlas_x: u32,
             atlas_y: u32,
+            advance_x: f32,
             bearing_x: f32,
             bearing_y: f32,
             msdf_data: Vec<u8>,
@@ -240,11 +241,13 @@ impl FontAtlasBuilder {
         let mut results = Vec::with_capacity(num_glyphs);
 
         for &glyph_id in &self.queued_glyphs {
-            // Metrics from v0.25 (advance is NOT stored — it's per-instance in the ISA)
+            // Metrics from v0.25 — all normalized to [0,1] relative to em square
+            let upem = face25.units_per_em() as f32;
             let gid25 = ttf_parser::GlyphId(glyph_id);
+            let advance_x = face25.glyph_hor_advance(gid25).unwrap_or(0) as f32 / upem;
             let bbox = face25.glyph_bounding_box(gid25);
             let (bearing_x, bearing_y) = bbox
-                .map(|b| (b.x_min as f32, b.y_max as f32))
+                .map(|b| (b.x_min as f32 / upem, b.y_max as f32 / upem))
                 .unwrap_or((0.0, 0.0));
 
             // Pack into atlas
@@ -283,6 +286,7 @@ impl FontAtlasBuilder {
                 glyph_id,
                 atlas_x: atlas_x + 1,
                 atlas_y: atlas_y + 1,
+                advance_x,
                 bearing_x,
                 bearing_y,
                 msdf_data,
@@ -319,6 +323,7 @@ impl FontAtlasBuilder {
                 atlas_y: result.atlas_y as u16,
                 atlas_w: gs as u16,
                 atlas_h: gs as u16,
+                advance_x: result.advance_x,
                 bearing_x: result.bearing_x,
                 bearing_y: result.bearing_y,
             };
