@@ -41,6 +41,7 @@ pub struct GpuSdfRenderer {
     glyph_bitmap_buffer: wgpu::Buffer,
     char_buffer_gpu: wgpu::Buffer,
     texture_bank_buffer: wgpu::Buffer,
+    glyph_table_buffer: wgpu::Buffer,
     // Held for ownership — referenced via bind_group, not read through self
     #[allow(dead_code)]
     tex_array: wgpu::Texture,
@@ -48,6 +49,12 @@ pub struct GpuSdfRenderer {
     tex_array_view: wgpu::TextureView,
     #[allow(dead_code)]
     tex_sampler: wgpu::Sampler,
+    #[allow(dead_code)]
+    msdf_atlas_texture: wgpu::Texture,
+    #[allow(dead_code)]
+    msdf_atlas_view: wgpu::TextureView,
+    #[allow(dead_code)]
+    msdf_sampler: wgpu::Sampler,
     bind_group: wgpu::BindGroup,
     max_cmds: u32,
 }
@@ -111,97 +118,117 @@ impl From<&SdfDrawCmd> for GpuDrawCmd {
 
 const MAX_DRAW_CMDS: u32 = 4096;
 const MAX_TEXTURE_LAYERS: u32 = 8;
+const MAX_GLYPH_TABLE_ENTRIES: u32 = 4096;
 const PLACEHOLDER_TEX_SIZE: u32 = 1;
 const SHADER_SOURCE: &str = include_str!("shader_render.wgsl");
+
+fn make_storage_layout(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
 
 impl GpuSdfRenderer {
     /// Create a new renderer attached to an existing wgpu device.
     /// Does NOT take ownership of the device.
     pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
+        Self::new_with_msdf(device, surface_format, 1, 1)
+    }
+
+    /// Create a renderer with a pre-sized MSDF atlas texture.
+    pub fn new_with_msdf(device: &wgpu::Device, surface_format: wgpu::TextureFormat, msdf_width: u32, msdf_height: u32) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("sdf_render"),
             source: wgpu::ShaderSource::Wgsl(SHADER_SOURCE.into()),
         });
 
-        // Buffers
         let draw_cmd_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("draw_cmds"),
             size: (MAX_DRAW_CMDS as u64) * std::mem::size_of::<GpuDrawCmd>() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
         let header_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("render_header"),
-            size: 16,
+            label: Some("render_header"), size: 16,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniforms"),
             size: std::mem::size_of::<MinimalUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
         let anim_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("anim_bank"),
             size: (matterstream_common::MAX_ANIMS as u64) * std::mem::size_of::<GpuAnim>() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
         let glyph_bitmap_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("glyph_bitmap"),
-            size: 8192,
+            label: Some("glyph_bitmap"), size: 8192,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
         let char_buffer_gpu = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("char_buffer"),
-            size: 16384,
+            label: Some("char_buffer"), size: 16384,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
         let texture_bank_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("texture_bank"),
             size: (MAX_TEXTURE_LAYERS as u64) * std::mem::size_of::<GpuTextureDesc>() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let glyph_table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("glyph_table"),
+            size: (MAX_GLYPH_TABLE_ENTRIES as u64) * 32,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
-        // Placeholder texture array (1x1, 1 layer) — used when no textures are loaded
         let tex_array = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("tex_array"),
-            size: wgpu::Extent3d {
-                width: PLACEHOLDER_TEX_SIZE,
-                height: PLACEHOLDER_TEX_SIZE,
-                depth_or_array_layers: MAX_TEXTURE_LAYERS,
-            },
+            size: wgpu::Extent3d { width: PLACEHOLDER_TEX_SIZE, height: PLACEHOLDER_TEX_SIZE, depth_or_array_layers: MAX_TEXTURE_LAYERS },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let tex_array_view = tex_array.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default()
+        });
+        let tex_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("tex_sampler"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default()
+        });
+
+        let msdf_atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("msdf_atlas"),
+            size: wgpu::Extent3d { width: msdf_width.max(1), height: msdf_height.max(1), depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let tex_array_view = tex_array.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(wgpu::TextureViewDimension::D2Array),
-            ..Default::default()
-        });
-        let tex_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("tex_sampler"),
+        let msdf_atlas_view = msdf_atlas_texture.create_view(&Default::default());
+        let msdf_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("msdf_sampler"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
-        // Bind group layout (bindings 0-8)
+        // Bind group layout (bindings 0-11)
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("sdf_render_layout"),
             entries: &[
@@ -215,56 +242,11 @@ impl GpuSdfRenderer {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                make_storage_layout(1),
+                make_storage_layout(2),
+                make_storage_layout(3),
+                make_storage_layout(4),
+                make_storage_layout(5),
                 // Binding 6: texture_2d_array for texture bank
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
@@ -284,16 +266,27 @@ impl GpuSdfRenderer {
                     count: None,
                 },
                 // Binding 8: texture_bank descriptors
+                make_storage_layout(8),
+                // Binding 9: MSDF atlas texture
                 wgpu::BindGroupLayoutEntry {
-                    binding: 8,
+                    binding: 9,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
+                // Binding 10: MSDF sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // Binding 11: glyph table
+                make_storage_layout(11),
             ],
         });
 
@@ -310,6 +303,9 @@ impl GpuSdfRenderer {
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&tex_array_view) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&tex_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: texture_bank_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&msdf_atlas_view) },
+                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(&msdf_sampler) },
+                wgpu::BindGroupEntry { binding: 11, resource: glyph_table_buffer.as_entire_binding() },
             ],
         });
 
@@ -357,9 +353,13 @@ impl GpuSdfRenderer {
             glyph_bitmap_buffer,
             char_buffer_gpu,
             texture_bank_buffer,
+            glyph_table_buffer,
             tex_array,
             tex_array_view,
             tex_sampler,
+            msdf_atlas_texture,
+            msdf_atlas_view,
+            msdf_sampler,
             bind_group,
             max_cmds: MAX_DRAW_CMDS,
         }
@@ -421,6 +421,36 @@ impl GpuSdfRenderer {
         if !chars.is_empty() {
             queue.write_buffer(&self.char_buffer_gpu, 0, bytemuck::cast_slice(chars));
         }
+    }
+
+    /// Upload MSDF glyph table (array of u32, 8 per entry = 2 × vec4<u32>).
+    pub fn upload_glyph_table(&self, queue: &wgpu::Queue, table: &[u32]) {
+        if !table.is_empty() {
+            queue.write_buffer(&self.glyph_table_buffer, 0, bytemuck::cast_slice(table));
+        }
+    }
+
+    /// Upload MSDF atlas RGBA pixel data to the atlas texture.
+    /// Data must be RGBA8 (4 bytes per pixel), width × height × 4 bytes.
+    /// Note: the atlas texture is initialized as 1x1; this writes into it.
+    /// For atlases larger than 1x1, call `new_with_msdf_atlas_size` or
+    /// write to the texture directly.
+    pub fn upload_msdf_atlas(&self, queue: &wgpu::Queue, width: u32, height: u32, rgba_data: &[u8]) {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.msdf_atlas_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
     }
 
     pub fn render_full_scaled(

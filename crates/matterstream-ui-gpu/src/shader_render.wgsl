@@ -6,7 +6,7 @@
 //
 // SDF primitives: rounded box, circle, line segment.
 // Each DrawCmd specifies type via params.x:
-//   0 = Box, 1 = Slab (rounded rect), 2 = Circle, 3 = Line, 4 = Text
+//   0 = Box, 1 = Slab (rounded rect), 2 = Circle, 3 = Line, 4 = Text, 8 = MSDF Text
 
 // ── DrawCmd (matches compute shader output and gpu.rs) ──
 
@@ -64,6 +64,13 @@ struct GpuTexture {
 @group(0) @binding(7) var tex_sampler: sampler;
 @group(0) @binding(8) var<storage, read> texture_bank: array<GpuTexture>;
 
+// MSDF atlas for high-quality text rendering
+@group(0) @binding(9)  var msdf_atlas: texture_2d<f32>;
+@group(0) @binding(10) var msdf_sampler: sampler;
+
+// Per-glyph atlas lookup: [glyph_id, atlas_xy_packed, atlas_wh_packed, 0, bearing_x_bits, bearing_y_bits, 0, 0]
+@group(0) @binding(11) var<storage, read> glyph_table: array<vec4<u32>>;
+
 // ── Vertex shader: full-screen triangle ──
 
 struct VertexOutput {
@@ -114,6 +121,11 @@ fn sd_segment(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, thickness: f32) -> f32 {
     let ba = b - a;
     let h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
     return length(pa - ba * h) - thickness;
+}
+
+/// MSDF median: the middle value of RGB channels gives the signed distance.
+fn msdf_median(r: f32, g: f32, b: f32) -> f32 {
+    return max(min(r, g), min(max(r, g), b));
 }
 
 /// Alpha-blend src over dst (premultiplied alpha).
@@ -271,6 +283,78 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         let tinted = vec4<f32>(color_sample.rgb * cmd.color.rgb, blend_alpha);
                         result = blend_over(result, tinted);
                     }
+                }
+            }
+            case 8u: { // MSDF Text — render using multi-channel signed distance field atlas
+                // params.y = px_range (distance field range in screen pixels)
+                // params.w = packed (char_offset << 16 | char_count)
+                // char_buffer entries for MSDF: packed [16b glyph_table_index | 16b x_advance_px]
+                let px_range = max(cmd.params.y, 2.0);
+                let packed = bitcast<u32>(cmd.params.w);
+                let char_offset = packed >> 16u;
+                let char_count = packed & 0xFFFFu;
+
+                let text_x = cmd.pos.x;
+                let text_y = cmd.pos.y;
+                let text_h = cmd.size.y;
+
+                let atlas_dim = vec2<f32>(textureDimensions(msdf_atlas));
+
+                var cursor_x: f32 = 0.0;
+
+                for (var ci: u32 = 0u; ci < char_count; ci = ci + 1u) {
+                    let entry = char_buffer[char_offset + ci];
+                    let gt_idx = entry >> 16u;           // glyph_table index
+                    let advance_px = f32(entry & 0xFFFFu) / 16.0; // 4.4 fixed-point px
+
+                    // Read glyph table: 2 vec4<u32> per glyph (stride = 2)
+                    let g0 = glyph_table[gt_idx * 2u];
+                    let g1 = glyph_table[gt_idx * 2u + 1u];
+
+                    let atlas_x = f32(g0.y & 0xFFFFu);
+                    let atlas_y = f32(g0.y >> 16u);
+                    let atlas_w = f32(g0.z & 0xFFFFu);
+                    let atlas_h = f32(g0.z >> 16u);
+
+                    let bearing_x = bitcast<f32>(g1.x);
+                    let bearing_y = bitcast<f32>(g1.y);
+
+                    // Scale: atlas glyph pixels → screen pixels
+                    // The atlas was generated at a fixed glyph_size; scale to text_h
+                    let glyph_scale = text_h / atlas_h;
+
+                    // Glyph screen position (bearing offsets in normalized units)
+                    let gx = text_x + cursor_x + bearing_x * glyph_scale / text_h;
+                    let gy = text_y + (text_h - bearing_y * glyph_scale / text_h);
+
+                    let local_x = effective_pixel.x - gx;
+                    let local_y = effective_pixel.y - gy;
+
+                    let screen_w = atlas_w * glyph_scale;
+                    let screen_h = atlas_h * glyph_scale;
+
+                    if local_x >= 0.0 && local_x < screen_w &&
+                       local_y >= 0.0 && local_y < screen_h {
+                        // Map to atlas UV
+                        let u = (atlas_x + local_x / glyph_scale) / atlas_dim.x;
+                        let v = (atlas_y + local_y / glyph_scale) / atlas_dim.y;
+
+                        let sample = textureSample(msdf_atlas, msdf_sampler, vec2<f32>(u, v));
+                        let sd = msdf_median(sample.r, sample.g, sample.b);
+
+                        // Screen-space distance for anti-aliasing
+                        let screen_px_range = px_range * glyph_scale;
+                        let screen_dist = screen_px_range * (sd - 0.5);
+                        let alpha = clamp(screen_dist + 0.5, 0.0, 1.0);
+
+                        if alpha > 0.001 {
+                            d = -1.0; // signal hit
+                            let glyph_color = vec4<f32>(cmd.color.rgb, cmd.color.a * alpha);
+                            result = blend_over(result, glyph_color);
+                        }
+                    }
+
+                    cursor_x += advance_px;
                 }
             }
             default: {

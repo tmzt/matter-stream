@@ -3,7 +3,7 @@
 //! Walks the bytecode, tracks cursor/style state, and emits GPU-uploadable
 //! `SdfDrawCmd` entries with packed text references into a char_buffer.
 
-use matterstream_common::sdf::{SdfDrawCmd, DRAW_TYPE_BOX, DRAW_TYPE_TEXT};
+use matterstream_common::sdf::{SdfDrawCmd, DRAW_TYPE_BOX, DRAW_TYPE_TEXT, DRAW_TYPE_MSDF_TEXT};
 
 use crate::mtd1_format::{BankedStyle, Mtd1Document, opcode};
 
@@ -157,6 +157,161 @@ pub fn mtd1_to_sdf(doc: &Mtd1Document) -> SdfFrame {
             text_batch_char_count,
             text_batch_color,
             12.0,
+        );
+    }
+
+    SdfFrame { draws, char_buffer }
+}
+
+/// Convert an `Mtd1Document` to GPU-renderable `SdfFrame` using MSDF text.
+///
+/// Instead of bitmap text (type 4), this emits MSDF text draws (type 8).
+/// The `glyph_id_to_table_index` maps font glyph IDs to indices in the
+/// GPU glyph_table (populated from `FontAtlas.glyphs`).
+///
+/// `char_buffer` entries for MSDF are packed as: `[16b glyph_table_index | 16b x_advance_px_fixed]`
+/// where x_advance_px_fixed is in 4.12 fixed-point (value * 16).
+pub fn mtd1_to_sdf_msdf(
+    doc: &Mtd1Document,
+    glyph_id_to_table_index: &std::collections::HashMap<u16, u16>,
+    font_size: f32,
+    px_range: f32,
+) -> SdfFrame {
+    let mut draws = Vec::new();
+    let mut char_buffer: Vec<u32> = Vec::new();
+
+    let mut cursor_x: f32 = 0.0;
+    let mut cursor_y: f32 = 0.0;
+    let mut current_color: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    let mut current_font_index: u8 = 0;
+
+    // MSDF text batching state
+    let mut batch_start_x: f32 = 0.0;
+    let mut batch_y: f32 = 0.0;
+    let mut batch_char_offset: u32 = 0;
+    let mut batch_char_count: u32 = 0;
+    let mut batch_color: [f32; 4] = [1.0; 4];
+    let mut in_batch = false;
+
+    let flush = |draws: &mut Vec<SdfDrawCmd>,
+                 start_x: f32,
+                 y: f32,
+                 char_offset: u32,
+                 char_count: u32,
+                 color: [f32; 4],
+                 font_size: f32,
+                 px_range: f32,
+                 is_msdf: bool| {
+        if char_count == 0 {
+            return;
+        }
+        let packed_slot = (char_offset << 16) | (char_count & 0xFFFF);
+        let total_width = char_count as f32 * font_size * 0.6;
+        if is_msdf {
+            draws.push(SdfDrawCmd {
+                pos: [start_x, y],
+                size: [total_width, font_size],
+                color,
+                params: [DRAW_TYPE_MSDF_TEXT, px_range, 0.0, f32::from_bits(packed_slot)],
+            });
+        } else {
+            draws.push(SdfDrawCmd {
+                pos: [start_x, y],
+                size: [total_width, font_size],
+                color,
+                params: [DRAW_TYPE_TEXT, 0.0, 0.0, f32::from_bits(packed_slot)],
+            });
+        }
+    };
+
+    for cmd in &doc.instructions {
+        match cmd.opcode() {
+            opcode::OP_SET_CURSOR => {
+                if in_batch {
+                    flush(
+                        &mut draws, batch_start_x, batch_y,
+                        batch_char_offset, batch_char_count,
+                        batch_color, font_size, px_range, current_font_index > 0,
+                    );
+                    in_batch = false;
+                }
+                let (y, x) = cmd.decode_cursor();
+                cursor_x = x as f32;
+                cursor_y = y as f32;
+            }
+
+            opcode::OP_SET_STYLE => {
+                if in_batch {
+                    flush(
+                        &mut draws, batch_start_x, batch_y,
+                        batch_char_offset, batch_char_count,
+                        batch_color, font_size, px_range, current_font_index > 0,
+                    );
+                    in_batch = false;
+                }
+                let idx = cmd.decode_style() as usize;
+                if idx < doc.styles.len() {
+                    current_color = banked_style_to_color(&doc.styles[idx]);
+                    current_font_index = doc.styles[idx].font_index();
+                }
+            }
+
+            opcode::OP_DRAW_GLYPH => {
+                let (advance, glyph_id) = cmd.decode_glyph();
+
+                if !in_batch {
+                    batch_start_x = cursor_x;
+                    batch_y = cursor_y;
+                    batch_char_offset = char_buffer.len() as u32;
+                    batch_char_count = 0;
+                    batch_color = current_color;
+                    in_batch = true;
+                }
+
+                if current_font_index > 0 {
+                    // MSDF path: pack [glyph_table_index << 16 | advance_fixed]
+                    let gt_idx = glyph_id_to_table_index
+                        .get(&glyph_id)
+                        .copied()
+                        .unwrap_or(0);
+                    let advance_fixed = ((advance as f32) * 16.0) as u32 & 0xFFFF;
+                    char_buffer.push((gt_idx as u32) << 16 | advance_fixed);
+                } else {
+                    // Bitmap path: store glyph_id as codepoint
+                    char_buffer.push(glyph_id as u32);
+                }
+                batch_char_count += 1;
+                cursor_x += advance as f32;
+            }
+
+            opcode::OP_DRAW_SHAPE => {
+                if in_batch {
+                    flush(
+                        &mut draws, batch_start_x, batch_y,
+                        batch_char_offset, batch_char_count,
+                        batch_color, font_size, px_range, current_font_index > 0,
+                    );
+                    in_batch = false;
+                }
+                let (h, w) = cmd.decode_shape();
+                draws.push(SdfDrawCmd {
+                    pos: [cursor_x, cursor_y],
+                    size: [w as f32, h as f32],
+                    color: current_color,
+                    params: [DRAW_TYPE_BOX, 0.0, 0.0, 0.0],
+                });
+            }
+
+            opcode::OP_SET_TOKEN => {}
+            _ => {}
+        }
+    }
+
+    if in_batch {
+        flush(
+            &mut draws, batch_start_x, batch_y,
+            batch_char_offset, batch_char_count,
+            batch_color, font_size, px_range, current_font_index > 0,
         );
     }
 
