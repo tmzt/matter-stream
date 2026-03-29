@@ -59,17 +59,33 @@ impl Mtd1Header {
 
 // ── Style Bank ──────────────────────────────────────────────────────────────
 
-/// 64-bit style entry: `[32b RGBA][8b Stroke][8b Behavior][8b Shape][8b Pad]`
+/// 64-bit style entry: `[32b RGBA][8b Stroke][8b Behavior][8b Shape][8b FontIndex]`
+///
+/// `FontIndex` selects which font/atlas to use for text rendering:
+/// - `0` = legacy bitmap font (backwards compatible default)
+/// - `1-255` = index into the Glyph Atlas Bank (MSDF fonts)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BankedStyle(pub u64);
 
 impl BankedStyle {
-    /// Pack a style from components.
+    /// Pack a style from components (font_index defaults to 0 = bitmap).
     pub fn new(rgba: u32, stroke_weight: u8, behavior_id: u8, shape_mode: u8) -> Self {
+        Self::with_font(rgba, stroke_weight, behavior_id, shape_mode, 0)
+    }
+
+    /// Pack a style with an explicit font index for MSDF atlas selection.
+    pub fn with_font(
+        rgba: u32,
+        stroke_weight: u8,
+        behavior_id: u8,
+        shape_mode: u8,
+        font_index: u8,
+    ) -> Self {
         let val = (rgba as u64) << 32
             | (stroke_weight as u64) << 24
             | (behavior_id as u64) << 16
-            | (shape_mode as u64) << 8;
+            | (shape_mode as u64) << 8
+            | (font_index as u64);
         Self(val)
     }
 
@@ -87,6 +103,11 @@ impl BankedStyle {
 
     pub fn shape_mode(self) -> u8 {
         ((self.0 >> 8) & 0xFF) as u8
+    }
+
+    /// Font index: 0 = legacy bitmap, 1+ = MSDF atlas index.
+    pub fn font_index(self) -> u8 {
+        (self.0 & 0xFF) as u8
     }
 
     pub fn to_bytes(self) -> [u8; 8] {
@@ -260,6 +281,9 @@ impl std::error::Error for Mtd1Error {}
 pub struct Mtd1Document {
     pub styles: Vec<BankedStyle>,
     pub instructions: Vec<Command32>,
+    /// Optional serialized glyph atlas data (MSDF). When present, styles with
+    /// `font_index > 0` reference glyphs from this atlas.
+    pub glyph_atlas: Option<Vec<u8>>,
 }
 
 impl Mtd1Document {
@@ -267,14 +291,18 @@ impl Mtd1Document {
         Self {
             styles: Vec::new(),
             instructions: Vec::new(),
+            glyph_atlas: None,
         }
     }
 
     /// Serialize to binary `.mtd1` format.
+    ///
+    /// Layout: `Header | Style Bank | [Glyph Atlas] | Bytecode Stream`
     pub fn to_bytes(&self) -> Vec<u8> {
         let style_bank_offset = Mtd1Header::SIZE as u32;
         let style_bank_size = (self.styles.len() * 8) as u32;
-        let bytecode_offset = style_bank_offset + style_bank_size;
+        let atlas_size = self.glyph_atlas.as_ref().map_or(0, |a| a.len() as u32);
+        let bytecode_offset = style_bank_offset + style_bank_size + atlas_size;
         let bytecode_size = (self.instructions.len() * 4) as u32;
         let total_size = bytecode_offset + bytecode_size;
 
@@ -285,6 +313,10 @@ impl Mtd1Document {
 
         for style in &self.styles {
             buf.extend_from_slice(&style.to_bytes());
+        }
+
+        if let Some(atlas) = &self.glyph_atlas {
+            buf.extend_from_slice(atlas);
         }
 
         for cmd in &self.instructions {
@@ -310,15 +342,30 @@ impl Mtd1Document {
             return Err(Mtd1Error::InvalidOffset);
         }
 
-        // Parse styles
-        let style_bytes = &data[style_start..bytecode_start];
-        let num_styles = style_bytes.len() / 8;
+        // Parse styles — styles end where atlas or bytecode begins
+        // Styles are 8 bytes each; the atlas (if present) sits between styles and bytecode
+        // The atlas starts after the last complete 8-byte style entry before bytecode_start
+        // We detect atlas presence by checking if there's data between the style region and bytecode
+        let raw_style_region = bytecode_start - style_start;
+        let num_styles = raw_style_region / 8;
+        // If the style region isn't evenly divisible by 8, the remainder is atlas data
+        // But with the new format, atlas is explicitly between styles and bytecode.
+        // For backwards compat: if no atlas, style_region == num_styles * 8.
+        let style_data_end = style_start + num_styles * 8;
+
         let mut styles = Vec::with_capacity(num_styles);
         for i in 0..num_styles {
-            let offset = i * 8;
-            let arr: [u8; 8] = style_bytes[offset..offset + 8].try_into().unwrap();
+            let offset = style_start + i * 8;
+            let arr: [u8; 8] = data[offset..offset + 8].try_into().unwrap();
             styles.push(BankedStyle::from_bytes(&arr));
         }
+
+        // Any data between end of styles and bytecode is glyph atlas
+        let glyph_atlas = if style_data_end < bytecode_start {
+            Some(data[style_data_end..bytecode_start].to_vec())
+        } else {
+            None
+        };
 
         // Parse instructions
         let instr_bytes = &data[bytecode_start..total];
@@ -330,7 +377,11 @@ impl Mtd1Document {
             instructions.push(Command32(val));
         }
 
-        Ok(Self { styles, instructions })
+        Ok(Self {
+            styles,
+            instructions,
+            glyph_atlas,
+        })
     }
 
     /// Debug-dump the instruction stream as assembly-like text.
@@ -345,12 +396,13 @@ impl Mtd1Document {
         out.push_str("-- Style Bank --\n");
         for (i, style) in self.styles.iter().enumerate() {
             out.push_str(&format!(
-                "  [{:04}] RGBA:#{:08X} stroke:{} behavior:{} shape:{}\n",
+                "  [{:04}] RGBA:#{:08X} stroke:{} behavior:{} shape:{} font:{}\n",
                 i,
                 style.rgba(),
                 style.stroke_weight(),
                 style.behavior_id(),
                 style.shape_mode(),
+                style.font_index(),
             ));
         }
 

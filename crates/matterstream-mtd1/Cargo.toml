@@ -7,7 +7,13 @@ description = "mtd1 binary document format: 32-bit GPU-ready ISA for 120fps rend
 [dependencies]
 matterstream-core = { path = "../matterstream-core" }
 matterstream-vm-addressing = { path = "../matterstream-vm-addressing" }
+matterstream-common = { path = "../matterstream-common" }
 bytemuck = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+matterstream-ui-gpu = { path = "../matterstream-ui-gpu" }
+wgpu = "29"
+winit = { workspace = true }
+pollster = "0.4"
+png = "0.17"
