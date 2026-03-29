@@ -264,10 +264,31 @@ impl FontAtlasBuilder {
             if has_outline {
                 let mut bitmap: Bitmap<Rgb<f32>> = Bitmap::new(gs, gs);
                 if let Some(mut shape) = face18.glyph_shape(gid18) {
-                    let bound = shape.get_bound();
-                    let framing = bound
-                        .autoframe(gs, gs, Range::Px(self.px_range), None)
-                        .unwrap_or_else(|| Framing::default());
+                    // Use a uniform projection based on the em square so all glyphs
+                    // share the same scale. This preserves relative sizes (lowercase
+                    // letters are smaller than uppercase in the atlas cell).
+                    //
+                    // Projection maps font units → atlas pixels:
+                    //   scale = atlas_size / em_size (with padding margin)
+                    //   translate = offset to center in cell
+                    let em = upem as f64;
+                    let margin = self.px_range; // px padding for distance field
+                    let usable = gs as f64 - 2.0 * margin;
+                    let em_scale = usable / em;
+
+                    // Center the em square in the atlas cell
+                    let tx = margin;
+                    // Y: font origin at baseline, descenders go negative.
+                    // Shift up so descenders (typically -0.25 em) are visible.
+                    let ty = margin + usable * 0.25; // 25% of cell for descenders
+
+                    let framing = Framing {
+                        range: self.px_range,
+                        projection: msdfgen::Projection::new(
+                            msdfgen::Vector2::new(em_scale, em_scale),
+                            msdfgen::Vector2::new(tx, ty),
+                        ),
+                    };
 
                     shape.edge_coloring_simple(3.0, 0);
                     shape.generate_msdf(&mut bitmap, &framing, MsdfGeneratorConfig::default());
