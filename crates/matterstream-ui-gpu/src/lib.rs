@@ -89,7 +89,7 @@ impl Default for MinimalUniforms {
             time_delta: [0.0; 4],
             resolution: [400.0, 300.0, 1.0, 0.0],
             mouse: [0.0; 4],
-            theme: [1.0, 0.0, 0.0, 0.0],
+            theme: [0.0, 0.0, 0.0, 0.0], // light theme
             vec4_bank: [[0.0; 4]; 16],
             vec3_bank: [[0.0; 4]; 16],
             scalar_bank: [[0.0; 4]; 4],

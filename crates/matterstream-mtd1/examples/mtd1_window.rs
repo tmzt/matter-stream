@@ -93,7 +93,7 @@ fn build_scene() -> PreparedScene {
     let px_range: f32 = 4.0;
 
     // Build MSDF atlas
-    let mut atlas_builder = FontAtlasBuilder::new(font_data, 48, px_range as f64);
+    let mut atlas_builder = FontAtlasBuilder::new(font_data, 128, px_range as f64);
     atlas_builder.add_ascii();
     let atlas = atlas_builder.build().expect("atlas build failed");
 
@@ -125,12 +125,12 @@ fn build_scene() -> PreparedScene {
     );
 
     let mut doc = Mtd1Document::new();
-    doc.styles.push(BankedStyle::new(0x1A1A2EFF, 0, 0, 0));
-    doc.styles.push(BankedStyle::with_font(0xE8E6DFFF, 0, 0, 0, 1));
-    doc.styles.push(BankedStyle::with_font(0xF5F0EBFF, 0, 0, 0, 0));
-    doc.styles.push(BankedStyle::with_font(0xEDE8E0FF, 0, 0, 0, 0));
-    doc.styles.push(BankedStyle::with_font(0xC75233FF, 2, 0, 1, 0));
-    doc.styles.push(BankedStyle::with_font(0x333333FF, 0, 0, 0, 1));
+    doc.styles.push(BankedStyle::new(0xFFFFFFFF, 0, 0, 0));           // 0: white bg (unused)
+    doc.styles.push(BankedStyle::with_font(0x222222FF, 0, 0, 0, 1)); // 1: body text
+    doc.styles.push(BankedStyle::with_font(0xF7F5F0FF, 0, 0, 0, 0)); // 2: zebra even
+    doc.styles.push(BankedStyle::with_font(0xEDE8E0FF, 0, 0, 0, 0)); // 3: zebra odd
+    doc.styles.push(BankedStyle::with_font(0xC75233FF, 2, 0, 1, 0)); // 4: sparkline
+    doc.styles.push(BankedStyle::with_font(0x333333FF, 0, 0, 0, 1)); // 5: table text
 
     let max_width: f32 = 560.0;
     let origin_x: f32 = 20.0;
