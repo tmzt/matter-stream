@@ -330,18 +330,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let glyph_scale = text_h / atlas_gh;
                     let screen_h = atlas_gh * glyph_scale;
 
-                    // Glyph position
+                    // Glyph position.
+                    // The atlas cell covers the full glyph bbox (autoframed).
+                    // bearing_y_norm = fraction of em above the baseline.
+                    // Baseline sits at text_y + 0.75 * text_h (configurable via bearing_y offset).
                     let gx = text_x + cursor_x;
-                    let baseline_y = text_y + text_h * 0.8;
-                    let gy = baseline_y - text_h; // top of em square
+                    let baseline_y = text_y + text_h * 0.75;
+                    // Offset from baseline: the atlas cell top = baseline - bearing_y * text_h
+                    // bearing_y_norm is the glyph's ascent as fraction of em.
+                    // For autoframed glyphs, the cell maps the full bbox, so offset
+                    // by bearing to align the baseline.
+                    let gy = baseline_y - bearing_y_norm * text_h;
 
                     let local_x = effective_pixel.x - gx;
                     let local_y = effective_pixel.y - gy;
 
-                    // Hit-test: full glyph bitmap width horizontally, em square vertically
+                    // Hit-test: full glyph bitmap extents
                     let screen_glyph_w = atlas_gw * glyph_scale;
+                    let screen_glyph_h = atlas_gh * glyph_scale;
                     if local_x >= 0.0 && local_x < max(advance_px, screen_glyph_w) &&
-                       local_y >= 0.0 && local_y < text_h * 1.2 {
+                       local_y >= 0.0 && local_y < screen_glyph_h {
                         // Map screen position to atlas UV.
                         // autoframe maps glyph bbox to fill the atlas cell.
                         // Uniform scale: map screen pixels to atlas pixels

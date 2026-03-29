@@ -35,7 +35,7 @@ fn main() {
     let font_size: f32 = 48.0;
     let px_range: f32 = 4.0;
     let cell_w: f32 = 52.0;
-    let cell_h: f32 = 60.0;
+    let cell_h: f32 = 64.0;
     let origin_x: f32 = 30.0;
     let origin_y: f32 = 30.0;
 
