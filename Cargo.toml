@@ -25,3 +25,4 @@ matterstream-vm-arena = { path = "crates/matterstream-vm-arena" }
 matterstream-packaging = { path = "crates/matterstream-packaging" }
 matterstream-vm-scl = { path = "crates/matterstream-vm-scl" }
 matterstream = { path = "crates/matterstream" }
+matterstream-mtd1 = { path = "crates/matterstream-mtd1" }

@@ -1,0 +1,13 @@
+[package]
+name = "matterstream-mtd1"
+version = "0.2.0"
+edition = "2021"
+description = "mtd1 binary document format: 32-bit GPU-ready ISA for 120fps rendering"
+
+[dependencies]
+matterstream-core = { path = "../matterstream-core" }
+matterstream-vm-addressing = { path = "../matterstream-vm-addressing" }
+bytemuck = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
