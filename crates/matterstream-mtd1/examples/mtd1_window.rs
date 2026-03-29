@@ -89,7 +89,7 @@ fn emit_shaped_run(
 fn build_scene() -> PreparedScene {
     let font_data = load_system_font();
     let shaper = TextShaper::new(font_data.clone()).expect("failed to create shaper");
-    let font_size: f32 = 16.0;
+    let font_size: f32 = 28.0;
     let px_range: f32 = 4.0;
 
     // Build MSDF atlas
@@ -393,7 +393,7 @@ fn main() {
     }
 
     if let Some(path) = png_path {
-        render_to_png(&scene, &path, 800, 500);
+        render_to_png(&scene, &path, 1600, 900);
     } else {
         run_window(scene);
     }

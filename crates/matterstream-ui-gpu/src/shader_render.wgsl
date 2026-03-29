@@ -330,24 +330,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let glyph_scale = text_h / atlas_gh;
                     let screen_h = atlas_gh * glyph_scale;
 
-                    // Glyph position: cursor is at the pen position (left edge of advance)
-                    // bearing_x_norm offsets the glyph bitmap from the pen
+                    // Glyph position
                     let gx = text_x + cursor_x;
-                    // Baseline at ~80% of text_h from top; bearing_y is top of glyph above baseline
                     let baseline_y = text_y + text_h * 0.8;
-                    let gy = baseline_y - bearing_y_norm * text_h;
+                    let gy = baseline_y - text_h; // top of em square
 
                     let local_x = effective_pixel.x - gx;
                     let local_y = effective_pixel.y - gy;
 
-                    // Hit-test: strictly within advance width to prevent overlap
-                    let glyph_x_start = bearing_x_norm * text_h;
-
+                    // Hit-test: advance width horizontally, full em square vertically
                     if local_x >= 0.0 && local_x < advance_px &&
-                       local_y >= -2.0 && local_y < screen_h + 2.0 {
-                        // Map screen position to atlas UV
-                        let atlas_local_x = (local_x - glyph_x_start) / glyph_scale;
-                        let atlas_local_y = local_y / glyph_scale;
+                       local_y >= 0.0 && local_y < text_h * 1.2 {
+                        // Map screen position to atlas UV.
+                        // The atlas cell was autoframed to contain the glyph bbox.
+                        // Map the advance width to the atlas cell, centered.
+                        // X: map [0, advance_px] → atlas cell with bearing offset
+                        let norm_x = local_x / (advance_x_norm * text_h); // normalized [0, ~1]
+                        let atlas_local_x = norm_x * atlas_gw;
+                        // Y: map [0, text_h*1.2] → atlas cell
+                        let norm_y = local_y / (text_h * 1.2);
+                        let atlas_local_y = norm_y * atlas_gh;
 
                         if atlas_local_x >= 0.0 && atlas_local_x < atlas_gw &&
                            atlas_local_y >= 0.0 && atlas_local_y < atlas_gh {
@@ -357,9 +359,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             let sample = textureSample(msdf_atlas, msdf_sampler, vec2<f32>(u, v));
                             let sd = msdf_median(sample.r, sample.g, sample.b);
 
-                            // Anti-aliased edge
+                            // Anti-aliased edge.
+                            // Convention: <0.5 = inside glyph, >0.5 = outside.
+                            // Invert so inside → high alpha.
                             let screen_px_range = px_range * glyph_scale;
-                            let screen_dist = screen_px_range * (sd - 0.5);
+                            let screen_dist = screen_px_range * (0.5 - sd);
                             let alpha = clamp(screen_dist + 0.5, 0.0, 1.0);
 
                             if alpha > 0.01 {
@@ -408,8 +412,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             anim_alpha = mix(enabled, enabled * pulse, has_freq);
         }
 
-        // Shape fill with anti-aliased edge (skip for texture type — already blended)
-        if ty != 5u {
+        // Shape fill with anti-aliased edge (skip for texture and MSDF text — they blend internally)
+        if ty != 5u && ty != 8u {
             let fill_alpha = cmd.color.a * anim_alpha * (1.0 - smoothstep(-0.5, 0.5, d));
             if fill_alpha > 0.001 {
                 let shape_color = vec4<f32>(cmd.color.rgb, fill_alpha);

@@ -263,13 +263,6 @@ impl FontAtlasBuilder {
 
             if has_outline {
                 let mut bitmap: Bitmap<Rgb<f32>> = Bitmap::new(gs, gs);
-                // Initialize to large negative distance (far outside glyph)
-                // so unfilled pixels don't render as edge/inside
-                for y in 0..gs {
-                    for x in 0..gs {
-                        *bitmap.pixel_mut(x, y) = Rgb::new(-1e6, -1e6, -1e6);
-                    }
-                }
                 if let Some(mut shape) = face18.glyph_shape(gid18) {
                     let bound = shape.get_bound();
                     let framing = bound
@@ -358,10 +351,10 @@ impl FontAtlasBuilder {
 /// Map raw MSDF signed distance to u8.
 /// Map raw MSDF distance to u8 [0,255].
 /// Map raw MSDF distance to u8 [0,255].
-/// For this font/msdfgen combo, outside the glyph is positive, inside is negative.
-/// Shader expects: >0.5 = inside. So we negate.
+/// msdfgen: positive = outside glyph, negative = inside.
+/// We preserve the sign; shader handles the convention.
 fn msdf_to_u8(value: f32, inv_range: f32) -> u8 {
-    let normalized = (-value * inv_range + 0.5).clamp(0.0, 1.0);
+    let normalized = (value * inv_range + 0.5).clamp(0.0, 1.0);
     (normalized * 255.0) as u8
 }
 
