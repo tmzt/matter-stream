@@ -328,36 +328,48 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                     // Scale from atlas pixels to screen pixels
                     let glyph_scale = text_h / atlas_gh;
-                    let screen_w = atlas_gw * glyph_scale;
                     let screen_h = atlas_gh * glyph_scale;
 
-                    // Glyph position: cursor + bearing offset (bearing * text_h)
-                    let gx = text_x + cursor_x + bearing_x_norm * text_h;
-                    // Baseline: text_y is top of line; glyph origin is at baseline
-                    // bearing_y_norm is top of glyph above baseline (normalized)
-                    let gy = text_y + text_h * 0.8 - bearing_y_norm * text_h;
+                    // Glyph position: cursor is at the pen position (left edge of advance)
+                    // bearing_x_norm offsets the glyph bitmap from the pen
+                    let gx = text_x + cursor_x;
+                    // Baseline at ~80% of text_h from top; bearing_y is top of glyph above baseline
+                    let baseline_y = text_y + text_h * 0.8;
+                    let gy = baseline_y - bearing_y_norm * text_h;
 
                     let local_x = effective_pixel.x - gx;
                     let local_y = effective_pixel.y - gy;
 
-                    if local_x >= -1.0 && local_x < screen_w + 1.0 &&
-                       local_y >= -1.0 && local_y < screen_h + 1.0 {
-                        // Map screen pixel to atlas UV
-                        let u = (atlas_gx + clamp(local_x / glyph_scale, 0.0, atlas_gw)) / atlas_dim.x;
-                        let v = (atlas_gy + clamp(local_y / glyph_scale, 0.0, atlas_gh)) / atlas_dim.y;
+                    // Hit-test: extend to full glyph bitmap width for overhanging glyphs
+                    let glyph_screen_w = atlas_gw * glyph_scale;
+                    let glyph_x_start = bearing_x_norm * text_h;
+                    let hit_left = min(0.0, glyph_x_start);
+                    let hit_right = max(advance_px, glyph_x_start + glyph_screen_w);
 
-                        let sample = textureSample(msdf_atlas, msdf_sampler, vec2<f32>(u, v));
-                        let sd = msdf_median(sample.r, sample.g, sample.b);
+                    if local_x >= hit_left && local_x < hit_right &&
+                       local_y >= -2.0 && local_y < screen_h + 2.0 {
+                        // Map screen position to atlas UV
+                        let atlas_local_x = (local_x - glyph_x_start) / glyph_scale;
+                        let atlas_local_y = local_y / glyph_scale;
 
-                        // Anti-aliased edge: px_range is in atlas pixels
-                        let screen_px_range = px_range * glyph_scale;
-                        let screen_dist = screen_px_range * (sd - 0.5);
-                        let alpha = clamp(screen_dist + 0.5, 0.0, 1.0);
+                        if atlas_local_x >= 0.0 && atlas_local_x < atlas_gw &&
+                           atlas_local_y >= 0.0 && atlas_local_y < atlas_gh {
+                            let u = (atlas_gx + atlas_local_x) / atlas_dim.x;
+                            let v = (atlas_gy + atlas_local_y) / atlas_dim.y;
 
-                        if alpha > 0.001 {
-                            d = -1.0;
-                            let glyph_color = vec4<f32>(cmd.color.rgb, cmd.color.a * alpha);
-                            result = blend_over(result, glyph_color);
+                            let sample = textureSample(msdf_atlas, msdf_sampler, vec2<f32>(u, v));
+                            let sd = msdf_median(sample.r, sample.g, sample.b);
+
+                            // Anti-aliased edge
+                            let screen_px_range = px_range * glyph_scale;
+                            let screen_dist = screen_px_range * (sd - 0.5);
+                            let alpha = clamp(screen_dist + 0.5, 0.0, 1.0);
+
+                            if alpha > 0.001 {
+                                d = -1.0;
+                                let glyph_color = vec4<f32>(cmd.color.rgb, cmd.color.a * alpha);
+                                result = blend_over(result, glyph_color);
+                            }
                         }
                     }
 
