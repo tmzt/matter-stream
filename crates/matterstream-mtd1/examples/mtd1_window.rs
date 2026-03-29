@@ -2,7 +2,7 @@
 //!
 //! Usage:
 //!   cargo run -p matterstream-mtd1 --example mtd1_window           # open window
-//!   cargo run -p matterstream-mtd1 --example mtd1_window -- --png out.png  # render to PNG
+//!   cargo run -p matterstream-mtd1 --example mtd1_window -- --png-out out.png  # render to PNG
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -351,11 +351,11 @@ fn main() {
 
     let scene = build_scene();
 
-    // Check for --png flag
+    // Check for --png-out flag
     let mut png_path = None;
     let mut i = 1;
     while i < args.len() {
-        if args[i] == "--png" && i + 1 < args.len() {
+        if args[i] == "--png-out" && i + 1 < args.len() {
             png_path = Some(args[i + 1].clone());
             i += 2;
         } else {
