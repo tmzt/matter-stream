@@ -1,39 +1,31 @@
 //! mtd1_window — Render the Tufte demo with system fonts via MSDF + wgpu.
 //!
-//! Uses HarfBuzz (rustybuzz) for text shaping and msdfgen for glyph atlas
-//! generation, rendering through the GPU SDF pipeline.
-//!
 //! Usage:
-//!   cargo run -p matterstream-mtd1 --example mtd1_window
+//!   cargo run -p matterstream-mtd1 --example mtd1_window           # open window
+//!   cargo run -p matterstream-mtd1 --example mtd1_window -- --png out.png  # render to PNG
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use matterstream_common::font::GpuFont;
 use matterstream_common::pipeline::RenderFrame;
-use matterstream_common::sdf::DRAW_TYPE_MSDF_TEXT;
+use matterstream_common::sdf::{SdfDrawCmd, DRAW_TYPE_MSDF_TEXT};
 use matterstream_font::atlas::FontAtlasBuilder;
 use matterstream_font::shaper::TextShaper;
 use matterstream_mtd1::mtd1_format::{BankedStyle, Command32, Mtd1Document};
 use matterstream_mtd1::mtd1_to_sdf::mtd1_to_sdf_msdf;
 use matterstream_ui_gpu::GpuSdfRenderer;
-use winit::event::{Event, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::Window;
 
 /// Load a system font suitable for Tufte-style data display.
 fn load_system_font() -> Vec<u8> {
     let candidates = [
-        // Tufte-appropriate serif/body fonts
         "/System/Library/Fonts/Supplemental/Georgia.ttf",
         "/Library/Fonts/Georgia.ttf",
         "/System/Library/Fonts/NewYork.ttf",
         "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
-        // Clean sans fallbacks
         "/System/Library/Fonts/Helvetica.ttc",
         "/System/Library/Fonts/SFNS.ttf",
         "/Library/Fonts/Arial.ttf",
-        "/System/Library/Fonts/SFNSText.ttf",
     ];
     for path in &candidates {
         if let Ok(data) = std::fs::read(path) {
@@ -44,13 +36,22 @@ fn load_system_font() -> Vec<u8> {
     panic!("No system font found");
 }
 
-fn main() {
+struct PreparedScene {
+    draws: Vec<SdfDrawCmd>,
+    char_buffer: Vec<u32>,
+    glyph_table_u32s: Vec<u32>,
+    atlas_rgba: Vec<u8>,
+    atlas_width: u32,
+    atlas_height: u32,
+}
+
+fn build_scene() -> PreparedScene {
     let font_data = load_system_font();
     let shaper = TextShaper::new(font_data.clone()).expect("failed to create shaper");
     let font_size: f32 = 16.0;
     let px_range: f32 = 4.0;
 
-    // ── Build MSDF atlas ────────────────────────────────────────────────
+    // Build MSDF atlas
     let mut atlas_builder = FontAtlasBuilder::new(font_data, 48, px_range as f64);
     atlas_builder.add_ascii();
     let atlas = atlas_builder.build().expect("atlas build failed");
@@ -61,18 +62,16 @@ fn main() {
         atlas.pixel_data.len() / 1024
     );
 
-    // Build glyph_id → table_index map, standard advances, and GPU glyph table
     let mut glyph_id_to_table_index: HashMap<u16, u16> = HashMap::new();
     let mut standard_advances: HashMap<u16, f32> = HashMap::new();
     let mut glyph_table_u32s: Vec<u32> = Vec::new();
     for (i, entry) in atlas.glyphs.iter().enumerate() {
         glyph_id_to_table_index.insert(entry.glyph_id, i as u16);
         standard_advances.insert(entry.glyph_id, entry.advance_x);
-        let packed = entry.to_gpu_u32s();
-        glyph_table_u32s.extend_from_slice(&packed);
+        glyph_table_u32s.extend_from_slice(&entry.to_gpu_u32s());
     }
 
-    // ── Shape and compile text ──────────────────────────────────────────
+    // Shape and compile
     let upem = shaper.units_per_em();
     let scale = font_size / upem as f32;
 
@@ -84,56 +83,48 @@ fn main() {
         "design, or technology of graphic production."
     );
 
-    // Build mtd1 document with shaped text
     let mut doc = Mtd1Document::new();
-    // Style 0: dark bg
     doc.styles.push(BankedStyle::new(0x1A1A2EFF, 0, 0, 0));
-    // Style 1: text with MSDF font (font_index=1)
     doc.styles.push(BankedStyle::with_font(0xE8E6DFFF, 0, 0, 0, 1));
-    // Style 2: zebra even (font_index=1)
     doc.styles.push(BankedStyle::with_font(0xF5F0EBFF, 0, 0, 0, 0));
-    // Style 3: zebra odd
     doc.styles.push(BankedStyle::with_font(0xEDE8E0FF, 0, 0, 0, 0));
-    // Style 4: sparkline
     doc.styles.push(BankedStyle::with_font(0xC75233FF, 2, 0, 1, 0));
-    // Style 5: table text with MSDF font
     doc.styles.push(BankedStyle::with_font(0x333333FF, 0, 0, 0, 1));
 
-    // Layout paragraph with line wrapping using HarfBuzz
     let max_width: f32 = 560.0;
     let origin_x: f32 = 20.0;
     let mut y: f32 = 24.0;
 
     doc.instructions.push(Command32::set_style(1));
-
-    // Word-wrap with shaping
-    let words: Vec<&str> = paragraph.split_whitespace().collect();
-    let mut line_x: f32 = origin_x;
     doc.instructions.push(Command32::set_cursor(y as i16, origin_x as i16));
 
-    for word in &words {
-        let run = shaper.shape(word);
-        let word_width = run.total_advance as f32 * scale;
-        let space_run = shaper.shape(" ");
-        let space_width = space_run.total_advance as f32 * scale;
+    let space_run = shaper.shape(" ");
+    let space_w = space_run.total_advance as f32 * scale;
+    let space_glyph = space_run.glyphs.first().map(|g| g.glyph_id).unwrap_or(0);
 
-        if line_x + word_width > origin_x + max_width && line_x > origin_x {
+    let mut line_x: f32 = origin_x;
+    let words: Vec<&str> = paragraph.split_whitespace().collect();
+    for (wi, word) in words.iter().enumerate() {
+        let run = shaper.shape(word);
+        let word_w = run.total_advance as f32 * scale;
+
+        if line_x + word_w > origin_x + max_width && line_x > origin_x {
             y += font_size * 1.4;
             line_x = origin_x;
             doc.instructions.push(Command32::set_cursor(y as i16, origin_x as i16));
         }
-
-        for glyph in &run.glyphs {
-            let advance_px = (glyph.x_advance as f32 * scale) as u16;
-            doc.instructions.push(Command32::draw_glyph(
-                advance_px.min(4095),
-                glyph.glyph_id,
-            ));
+        for g in &run.glyphs {
+            let adv = (g.x_advance as f32 * scale + 0.5) as u16;
+            doc.instructions.push(Command32::draw_glyph(adv.max(1).min(4095), g.glyph_id));
         }
-        line_x += word_width + space_width;
+        if wi < words.len() - 1 {
+            let sadv = (space_run.glyphs.first().map(|g| g.x_advance).unwrap_or(0) as f32 * scale + 0.5) as u16;
+            doc.instructions.push(Command32::draw_glyph(sadv.max(1).min(4095), space_glyph));
+        }
+        line_x += word_w + space_w;
     }
 
-    // Table data
+    // Table
     y += font_size * 2.0;
     let table_data = [
         ["Quarter", "Revenue", "Growth", "Margin"],
@@ -143,23 +134,20 @@ fn main() {
         ["Q4 2024", "$15.2M", "+2.7%", "37.0%"],
     ];
     let col_x = [20i16, 140, 240, 340];
-
     for (row_idx, row) in table_data.iter().enumerate() {
-        // Zebra background for data rows
         if row_idx > 0 {
             let zebra_style = if row_idx % 2 == 0 { 2 } else { 3 };
             doc.instructions.push(Command32::set_style(zebra_style));
             doc.instructions.push(Command32::set_cursor(y as i16, origin_x as i16));
             doc.instructions.push(Command32::draw_shape(font_size as u16, 420));
         }
-
         doc.instructions.push(Command32::set_style(5));
         for (col, cell) in row.iter().enumerate() {
             doc.instructions.push(Command32::set_cursor(y as i16, col_x[col]));
             let run = shaper.shape(cell);
-            for glyph in &run.glyphs {
-                let advance_px = (glyph.x_advance as f32 * scale) as u16;
-                doc.instructions.push(Command32::draw_glyph(advance_px.min(4095), glyph.glyph_id));
+            for g in &run.glyphs {
+                let adv = (g.x_advance as f32 * scale + 0.5) as u16;
+                doc.instructions.push(Command32::draw_glyph(adv.max(1).min(4095), g.glyph_id));
             }
         }
         y += font_size * 1.3;
@@ -173,19 +161,120 @@ fn main() {
         doc.instructions.push(Command32::draw_shape(h, w));
     }
 
-    // Convert to SDF draws
     let sdf_frame = mtd1_to_sdf_msdf(&doc, &glyph_id_to_table_index, &standard_advances, font_size, px_range);
 
     println!(
-        "Compiled: {} instructions → {} SdfDrawCmds, {} chars",
-        doc.instructions.len(), sdf_frame.draws.len(), sdf_frame.char_buffer.len()
+        "Compiled: {} instructions → {} SdfDrawCmds, {} chars, {} MSDF text draws",
+        doc.instructions.len(), sdf_frame.draws.len(), sdf_frame.char_buffer.len(),
+        sdf_frame.draws.iter().filter(|d| d.draw_type() == DRAW_TYPE_MSDF_TEXT).count()
     );
 
-    let msdf_count = sdf_frame.draws.iter().filter(|d| d.draw_type() == DRAW_TYPE_MSDF_TEXT).count();
-    println!("MSDF text draws: {}", msdf_count);
+    // RGB → RGBA for GPU
+    let mut atlas_rgba = Vec::with_capacity((atlas.width * atlas.height * 4) as usize);
+    for i in 0..(atlas.width * atlas.height) as usize {
+        let src = i * 3;
+        atlas_rgba.push(atlas.pixel_data.get(src).copied().unwrap_or(0));
+        atlas_rgba.push(atlas.pixel_data.get(src + 1).copied().unwrap_or(0));
+        atlas_rgba.push(atlas.pixel_data.get(src + 2).copied().unwrap_or(0));
+        atlas_rgba.push(255);
+    }
 
-    // ── Create window ───────────────────────────────────────────────────
+    PreparedScene {
+        draws: sdf_frame.draws,
+        char_buffer: sdf_frame.char_buffer,
+        glyph_table_u32s,
+        atlas_rgba,
+        atlas_width: atlas.width,
+        atlas_height: atlas.height,
+    }
+}
+
+fn render_to_png(scene: &PreparedScene, path: &str, width: u32, height: u32) {
+    let tex_format = wgpu::TextureFormat::Rgba8Unorm;
+    let instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        compatible_surface: None,
+        ..Default::default()
+    })).expect("No GPU adapter");
+    let (device, queue) = pollster::block_on(
+        adapter.request_device(&wgpu::DeviceDescriptor::default()),
+    ).expect("Failed to create device");
+
+    let renderer = GpuSdfRenderer::new_with_msdf(&device, tex_format, scene.atlas_width, scene.atlas_height);
+    renderer.upload_msdf_atlas(&queue, scene.atlas_width, scene.atlas_height, &scene.atlas_rgba);
+    renderer.upload_glyph_table(&queue, &scene.glyph_table_u32s);
+    renderer.upload_chars(&queue, &scene.char_buffer);
+
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("offscreen"),
+        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+        format: tex_format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+
+    let frame = RenderFrame {
+        draws: scene.draws.clone(),
+        char_buffer: scene.char_buffer.clone(),
+        anim_bank: vec![], texture_bank: vec![],
+        font: GpuFont::NONE, glyph_bitmap: vec![],
+        scalar_bank: [0.0; 16], int_bank: [0; 16],
+        time_ms: 0.0, width, height, scale: 1.0,
+    };
+    renderer.render_frame(&device, &queue, &view, &frame);
+
+    // Read back pixels
+    let bpp = 4u32;
+    let padded_row = (width * bpp + 255) & !255;
+    let buf_size = (padded_row * height) as u64;
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"), size: buf_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo { texture: &target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyBufferInfo { buffer: &readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: None } },
+        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+    );
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let slice = readback.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| { tx.send(r).unwrap(); });
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    rx.recv().unwrap().expect("buffer map failed");
+    let data = slice.get_mapped_range();
+
+    // Write PNG
+    let file = std::fs::File::create(path).expect("failed to create PNG file");
+    let mut enc = png::Encoder::new(file, width, height);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut writer = enc.write_header().expect("PNG header");
+    let mut img = Vec::with_capacity((width * height * bpp) as usize);
+    for row in 0..height {
+        let start = (row * padded_row) as usize;
+        img.extend_from_slice(&data[start..start + (width * bpp) as usize]);
+    }
+    writer.write_image_data(&img).expect("PNG write");
+    drop(data);
+    readback.unmap();
+
+    println!("Rendered {}x{} → {}", width, height, path);
+}
+
+fn run_window(scene: PreparedScene) {
+    use winit::event::{Event, WindowEvent};
+    use winit::event_loop::{ControlFlow, EventLoop};
+    use winit::window::Window;
+
     let event_loop = EventLoop::new().unwrap();
+    #[allow(deprecated)]
     let window = Arc::new(
         event_loop.create_window(
             Window::default_attributes()
@@ -194,7 +283,6 @@ fn main() {
         ).unwrap(),
     );
 
-    // ── Set up wgpu ─────────────────────────────────────────────────────
     let instance = wgpu::Instance::default();
     let surface = instance.create_surface(window.clone()).unwrap();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -215,26 +303,14 @@ fn main() {
     config.present_mode = wgpu::PresentMode::Fifo;
     surface.configure(&device, &config);
 
-    // ── Create renderer with MSDF atlas dimensions ────────────────────
-    let renderer = GpuSdfRenderer::new_with_msdf(&device, surface_format, atlas.width, atlas.height);
+    let renderer = GpuSdfRenderer::new_with_msdf(&device, surface_format, scene.atlas_width, scene.atlas_height);
+    renderer.upload_msdf_atlas(&queue, scene.atlas_width, scene.atlas_height, &scene.atlas_rgba);
+    renderer.upload_glyph_table(&queue, &scene.glyph_table_u32s);
+    renderer.upload_chars(&queue, &scene.char_buffer);
 
-    // Upload MSDF atlas (RGB → RGBA conversion for Rgba8Unorm)
-    let mut rgba_data = Vec::with_capacity((atlas.width * atlas.height * 4) as usize);
-    for i in 0..(atlas.width * atlas.height) as usize {
-        let src = i * 3;
-        rgba_data.push(atlas.pixel_data.get(src).copied().unwrap_or(0));
-        rgba_data.push(atlas.pixel_data.get(src + 1).copied().unwrap_or(0));
-        rgba_data.push(atlas.pixel_data.get(src + 2).copied().unwrap_or(0));
-        rgba_data.push(255);
-    }
-    renderer.upload_msdf_atlas(&queue, atlas.width, atlas.height, &rgba_data);
-    renderer.upload_glyph_table(&queue, &glyph_table_u32s);
-    renderer.upload_chars(&queue, &sdf_frame.char_buffer);
+    let draws = scene.draws;
+    let char_buffer = scene.char_buffer;
 
-    let draws = sdf_frame.draws.clone();
-    let char_buffer = sdf_frame.char_buffer.clone();
-
-    // ── Event loop ──────────────────────────────────────────────────────
     #[allow(deprecated)]
     event_loop.run(move |event, elwt| {
         elwt.set_control_flow(ControlFlow::Wait);
@@ -246,30 +322,20 @@ fn main() {
                 config.width = phys.width;
                 config.height = phys.height;
                 surface.configure(&device, &config);
-
                 let frame_tex = match surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(t)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
                     _ => return,
                 };
                 let view = frame_tex.texture.create_view(&Default::default());
-                let scale = window.scale_factor() as f32;
-
                 let frame = RenderFrame {
-                    draws: draws.clone(),
-                    char_buffer: char_buffer.clone(),
-                    anim_bank: vec![],
-                    texture_bank: vec![],
-                    font: GpuFont::NONE,
-                    glyph_bitmap: vec![],
-                    scalar_bank: [0.0; 16],
-                    int_bank: [0; 16],
-                    time_ms: 0.0,
-                    width: phys.width,
-                    height: phys.height,
-                    scale,
+                    draws: draws.clone(), char_buffer: char_buffer.clone(),
+                    anim_bank: vec![], texture_bank: vec![],
+                    font: GpuFont::NONE, glyph_bitmap: vec![],
+                    scalar_bank: [0.0; 16], int_bank: [0; 16],
+                    time_ms: 0.0, width: phys.width, height: phys.height,
+                    scale: window.scale_factor() as f32,
                 };
-
                 renderer.render_frame(&device, &queue, &view, &frame);
                 frame_tex.present();
             }
@@ -278,4 +344,28 @@ fn main() {
             _ => (),
         }
     }).unwrap();
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+
+    let scene = build_scene();
+
+    // Check for --png flag
+    let mut png_path = None;
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--png" && i + 1 < args.len() {
+            png_path = Some(args[i + 1].clone());
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+
+    if let Some(path) = png_path {
+        render_to_png(&scene, &path, 800, 500);
+    } else {
+        run_window(scene);
+    }
 }
