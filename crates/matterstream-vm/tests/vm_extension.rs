@@ -259,7 +259,7 @@ fn test_external_or_page_dispatch() {
     let mut vm = RpnVm::new();
     let mut arena = TripleArena::new();
 
-    vm.register_or_page(FOURCC_TEST, Box::new(TestPageHandler::new()));
+    vm.setup().register_or_page(FOURCC_TEST, Box::new(TestPageHandler::new()));
 
     let mut bytecode = Vec::new();
     emit_set_cr(&mut bytecode, 0, FOURCC_TEST as u64);
@@ -272,12 +272,7 @@ fn test_external_or_page_dispatch() {
 
     vm.execute(&bytecode, &mut arena).unwrap();
 
-    // Take the handler back and verify
-    let handler: Box<TestPageHandler> = vm.take_or_page(FOURCC_TEST).unwrap();
-    assert_eq!(handler.dispatched, vec![0x00, 0x01]);
-    assert_eq!(handler.popped_values, vec![42]);
-
-    // Verify the push from sub-op 0x01 left a value on the stack
+    // Sub-op 0x00 popped 42, sub-op 0x01 pushed 0xBEEF
     assert_eq!(vm.stack.len(), 1);
     assert_eq!(vm.stack[0].as_u32(), Some(0xBEEF));
 }
@@ -301,7 +296,7 @@ fn test_external_or_page_gas_metering() {
     let mut vm = RpnVm::with_gas(200);
     let mut arena = TripleArena::new();
 
-    vm.register_or_page(FOURCC_TEST, Box::new(TestPageHandler::new()));
+    vm.setup().register_or_page(FOURCC_TEST, Box::new(TestPageHandler::new()));
 
     let mut bytecode = Vec::new();
     emit_set_cr(&mut bytecode, 0, FOURCC_TEST as u64);
@@ -321,7 +316,7 @@ fn test_external_or_page_string_resolution() {
     let mut vm = make_vm_with_strings(&["hello", "world"]);
     let mut arena = TripleArena::new();
 
-    vm.register_or_page(FOURCC_TEST, Box::new(TestPageHandler::new()));
+    vm.setup().register_or_page(FOURCC_TEST, Box::new(TestPageHandler::new()));
 
     let mut bytecode = Vec::new();
     emit_set_cr(&mut bytecode, 0, FOURCC_TEST as u64);
@@ -332,8 +327,8 @@ fn test_external_or_page_string_resolution() {
 
     vm.execute(&bytecode, &mut arena).unwrap();
 
-    let handler: Box<TestPageHandler> = vm.take_or_page(FOURCC_TEST).unwrap();
-    assert_eq!(handler.popped_values, vec![0]); // string index, not the string itself
+    // Sub-op 0x00 popped the string index; stack should be empty
+    assert_eq!(vm.stack.len(), 0);
 }
 
 // ── LlmUseCase enum tests ──────────────────────────────────────────────

@@ -112,15 +112,32 @@ pub mod user_call {
     pub const EV_HAS_EVENT: u64 = 0x01;
     pub const FRAME_COUNT: u64 = 0x02;
     pub const RAND: u64 = 0x03;
+    #[deprecated(note = "use COMPONENT_OPS with component_ops::OID_IMPORT sub-op")]
     pub const OID_IMPORT: u64 = 0x10;
+    #[deprecated(note = "use COMPONENT_OPS with component_ops::EXEC_COMPONENT_OR_NATIVE sub-op")]
     pub const OID_CALL: u64 = 0x11;
+    #[deprecated(note = "use COMPONENT_OPS with component_ops::OID_COSINE_MATCH sub-op")]
     pub const OID_COSINE_MATCH: u64 = 0x12;
+    /// Component operations — sub-ops in data param (see component_ops module).
+    pub const COMPONENT_OPS: u64 = 0x13;
     pub const READ_USER_ATOMIC: u64 = 0x20;
     pub const SUBMIT_USER_SEMAPHORE: u64 = 0x21;
     pub const SHARED_STRING_GET: u64 = 0x22;
     pub const SHARED_STRING_SET: u64 = 0x23;
     /// TKV arena coprocessor — sub-ops in data param.
     pub const TKV: u64 = 0x30;
+}
+
+// ── ComponentOps sub-op IDs (data param for COMPONENT_OPS) ────────────
+
+pub mod component_ops {
+    /// Resolve OID to FQA via .osym, push FQA onto stack.
+    pub const OID_IMPORT: u64 = 0x00;
+    /// Resolve OID and fully execute: NativeHook dispatches directly,
+    /// Component resolves to FQA and executes via ExecComponent.
+    pub const EXEC_COMPONENT_OR_NATIVE: u64 = 0x01;
+    /// Cosine-match stub (pushes 0).
+    pub const OID_COSINE_MATCH: u64 = 0x02;
 }
 
 // ── SystemCall sub-op IDs ──────────────────────────────────────────────
@@ -370,15 +387,25 @@ impl Asm {
         self
     }
 
-    /// OID import: pops OID (u128) from stack, resolves to FQA via .osym, pushes FQA.
+    /// Deprecated: use `exec_component_or_native` or component_ops sub-ops.
+    #[deprecated(note = "use exec_component_or_native()")]
     pub fn oid_import(&mut self) -> &mut Self {
-        self.tokens.push(AsmToken::UserCall(user_call::OID_IMPORT, 0));
+        self.tokens.push(AsmToken::UserCall(user_call::COMPONENT_OPS, component_ops::OID_IMPORT));
         self
     }
 
-    /// OID call: resolves OID and dispatches — NativeHook or FQA push.
+    /// Deprecated: use `exec_component_or_native`.
+    #[deprecated(note = "use exec_component_or_native()")]
     pub fn oid_call(&mut self) -> &mut Self {
+        #[allow(deprecated)]
         self.tokens.push(AsmToken::UserCall(user_call::OID_CALL, 0));
+        self
+    }
+
+    /// Resolve OID and execute: NativeHook dispatches directly, Component
+    /// resolves to FQA and executes via ExecComponent.
+    pub fn exec_component_or_native(&mut self) -> &mut Self {
+        self.tokens.push(AsmToken::UserCall(user_call::COMPONENT_OPS, component_ops::EXEC_COMPONENT_OR_NATIVE));
         self
     }
 

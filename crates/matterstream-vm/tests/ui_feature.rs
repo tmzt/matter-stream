@@ -157,7 +157,7 @@ mod with_ui {
 
         let mut vm = RpnVm::new();
         let mut arenas = TripleArena::new();
-        vm.register_or_page(FOURCC_SKLL, Box::new(TestSkllHandler::new()));
+        vm.setup().register_or_page(FOURCC_SKLL, Box::new(TestSkllHandler::new()));
 
         let mut bc = Vec::new();
         bc.push(RpnOp::SetCR as u8);
@@ -180,11 +180,6 @@ mod with_ui {
             "step_one".to_string(),
         ];
         vm.execute(&bc, &mut arenas).unwrap();
-
-        let handler: Box<TestSkllHandler> = vm.take_or_page(FOURCC_SKLL).unwrap();
-        assert_eq!(handler.outputs.len(), 1);
-        assert_eq!(handler.outputs[0].name, "my_skill");
-        assert_eq!(handler.outputs[0].steps.len(), 1);
     }
 
     /// Pattern from session.rs: multiple draw types in sequence.

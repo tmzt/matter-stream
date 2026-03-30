@@ -12,7 +12,7 @@
 
 use matterstream_packaging::archive::{ArchiveMember, MtsmArchive};
 use matterstream_packaging::tkv::{TkvDocument, TkvValue};
-use matterstream_vm::rpn::{MtuiOp, NativeHookFn, RpnError, RpnOp, RpnValue, RpnVm, UserCallOp};
+use matterstream_vm::rpn::{MtuiOp, NativeHookFn, RpnError, RpnOp, RpnValue, RpnVm, UserCallOp, VmHandleNative};
 use matterstream_vm_addressing::fqa::{Fqa, FourCC, Ordinal};
 use matterstream_vm_addressing::oid::{ImportKind, Oid};
 use matterstream_vm_addressing::oid_index::OidIndexBuilder;
@@ -157,8 +157,8 @@ fn main() {
     vm.oid_indices.push(consumer_osym_data);
 
     // Register a native hook for the system hook
-    fn system_hook(vm: &mut RpnVm, _arenas: &mut TripleArena) -> Result<(), RpnError> {
-        vm.push_value(RpnValue::U64(0xCAFE))?;
+    fn system_hook(vm: &mut VmHandleNative, _arenas: &mut TripleArena) -> Result<(), RpnError> {
+        vm.push(RpnValue::U64(0xCAFE))?;
         Ok(())
     }
     vm.native_hooks.push(system_hook as NativeHookFn);
