@@ -80,13 +80,34 @@ impl Oid {
     }
 
     /// Effective depth: the last non-zero segment level + 1.
-    pub fn depth(&self) -> u8 {
-        for i in (0..63u8).rev() {
+    pub const fn depth(&self) -> u8 {
+        let mut d: u8 = 0;
+        let mut i: u8 = 0;
+        while i < 63 {
             if self.segment(i) != 0 {
-                return i + 1;
+                d = i + 1;
             }
+            i += 1;
         }
-        0
+        d
+    }
+
+    /// Create a child OID by appending a segment value at the current depth.
+    pub const fn child_const(self, value: u8) -> Self {
+        let d = self.depth();
+        assert!(d < 63, "OID max depth");
+        assert!(value <= 3, "OID segment must be 0-3");
+        let seg = value as u64;
+        let mut hi = self.hi;
+        let mut lo = self.lo;
+        if (d as usize) < 31 {
+            let shift = 62 - (d as u32) * 2;
+            hi |= seg << shift;
+        } else {
+            let shift = 62 - ((d as u32) - 31) * 2;
+            lo |= seg << shift;
+        }
+        Oid { hi, lo }
     }
 
     /// Check if `self` is a prefix of `other` at the given depth.
@@ -119,14 +140,8 @@ impl Oid {
     /// `1.1.2` — Public package tree (third-party)
     pub const PKG_ROOT_PUBLIC: Oid = Oid::from_segments(&[1, 1, 2]);
 
-    // ── @chitin/skills package OIDs (1.1.1.2.1-2) ─────────────────────
-    /// `1.1.1.2.1` — `<Param>` element (skill parameter definition)
-    pub const SKILLS_PARAM: Oid = Oid::from_segments(&[1, 1, 1, 2, 1]);
-    /// `1.1.1.2.2` — `<Trigger>` element (heuristic routing pattern)
-    pub const SKILLS_TRIGGER: Oid = Oid::from_segments(&[1, 1, 1, 2, 2]);
-
-    /// Package name for `@chitin/skills` imports.
-    pub const SKILLS_PACKAGE_NAME: &'static str = "@chitin/skills";
+    /// `1.1.1.2.1` — `@chitin/skills` package root
+    pub const PKG_SKILLS: Oid = Oid::from_segments(&[1, 1, 1, 2, 1]);
 }
 
 impl fmt::Debug for Oid {
