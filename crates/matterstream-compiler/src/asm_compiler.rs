@@ -1469,18 +1469,18 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                     // Build TKV template from props (sorted, canonicalized)
                     if !node.props.is_empty() {
                         let template = build_ext_props_template(asm, oid_val, &node.props);
+                        let template_idx = asm.tkv_static_table.len() as u32;
                         asm.tkv_static_table.push(template);
-                        // Emit: push OID → UserCall(TKV, CLONE) to clone template
-                        asm.push128(oid_val);
+                        // Emit: push template index → UserCall(TKV, CLONE)
+                        asm.push32(template_idx);
                         asm.user_call(
                             matterstream_vm_asm::user_call::TKV,
                             matterstream_vm_addressing::tkv_ops::TkvOp::Clone as u64,
                         );
                     }
-                    // Push OID and resolve → ExecComponent
+                    // Push OID and dispatch — NativeHook or Component
                     asm.push128(oid_val);
-                    asm.oid_import();
-                    asm.op(matterstream_vm::rpn::RpnOp::ExecComponent);
+                    asm.oid_call();
                     return;
                 }
             }

@@ -11,6 +11,38 @@ use matterstream_vm::addressing::{
 use matterstream_vm_arena::TripleArena;
 use std::any::Any;
 
+/// Load compiled TKV templates into the nursery arena and register in the VM.
+/// Call after VM creation and before execution.
+pub fn load_templates(
+    vm: &mut matterstream_vm::rpn::RpnVm,
+    arenas: &mut TripleArena,
+    templates: &[crate::TkvTemplate],
+) {
+    for tmpl in templates {
+        // Serialize entries to bytes: [u32 count] + [16-byte entries...]
+        let count = tmpl.entries.len();
+        let size = TKV_HEADER_SIZE + count * TKV_ENTRY_SIZE;
+        let mut data = vec![0u8; size];
+        data[0..4].copy_from_slice(&(count as u32).to_le_bytes());
+        for (i, entry) in tmpl.entries.iter().enumerate() {
+            let offset = TKV_HEADER_SIZE + i * TKV_ENTRY_SIZE;
+            data[offset..offset + TKV_ENTRY_SIZE].copy_from_slice(&entry.to_bytes());
+        }
+
+        // Allocate in nursery (immutable)
+        match arenas.alloc_nursery(size) {
+            Ok(ova) => {
+                if arenas.write(ova, &data).is_ok() {
+                    vm.tkv_static_templates.push(ova);
+                }
+            }
+            Err(e) => {
+                // silently skip — nursery may be full
+            }
+        }
+    }
+}
+
 pub struct TkvArenaHandler;
 
 impl TkvArenaHandler {
@@ -27,9 +59,9 @@ impl UserCallHandler for TkvArenaHandler {
         let op = TkvOp::from_u64(sub).ok_or(RpnError::TypeMismatch)?;
         match op {
             TkvOp::Clone => {
-                let oid_u128 = pop_u128(vm)?;
+                let template_idx = vm.pop_u32()? as usize;
                 let template_ova = vm.tkv_static_templates()
-                    .get(&oid_u128)
+                    .get(template_idx)
                     .copied()
                     .ok_or(RpnError::TypeMismatch)?;
                 let data = arenas.read(template_ova)

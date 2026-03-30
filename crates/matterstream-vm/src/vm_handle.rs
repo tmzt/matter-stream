@@ -84,8 +84,8 @@ impl<'a> VmHandle<'a> {
         }
     }
 
-    /// Access the TKV static templates — OID → nursery OVA.
-    pub fn tkv_static_templates(&self) -> &std::collections::HashMap<u128, matterstream_vm_addressing::ova::Ova> {
+    /// Access the TKV static templates — index → nursery OVA.
+    pub fn tkv_static_templates(&self) -> &[matterstream_vm_addressing::ova::Ova] {
         &self.vm.tkv_static_templates
     }
 }

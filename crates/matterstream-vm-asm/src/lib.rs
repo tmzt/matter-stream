@@ -376,6 +376,12 @@ impl Asm {
         self
     }
 
+    /// OID call: resolves OID and dispatches — NativeHook or FQA push.
+    pub fn oid_call(&mut self) -> &mut Self {
+        self.tokens.push(AsmToken::UserCall(user_call::OID_CALL, 0));
+        self
+    }
+
     /// Read from UserAtomicReadable[slot] → pushes u32 to stack.
     pub fn read_user_atomic(&mut self, slot: u32) -> &mut Self {
         self.push32(slot);

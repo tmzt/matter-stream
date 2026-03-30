@@ -823,10 +823,10 @@ pub struct RpnVm {
     pub zero_page: [u8; 256],
     // String table for UiTextStr
     pub string_table: Vec<String>,
-    /// TKV static templates — OID → nursery OVA. Each template is a contiguous
-    /// block of TkvFixedEntry (16 bytes each) in the nursery arena.
-    /// Populated at load time from compiled template data.
-    pub tkv_static_templates: std::collections::HashMap<u128, Ova>,
+    /// TKV static templates — sequential index → nursery OVA. Each template is a
+    /// contiguous block of TkvFixedEntry (16 bytes each) in the nursery arena.
+    /// Populated at load time from compiled AsmOutput::tkv_static_table.
+    pub tkv_static_templates: Vec<Ova>,
     /// Mutable string bank (runtime-writable, 256 nullable slots).
     pub string_bank: Vec<Option<String>>,
 
@@ -914,7 +914,7 @@ impl RpnVm {
             vec4_bank: [[0.0; 4]; 16],
             zero_page: [0; 256],
             string_table: Vec::new(),
-            tkv_static_templates: std::collections::HashMap::new(),
+            tkv_static_templates: Vec::new(),
             string_bank: vec![None; 256],
             shared_state: None,
             user_atomics_readable: (0..256).map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
