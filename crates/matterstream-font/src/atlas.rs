@@ -244,24 +244,26 @@ impl FontAtlasBuilder {
         // Translate: center the em square horizontally, position baseline
         // so descenders have room below. Baseline at Y=0 in font coords.
         let tx = margin;
-        // Put baseline at 65% from bottom of cell (35% for descenders)
-        let ty = margin + usable * 0.35;
+        // Put baseline at 50% of usable area (equal space for ascenders and descenders)
+        let ty = margin + usable * 0.50;
 
         // Projection: font_units → atlas_pixels
-        let proj = msdfgen::Projection::new(
-            msdfgen::Vector2::new(em_scale, em_scale),
-            msdfgen::Vector2::new(tx, ty),
-        );
         let framing = Framing {
             range: self.px_range,
-            projection: proj,
+            projection: msdfgen::Projection::new(
+                msdfgen::Vector2::new(em_scale, em_scale),
+                msdfgen::Vector2::new(tx, ty),
+            ),
         };
 
-        // Store the projection pre-scaled by upem for em-normalized shader math
-        let proj_sx = (em_scale * upem) as f32; // = usable
-        let proj_sy = (em_scale * upem) as f32;
-        let proj_tx = tx as f32;
-        let proj_ty = ty as f32;
+        // Shader layout metrics (same for all glyphs, uniform projection)
+        // baseline_row: which atlas row (from top) the baseline sits at.
+        // In the atlas, row 0 is top. The projection puts baseline (font Y=0)
+        // at atlas Y = ty (from bottom). After blit Y-flip, baseline is at
+        // row gs - ty from top.
+        let baseline_row = (gs as f64 - ty) as f32;
+        let px_per_em = (em_scale * upem) as f32; // = usable
+        let x_margin = tx as f32;
 
         struct GlyphResult {
             glyph_id: u16,
@@ -323,9 +325,13 @@ impl FontAtlasBuilder {
         for result in &results {
             for row in 0..gs {
                 for col in 0..gs {
+                    // Flip Y: msdfgen bitmap row 0 = bottom (font Y up)
+                    // Atlas texture row 0 = top (screen Y down)
+                    // Store bottom of glyph at bottom of atlas cell
                     let src_idx = ((row * gs + col) * channels) as usize;
+                    let flipped_row = gs - 1 - row;
                     let dst_idx =
-                        (((result.atlas_y + row) * atlas_w + result.atlas_x + col) * channels)
+                        (((result.atlas_y + flipped_row) * atlas_w + result.atlas_x + col) * channels)
                             as usize;
                     if src_idx + 2 < result.msdf_data.len()
                         && dst_idx + 2 < pixel_data.len()
@@ -344,7 +350,7 @@ impl FontAtlasBuilder {
                 atlas_w: gs as u16,
                 atlas_h: gs as u16,
                 advance_x: result.advance_x,
-                proj_sx, proj_sy, proj_tx, proj_ty,
+                baseline_row, px_per_em, x_margin,
             };
             glyph_index.insert(result.glyph_id, glyphs.len());
             glyphs.push(entry);

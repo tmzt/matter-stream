@@ -315,23 +315,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let atlas_gh = f32(g0.z >> 16u);
                     let advance_x_norm = bitcast<f32>(g0.w);
 
-                    let proj_sx = bitcast<f32>(g1.x);
-                    let proj_sy = bitcast<f32>(g1.y);
-                    let proj_tx = bitcast<f32>(g1.z);
-                    let proj_ty = bitcast<f32>(g1.w);
+                    // Layout metrics from glyph table
+                    let baseline_row = bitcast<f32>(g1.x);  // atlas row of baseline (from top)
+                    let px_per_em = bitcast<f32>(g1.y);      // atlas pixels per em
+                    let x_margin_px = bitcast<f32>(g1.z);    // left margin in atlas px
 
                     let advance_px = advance_x_norm * font_size + delta_px;
                     let gx = line_x + cursor_x;
 
-                    // Screen → em-normalized coordinates
-                    // em_x: horizontal offset from glyph origin in em units
-                    // em_y: vertical offset from baseline, positive = up (font convention)
-                    let em_x = (effective_pixel.x - gx) / font_size;
-                    let em_y = (baseline_screen_y - effective_pixel.y) / font_size;
+                    // Screen → atlas cell coordinates (simple proportional mapping)
+                    // X: screen offset from glyph origin → atlas pixels
+                    let screen_dx = effective_pixel.x - gx;
+                    let acx = screen_dx / font_size * px_per_em + x_margin_px;
 
-                    // Em-normalized → atlas cell pixels via uniform projection
-                    let acx = em_x * proj_sx + proj_tx;
-                    let acy = em_y * proj_sy + proj_ty;
+                    // Y: screen offset from baseline → atlas pixels from baseline row
+                    // Screen Y increases downward; atlas row increases downward
+                    // So screen pixels below baseline → atlas rows below baseline_row
+                    let screen_dy = effective_pixel.y - baseline_screen_y;
+                    let acy = baseline_row + screen_dy / font_size * px_per_em;
 
                     // Atlas cell bounds check (prevents sampling adjacent cells)
                     if acx >= 0.0 && acx < atlas_gw &&
