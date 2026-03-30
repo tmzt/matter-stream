@@ -190,7 +190,7 @@ fn build_scene() -> PreparedScene {
         doc.instructions.push(Command32::draw_shape(h, w));
     }
 
-    let sdf_frame = mtd1_to_sdf(&doc, &glyph_id_to_table_index, &standard_advances, font_size, px_range, atlas.baseline_frac);
+    let sdf_frame = mtd1_to_sdf(&doc, &glyph_id_to_table_index, &standard_advances, font_size, px_range);
 
     println!(
         "Compiled: {} instructions → {} SdfDrawCmds, {} chars, {} MSDF text draws",

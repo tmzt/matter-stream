@@ -35,7 +35,6 @@ pub fn mtd1_to_sdf(
     standard_advances: &std::collections::HashMap<u16, f32>,
     font_size: f32,
     px_range: f32,
-    baseline_frac: f32,
 ) -> SdfFrame {
     let mut draws = Vec::new();
     let mut char_buffer: Vec<u32> = Vec::new();
@@ -53,6 +52,7 @@ pub fn mtd1_to_sdf(
     let mut batch_y: f32 = 0.0;
     let mut batch_char_offset: u32 = 0;
     let mut batch_char_count: u32 = 0;
+    let mut batch_total_advance: f32 = 0.0;
     let mut batch_color: [f32; 4] = [1.0; 4];
     let mut batch_pictographic = false;
     let mut in_batch = false;
@@ -62,6 +62,7 @@ pub fn mtd1_to_sdf(
                  y: f32,
                  char_offset: u32,
                  char_count: u32,
+                 total_advance: f32,
                  color: [f32; 4],
                  font_size: f32,
                  px_range: f32,
@@ -71,8 +72,9 @@ pub fn mtd1_to_sdf(
             return;
         }
         let packed_slot = (char_offset << 16) | (char_count & 0xFFFF);
-        let total_width = char_count as f32 * font_size * 0.6;
+        
         if pictographic {
+            let total_width = char_count as f32 * font_size * 0.6;
             // Bitmap path for emoji/pictographic
             draws.push(SdfDrawCmd {
                 pos: [start_x, y],
@@ -83,11 +85,20 @@ pub fn mtd1_to_sdf(
         } else {
             // MSDF path — default for all text
             // size.y = line box height (ascender + descender + margins)
+            
+            // Padding logic: the atlas cell has 15% horizontal margin.
+            // We must expand the bounding box to include these margins.
+            let x_margin_frac = 0.15f32;
+            let left_margin = x_margin_frac * line_box_h;
+            let right_margin = x_margin_frac * line_box_h;
+            let box_w = total_advance + left_margin + right_margin;
+
             draws.push(SdfDrawCmd {
-                pos: [start_x, y],
-                size: [total_width, line_box_h],
+                pos: [start_x - left_margin, y],
+                size: [box_w, line_box_h],
                 color,
-                params: [DRAW_TYPE_MSDF_TEXT, px_range, baseline_frac, f32::from_bits(packed_slot)],
+                // params.z = x_margin_frac so the shader knows how to align
+                params: [DRAW_TYPE_MSDF_TEXT, px_range, x_margin_frac, f32::from_bits(packed_slot)],
             });
         }
     };
@@ -98,7 +109,7 @@ pub fn mtd1_to_sdf(
                 if in_batch {
                     flush(
                         &mut draws, batch_start_x, batch_y,
-                        batch_char_offset, batch_char_count,
+                        batch_char_offset, batch_char_count, batch_total_advance,
                         batch_color, font_size, px_range, batch_pictographic, line_box_h,
                     );
                     in_batch = false;
@@ -112,7 +123,7 @@ pub fn mtd1_to_sdf(
                 if in_batch {
                     flush(
                         &mut draws, batch_start_x, batch_y,
-                        batch_char_offset, batch_char_count,
+                        batch_char_offset, batch_char_count, batch_total_advance,
                         batch_color, font_size, px_range, batch_pictographic, line_box_h,
                     );
                     in_batch = false;
@@ -131,7 +142,7 @@ pub fn mtd1_to_sdf(
                 if in_batch && batch_pictographic != is_pictographic {
                     flush(
                         &mut draws, batch_start_x, batch_y,
-                        batch_char_offset, batch_char_count,
+                        batch_char_offset, batch_char_count, batch_total_advance,
                         batch_color, font_size, px_range, batch_pictographic, line_box_h,
                     );
                     in_batch = false;
@@ -142,6 +153,7 @@ pub fn mtd1_to_sdf(
                     batch_y = cursor_y;
                     batch_char_offset = char_buffer.len() as u32;
                     batch_char_count = 0;
+                    batch_total_advance = 0.0;
                     batch_color = current_color;
                     batch_pictographic = is_pictographic;
                     in_batch = true;
@@ -163,6 +175,7 @@ pub fn mtd1_to_sdf(
                     char_buffer.push((gt_idx as u32) << 16 | delta_fixed);
                 }
                 batch_char_count += 1;
+                batch_total_advance += advance as f32;
                 cursor_x += advance as f32;
             }
 
@@ -170,7 +183,7 @@ pub fn mtd1_to_sdf(
                 if in_batch {
                     flush(
                         &mut draws, batch_start_x, batch_y,
-                        batch_char_offset, batch_char_count,
+                        batch_char_offset, batch_char_count, batch_total_advance,
                         batch_color, font_size, px_range, batch_pictographic, line_box_h,
                     );
                     in_batch = false;
@@ -192,7 +205,7 @@ pub fn mtd1_to_sdf(
     if in_batch {
         flush(
             &mut draws, batch_start_x, batch_y,
-            batch_char_offset, batch_char_count,
+            batch_char_offset, batch_char_count, batch_total_advance,
             batch_color, font_size, px_range, batch_pictographic, line_box_h,
         );
     }
@@ -228,7 +241,7 @@ mod tests {
 
         let gid_map = std::collections::HashMap::from([(65u16, 0u16), (66, 1)]);
         let adv_map = std::collections::HashMap::from([(65u16, 0.5f32), (66, 0.5)]);
-        let frame = mtd1_to_sdf(&doc, &gid_map, &adv_map, 16.0, 4.0, 0.75);
+        let frame = mtd1_to_sdf(&doc, &gid_map, &adv_map, 16.0, 4.0);
 
         assert!(!frame.draws.is_empty());
         // Should be MSDF, not bitmap
@@ -249,7 +262,7 @@ mod tests {
 
         let gid_map = std::collections::HashMap::new();
         let adv_map = std::collections::HashMap::new();
-        let frame = mtd1_to_sdf(&doc, &gid_map, &adv_map, 16.0, 4.0, 0.75);
+        let frame = mtd1_to_sdf(&doc, &gid_map, &adv_map, 16.0, 4.0);
 
         let has_bitmap = frame.draws.iter().any(|d| d.draw_type() == DRAW_TYPE_TEXT);
         assert!(has_bitmap, "pictographic glyphs should use bitmap (type 4)");
@@ -272,7 +285,7 @@ mod tests {
 
         let gid_map = std::collections::HashMap::from([(72u16, 0u16)]);
         let adv_map = std::collections::HashMap::from([(72u16, 0.5f32)]);
-        let frame = mtd1_to_sdf(&doc, &gid_map, &adv_map, 16.0, 4.0, 0.75);
+        let frame = mtd1_to_sdf(&doc, &gid_map, &adv_map, 16.0, 4.0);
 
         let msdf_count = frame.draws.iter().filter(|d| d.draw_type() == DRAW_TYPE_MSDF_TEXT).count();
         let bitmap_count = frame.draws.iter().filter(|d| d.draw_type() == DRAW_TYPE_TEXT).count();

@@ -38,24 +38,8 @@ fn main() {
     let origin_x: f32 = 30.0;
     let origin_y: f32 = 10.0; // top of first line box
 
-    // Build MSDF atlas
-    let mut builder = FontAtlasBuilder::new(font_data, 512, px_range as f64);
-    builder.add_ascii();
-    let atlas = builder.build().expect("atlas build failed");
-    println!("Atlas: {}x{}, {} glyphs, baseline_frac={:.3}", atlas.width, atlas.height, atlas.glyphs.len(), atlas.baseline_frac);
-
-    // Line box: sane 1.3x scaling (~77% EM size) to match atlas cell
-    let line_box_h: f32 = font_size * 1.3;
-    let line_gap: f32 = font_size * 0.3;
-
-    let mut gid_to_idx: HashMap<u16, u16> = HashMap::new();
-    let mut std_advances: HashMap<u16, f32> = HashMap::new();
-    let mut glyph_table_u32s: Vec<u32> = Vec::new();
-    for (i, e) in atlas.glyphs.iter().enumerate() {
-        gid_to_idx.insert(e.glyph_id, i as u16);
-        std_advances.insert(e.glyph_id, e.advance_x);
-        glyph_table_u32s.extend_from_slice(&e.to_gpu_u32s());
-    }
+    // Build MSDF atlas — first pass to collect needed glyphs
+    let mut builder = FontAtlasBuilder::new(font_data.clone(), 512, px_range as f64);
 
     let upem = shaper.units_per_em();
     let scale = font_size / upem as f32;
@@ -77,18 +61,40 @@ fn main() {
 
     for (row_idx, row) in rows.iter().enumerate() {
         // y = top of line box for this row
-        let y = origin_y + row_idx as f32 * (line_box_h + line_gap);
+        let y = origin_y + row_idx as f32 * (font_size * 1.3 + font_size * 0.3);
         for (col_idx, ch) in row.chars().enumerate() {
             let x = origin_x + col_idx as f32 * cell_w;
             doc.instructions.push(Command32::set_cursor(y as i16, x as i16));
 
             let s = ch.to_string();
             let run = shaper.shape(&s);
+            if ch.is_ascii_digit() {
+                let g = &run.glyphs[0];
+                println!("Digit '{}': GID={}, x_off={}, y_off={}", ch, g.glyph_id, g.x_offset, g.y_offset);
+            }
             for g in &run.glyphs {
                 let adv = (g.x_advance as f32 * scale + 0.5) as u16;
                 doc.instructions.push(Command32::draw_glyph(adv.max(1).min(4095), g.glyph_id));
+                // Ensure this specific glyph ID is in the atlas
+                builder.add_glyph(g.glyph_id);
             }
         }
+    }
+
+    let atlas = builder.build().expect("atlas build failed");
+    println!("Atlas: {}x{}, {} glyphs, baseline_frac={:.3}", atlas.width, atlas.height, atlas.glyphs.len(), atlas.baseline_frac);
+
+    // Line box: sane 1.3x scaling (~77% EM size) to match atlas cell
+    let line_box_h: f32 = font_size * 1.3;
+    let line_gap: f32 = font_size * 0.3;
+
+    let mut gid_to_idx: HashMap<u16, u16> = HashMap::new();
+    let mut std_advances: HashMap<u16, f32> = HashMap::new();
+    let mut glyph_table_u32s: Vec<u32> = Vec::new();
+    for (i, e) in atlas.glyphs.iter().enumerate() {
+        gid_to_idx.insert(e.glyph_id, i as u16);
+        std_advances.insert(e.glyph_id, e.advance_x);
+        glyph_table_u32s.extend_from_slice(&e.to_gpu_u32s());
     }
 
     fn msdf_median(r: f32, g: f32, b: f32) -> f32 {
@@ -110,10 +116,10 @@ fn main() {
             rgba.push(g);
             rgba.push(b);
 
-            // Alpha: glyph interior is dark in atlas (r,g,b near 0)
-            // sd < 0.5 is inside. We want alpha=0 (transparent) for inside, alpha=255 for outside.
+            // Alpha: glyph interior is light in atlas (sd > 0.5)
+            // sd > 0.5 is inside. We want alpha=0 (transparent) for inside, alpha=255 for outside.
             let sd = msdf_median(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
-            rgba.push((sd.clamp(0.0, 1.0) * 255.0) as u8);
+            rgba.push(((1.0 - sd.clamp(0.0, 1.0)) * 255.0) as u8);
         }
         let f = std::fs::File::create("/Users/tmeade/src/common-data/atlas_raw.png").unwrap();
         let mut enc = png::Encoder::new(f, atlas.width, atlas.height);
@@ -124,7 +130,7 @@ fn main() {
         println!("Atlas raw PNG: {}x{} → ~/src/common-data/atlas_raw.png", atlas.width, atlas.height);
     }
 
-    let sdf_frame = mtd1_to_sdf(&doc, &gid_to_idx, &std_advances, font_size, px_range, atlas.baseline_frac);
+    let sdf_frame = mtd1_to_sdf(&doc, &gid_to_idx, &std_advances, font_size, px_range);
     println!("Draws: {}, chars: {}", sdf_frame.draws.len(), sdf_frame.char_buffer.len());
 
     // RGB → RGBA

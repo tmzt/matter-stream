@@ -46,6 +46,7 @@ impl ShapedRun {
 pub struct TextShaper {
     face_data: Vec<u8>,
     units_per_em: u16,
+    default_features: Vec<(ttf_parser::Tag, u32)>,
 }
 
 impl TextShaper {
@@ -57,24 +58,34 @@ impl TextShaper {
         Ok(Self {
             face_data: font_data,
             units_per_em,
+            default_features: vec![
+                (ttf_parser::Tag::from_bytes(b"lnum"), 1),
+                (ttf_parser::Tag::from_bytes(b"pnum"), 1),
+            ],
         })
+    }
+
+    /// Set the default OpenType features.
+    pub fn set_default_features(&mut self, features: Vec<(ttf_parser::Tag, u32)>) {
+        self.default_features = features;
     }
 
     /// Shape a text string into positioned glyphs.
     ///
-    /// Uses default left-to-right, Latin script settings. For complex scripts,
-    /// use `shape_with_options`.
+    /// Uses default left-to-right, Latin script settings and default features.
     pub fn shape(&self, text: &str) -> ShapedRun {
-        self.shape_with_options(text, rustybuzz::Direction::LeftToRight, None, None)
+        self.shape_with_options(text, rustybuzz::Direction::LeftToRight, None, None, &self.default_features)
     }
 
-    /// Shape with explicit direction, script, and language.
+    /// Shape with explicit direction, script, language, and OpenType features.
+    /// Features are passed as (tag, value) pairs, e.g. (b"lnum", 1).
     pub fn shape_with_options(
         &self,
         text: &str,
         direction: rustybuzz::Direction,
         script: Option<rustybuzz::Script>,
         language: Option<rustybuzz::Language>,
+        features: &[(ttf_parser::Tag, u32)],
     ) -> ShapedRun {
         let face = rustybuzz::Face::from_slice(&self.face_data, 0)
             .expect("face already validated in new()");
@@ -89,7 +100,14 @@ impl TextShaper {
             buffer.set_language(l);
         }
 
-        let output = rustybuzz::shape(&face, &[], buffer);
+        let mut rb_features: Vec<rustybuzz::Feature> = features.iter().map(|&(tag, val)| {
+            rustybuzz::Feature::new(tag, val, ..)
+        }).collect();
+        
+        // Features MUST be sorted by tag for rustybuzz/HarfBuzz
+        rb_features.sort_by_key(|f| f.tag);
+
+        let output = rustybuzz::shape(&face, &rb_features, buffer);
 
         let infos = output.glyph_infos();
         let positions = output.glyph_positions();

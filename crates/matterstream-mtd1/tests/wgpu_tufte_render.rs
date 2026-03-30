@@ -65,7 +65,7 @@ fn wgpu_headless_tufte_render() {
         doc.instructions.push(Command32::draw_glyph(adv.max(1).min(4095), g.glyph_id));
     }
 
-    let sdf_frame = mtd1_to_sdf(&doc, &gid_to_idx, &std_advances, font_size, px_range, atlas.baseline_frac);
+    let sdf_frame = mtd1_to_sdf(&doc, &gid_to_idx, &std_advances, font_size, px_range);
 
     println!("Draws: {}, chars: {}", sdf_frame.draws.len(), sdf_frame.char_buffer.len());
 

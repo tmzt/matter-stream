@@ -275,13 +275,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
             case 8u: { // MSDF Text — uniform em-square projection
                 let px_range = max(cmd.params.y, 2.0);
+                let x_margin_frac = cmd.params.z;
                 let packed = bitcast<u32>(cmd.params.w);
                 let char_offset = packed >> 16u;
                 let char_count = packed & 0xFFFFu;
 
-                let line_x = cmd.pos.x;
-                let line_y = cmd.pos.y;
                 let line_h = cmd.size.y;
+                // line_x is the actual origin of the first glyph.
+                // cmd.pos.x was shifted left by x_margin_frac * line_h in mtd1_to_sdf.
+                let line_x = cmd.pos.x + x_margin_frac * line_h;
+                let line_y = cmd.pos.y;
 
                 let atlas_dim = vec2<f32>(textureDimensions(msdf_atlas));
 
@@ -336,8 +339,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         let sample = textureSample(msdf_atlas, msdf_sampler, vec2<f32>(u, v));
                         let sd = msdf_median(sample.r, sample.g, sample.b);
 
-                        // Invert: sd < 0.5 is inside (since atlas is black-on-white)
-                        let alpha = clamp(px_range * (0.5 - sd) + 0.5, 0.0, 1.0);
+                        // Standard: sd > 0.5 is inside
+                        let alpha = clamp(px_range * (sd - 0.5) + 0.5, 0.0, 1.0);
 
                         if alpha > 0.01 {
                             let glyph_color = vec4<f32>(cmd.color.rgb, cmd.color.a * alpha);
