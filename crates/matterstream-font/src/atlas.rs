@@ -231,20 +231,46 @@ impl FontAtlasBuilder {
         let channels = 3u32; // MSDF = RGB
         let mut packer = ShelfPacker::new(atlas_w);
 
-        // Per-glyph MSDF generation with autoframe projection
+        // Uniform em-square projection: all glyphs share the same scale.
+        // The projection maps the full em square (0..upem) into the atlas cell,
+        // preserving relative glyph sizes. We use the em height directly so
+        // the shader can map 1:1 between screen and atlas with a simple scale.
+        let upem = face25.units_per_em() as f64;
+        let margin = self.px_range;
+        let usable = gs as f64 - 2.0 * margin;
+
+        // Scale to fit 1 em into the usable cell area
+        let em_scale = usable / upem;
+        // Translate: center the em square horizontally, position baseline
+        // so descenders have room below. Baseline at Y=0 in font coords.
+        let tx = margin;
+        // Put baseline at 65% from bottom of cell (35% for descenders)
+        let ty = margin + usable * 0.35;
+
+        // Projection: font_units → atlas_pixels
+        let proj = msdfgen::Projection::new(
+            msdfgen::Vector2::new(em_scale, em_scale),
+            msdfgen::Vector2::new(tx, ty),
+        );
+        let framing = Framing {
+            range: self.px_range,
+            projection: proj,
+        };
+
+        // Store the projection pre-scaled by upem for em-normalized shader math
+        let proj_sx = (em_scale * upem) as f32; // = usable
+        let proj_sy = (em_scale * upem) as f32;
+        let proj_tx = tx as f32;
+        let proj_ty = ty as f32;
+
         struct GlyphResult {
             glyph_id: u16,
             atlas_x: u32,
             atlas_y: u32,
             advance_x: f32,
-            proj_sx: f32,
-            proj_sy: f32,
-            proj_tx: f32,
-            proj_ty: f32,
             msdf_data: Vec<u8>,
         }
 
-        let upem = face25.units_per_em() as f64;
         let mut results = Vec::with_capacity(num_glyphs);
 
         for &glyph_id in &self.queued_glyphs {
@@ -258,30 +284,10 @@ impl FontAtlasBuilder {
                 && face25.glyph_bounding_box(gid25).is_some();
 
             let mut msdf_data = vec![0u8; (gs * gs * channels) as usize];
-            let mut proj_sx: f32 = 0.0;
-            let mut proj_sy: f32 = 0.0;
-            let mut proj_tx: f32 = 0.0;
-            let mut proj_ty: f32 = 0.0;
 
             if has_outline {
                 let mut bitmap: Bitmap<Rgb<f32>> = Bitmap::new(gs, gs);
                 if let Some(mut shape) = face18.glyph_shape(gid18) {
-                    // Per-glyph autoframe: each glyph fills its cell for maximum
-                    // MSDF resolution. The projection is stored per-glyph.
-                    let bound = shape.get_bound();
-                    let framing = bound
-                        .autoframe(gs, gs, Range::Px(self.px_range), None)
-                        .unwrap_or_else(|| Framing::default());
-
-                    // Store projection pre-scaled by upem so the shader can use
-                    // em-normalized coordinates (screen_delta / font_size) directly.
-                    // Original projection: atlas_px = font_units * scale + translate
-                    // Pre-scaled:          atlas_px = em_norm * (scale * upem) + translate
-                    proj_sx = (framing.projection.scale.x * upem) as f32;
-                    proj_sy = (framing.projection.scale.y * upem) as f32;
-                    proj_tx = framing.projection.translate.x as f32;
-                    proj_ty = framing.projection.translate.y as f32;
-
                     shape.edge_coloring_simple(3.0, 0);
                     shape.generate_msdf(&mut bitmap, &framing, MsdfGeneratorConfig::default());
                     shape.correct_sign(&mut bitmap, &framing, FillRule::default());
@@ -304,7 +310,6 @@ impl FontAtlasBuilder {
                 atlas_x: atlas_x + 1,
                 atlas_y: atlas_y + 1,
                 advance_x,
-                proj_sx, proj_sy, proj_tx, proj_ty,
                 msdf_data,
             });
         }
@@ -339,19 +344,15 @@ impl FontAtlasBuilder {
                 atlas_w: gs as u16,
                 atlas_h: gs as u16,
                 advance_x: result.advance_x,
-                proj_sx: result.proj_sx,
-                proj_sy: result.proj_sy,
-                proj_tx: result.proj_tx,
-                proj_ty: result.proj_ty,
+                proj_sx, proj_sy, proj_tx, proj_ty,
             };
             glyph_index.insert(result.glyph_id, glyphs.len());
             glyphs.push(entry);
         }
 
-        // baseline_frac from hhea metrics: ascender / (ascender - descender)
-        let ascender = face25.ascender() as f64;
-        let descender = face25.descender() as f64;
-        let baseline_frac = (ascender / (ascender - descender)) as f32;
+        // baseline_frac: baseline sits at ty from bottom of cell
+        // In screen coords (Y down from top): baseline_frac = 1 - ty/gs
+        let baseline_frac = (1.0 - ty / gs as f64) as f32;
 
         Ok(FontAtlas {
             width: atlas_w,
