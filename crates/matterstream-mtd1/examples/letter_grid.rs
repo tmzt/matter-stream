@@ -35,7 +35,7 @@ fn main() {
     let font_size: f32 = 48.0;
     let px_range: f32 = 8.0;
     let cell_w: f32 = 52.0;
-    let cell_h: f32 = 64.0;
+    let line_spacing: f32 = font_size * 0.6; // blank gap between descenders and next ascenders
     let origin_x: f32 = 30.0;
     let origin_y: f32 = 30.0;
 
@@ -73,7 +73,7 @@ fn main() {
     doc.instructions.push(Command32::set_style(0));
 
     for (row_idx, row) in rows.iter().enumerate() {
-        let y = origin_y + row_idx as f32 * cell_h;
+        let y = origin_y + row_idx as f32 * (font_size + line_spacing);
         for (col_idx, ch) in row.chars().enumerate() {
             let x = origin_x + col_idx as f32 * cell_w;
             doc.instructions.push(Command32::set_cursor(y as i16, x as i16));
@@ -113,8 +113,9 @@ fn main() {
         }
     }
 
+    let num_rows = rows.len() as f32;
     let width = 750u32;
-    let height = 420u32;
+    let height = (origin_y * 2.0 + num_rows * (font_size + line_spacing)) as u32;
 
     if let Some(path) = png_path {
         // Offscreen render
