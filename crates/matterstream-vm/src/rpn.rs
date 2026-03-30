@@ -995,6 +995,16 @@ impl RpnVm {
         handler.as_any().downcast::<T>().ok()
     }
 
+    /// Find the index of an OR page handler by FourCC.
+    pub fn or_pages_position(&self, fourcc: u32) -> Option<usize> {
+        self.or_pages.iter().position(|(f, _)| *f == fourcc)
+    }
+
+    /// Remove an OR page handler by index (swap_remove). Returns (fourcc, handler).
+    pub fn or_pages_swap_remove(&mut self, idx: usize) -> (u32, Box<dyn OrPageHandler>) {
+        self.or_pages.swap_remove(idx)
+    }
+
     /// Register an external UserCall handler for a given action_op.
     pub fn register_user_call(&mut self, action_op: u64, handler: Box<dyn UserCallHandler>) {
         self.user_call_handlers.insert(action_op, handler);
