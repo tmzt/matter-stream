@@ -35,15 +35,18 @@ fn main() {
     let font_size: f32 = 48.0;
     let px_range: f32 = 8.0;
     let cell_w: f32 = 52.0;
-    let line_spacing: f32 = font_size * 0.6; // blank gap between descenders and next ascenders
     let origin_x: f32 = 30.0;
-    let origin_y: f32 = font_size + 10.0; // baseline of first row (leave room for ascenders)
+    let origin_y: f32 = 10.0; // top of first line box
 
     // Build MSDF atlas
     let mut builder = FontAtlasBuilder::new(font_data, 128, px_range as f64);
     builder.add_ascii();
     let atlas = builder.build().expect("atlas build failed");
-    println!("Atlas: {}x{}, {} glyphs", atlas.width, atlas.height, atlas.glyphs.len());
+    println!("Atlas: {}x{}, {} glyphs, baseline_frac={:.3}", atlas.width, atlas.height, atlas.glyphs.len(), atlas.baseline_frac);
+
+    // Line box: top → ascender space → baseline → descender space → bottom
+    let line_box_h: f32 = font_size / atlas.baseline_frac.max(0.1);
+    let line_gap: f32 = font_size * 0.3;
 
     let mut gid_to_idx: HashMap<u16, u16> = HashMap::new();
     let mut std_advances: HashMap<u16, f32> = HashMap::new();
@@ -73,7 +76,8 @@ fn main() {
     doc.instructions.push(Command32::set_style(0));
 
     for (row_idx, row) in rows.iter().enumerate() {
-        let y = origin_y + row_idx as f32 * (font_size + line_spacing);
+        // y = top of line box for this row
+        let y = origin_y + row_idx as f32 * (line_box_h + line_gap);
         for (col_idx, ch) in row.chars().enumerate() {
             let x = origin_x + col_idx as f32 * cell_w;
             doc.instructions.push(Command32::set_cursor(y as i16, x as i16));
@@ -115,7 +119,7 @@ fn main() {
 
     let num_rows = rows.len() as f32;
     let width = 750u32;
-    let height = (origin_y * 2.0 + num_rows * (font_size + line_spacing)) as u32;
+    let height = (origin_y * 2.0 + num_rows * (line_box_h + line_gap)) as u32;
 
     if let Some(path) = png_path {
         // Offscreen render

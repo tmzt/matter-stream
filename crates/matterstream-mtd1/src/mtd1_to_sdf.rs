@@ -78,9 +78,11 @@ pub fn mtd1_to_sdf(
             });
         } else {
             // MSDF path — default for all text
+            // size.y = line box height (ascender + descender)
+            let line_box_h = font_size / baseline_frac.max(0.1);
             draws.push(SdfDrawCmd {
                 pos: [start_x, y],
-                size: [total_width, font_size],
+                size: [total_width, line_box_h],
                 color,
                 params: [DRAW_TYPE_MSDF_TEXT, px_range, baseline_frac, f32::from_bits(packed_slot)],
             });

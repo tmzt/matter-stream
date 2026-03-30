@@ -286,31 +286,42 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 }
             }
             case 8u: { // MSDF Text — render using multi-channel signed distance field atlas
-                // params.y = px_range (MSDF distance range in atlas pixels)
-                // params.w = packed (char_offset << 16 | char_count)
-                // char_buffer entries: packed [16b glyph_table_index | 16b x_advance_fixed4]
+                //
+                // Line box model:
+                //   cmd.pos.y  = top of the line box
+                //   cmd.size.y = line box height (covers ascender + descender)
+                //   params.z   = baseline_frac (baseline position as fraction from top)
+                //
+                // The atlas cell maps 1:1 to the line box. Glyphs are anchored to
+                // the baseline within the cell. The caller positions lines, not glyphs.
+                //
                 let px_range = max(cmd.params.y, 2.0);
-                let baseline_frac = cmd.params.z; // fraction from cell top to baseline
+                let baseline_frac = cmd.params.z;
                 let packed = bitcast<u32>(cmd.params.w);
                 let char_offset = packed >> 16u;
                 let char_count = packed & 0xFFFFu;
 
-                let text_x = cmd.pos.x;
-                let text_y = cmd.pos.y;
-                let text_h = cmd.size.y; // font size in screen pixels
+                let line_x = cmd.pos.x;
+                let line_y = cmd.pos.y;          // top of line box
+                let line_h = cmd.size.y;          // line box height (ascender + descender)
+                // baseline_y = line_y + baseline_frac * line_h
 
                 let atlas_dim = vec2<f32>(textureDimensions(msdf_atlas));
+
+                // Scale: atlas cell height maps to line box height
+                // (atlas cell and line box represent the same vertical extent)
+                let first_g0 = glyph_table[0u]; // all cells same size
+                let atlas_cell_h = f32(first_g0.z >> 16u);
+                let glyph_scale = line_h / atlas_cell_h;
 
                 var cursor_x: f32 = 0.0;
 
                 for (var ci: u32 = 0u; ci < char_count; ci = ci + 1u) {
                     let entry = char_buffer[char_offset + ci];
                     let gt_idx = entry >> 16u;
-                    // Delta from standard advance: biased by 2048, 1/16 px resolution
                     let delta_biased = f32(entry & 0xFFFFu);
                     let delta_px = (delta_biased - 2048.0) / 16.0;
 
-                    // Glyph table: 2 × vec4<u32> per entry
                     let g0 = glyph_table[gt_idx * 2u];
                     let g1 = glyph_table[gt_idx * 2u + 1u];
 
@@ -319,36 +330,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let atlas_gw = f32(g0.z & 0xFFFFu);
                     let atlas_gh = f32(g0.z >> 16u);
 
-                    // Standard advance + bearings, normalized to em square
                     let advance_x_norm = bitcast<f32>(g1.x);
-                    let bearing_x_norm = bitcast<f32>(g1.y);
-                    let bearing_y_norm = bitcast<f32>(g1.z);
 
-                    // Reconstruct actual advance: standard * font_size + delta
-                    let advance_px = advance_x_norm * text_h + delta_px;
+                    // Reconstruct advance using font_size (= baseline_frac * line_h ≈ em)
+                    let font_size = baseline_frac * line_h;
+                    let advance_px = advance_x_norm * font_size + delta_px;
 
-                    // Scale: atlas cell covers ascender+descender (full vertical extent).
-                    // cell_screen_h = full cell height on screen.
-                    let cell_screen_h = text_h / max(baseline_frac, 0.5);
-                    let glyph_scale = cell_screen_h / atlas_gh;
-
-                    // Glyph position anchored at baseline.
-                    // text_y IS the baseline. Ascenders go up, descenders go down.
-                    // The atlas cell top is at baseline_frac from top, so the cell
-                    // starts at baseline - ascender_height above.
-                    let gx = text_x + cursor_x;
-                    let cell_top_y = text_y - baseline_frac * cell_screen_h;
+                    // Glyph screen position: anchored to line box
+                    let gx = line_x + cursor_x;
 
                     let local_x = effective_pixel.x - gx;
-                    let local_y = effective_pixel.y - cell_top_y;
+                    let local_y = effective_pixel.y - line_y;
 
-                    // Map screen position to atlas UV — no bounding box hit-test.
-                    // The MSDF itself determines inside/outside via the distance field.
+                    // Map screen coords to atlas cell coords
                     let atlas_local_x = local_x / glyph_scale;
-                    // Y: flipped (font Y up → screen Y down)
+                    // Y flipped: screen Y down, font/atlas Y up
                     let atlas_local_y = atlas_gh - local_y / glyph_scale;
 
-                    // Only sample if within the atlas cell — outside means no glyph data
+                    // Sample only within atlas cell bounds
                     if atlas_local_x >= 0.0 && atlas_local_x < atlas_gw &&
                        atlas_local_y >= 0.0 && atlas_local_y < atlas_gh {
                         let u = (atlas_gx + atlas_local_x) / atlas_dim.x;
@@ -357,7 +356,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         let sample = textureSample(msdf_atlas, msdf_sampler, vec2<f32>(u, v));
                         let sd = msdf_median(sample.r, sample.g, sample.b);
 
-                        // MSDF as mask: sd > 0.5 = inside glyph
                         let alpha = clamp(px_range * (sd - 0.5) + 0.5, 0.0, 1.0);
                         if alpha > 0.01 {
                             let glyph_color = vec4<f32>(cmd.color.rgb, cmd.color.a * alpha);
