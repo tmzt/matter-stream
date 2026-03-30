@@ -149,7 +149,7 @@ fn wgpu_headless_tufte_render() {
     assert!(content > 50, "should have rendered MSDF text");
 
     // Save PNG
-    let png_path = std::env::temp_dir().join("tufte_mtd1_wgpu.png");
+    let png_path = "/Users/tmeade/src/common-data/tufte_mtd1_wgpu.png";
     let file = std::fs::File::create(&png_path).unwrap();
     let mut enc = png::Encoder::new(file, width, height);
     enc.set_color(png::ColorType::Rgba);
@@ -164,6 +164,6 @@ fn wgpu_headless_tufte_render() {
     drop(data);
     readback.unmap();
 
-    println!("PNG: {}", png_path.display());
+    println!("PNG: {}", png_path);
     println!("PASS: MSDF text rendering via wgpu");
 }

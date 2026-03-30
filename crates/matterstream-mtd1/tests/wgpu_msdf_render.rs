@@ -214,12 +214,13 @@ fn wgpu_msdf_tufte_render() {
     assert!(content > 100);
 
     // Save PNG
-    let png_path = std::env::temp_dir().join("tufte_msdf_wgpu.png");
+    let png_path = "/Users/tmeade/src/common-data/tufte_msdf_wgpu.png";
     let file = std::fs::File::create(&png_path).unwrap();
-    let mut enc = png::Encoder::new(file, width, height);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    let mut w = enc.write_header().unwrap();
+    let mut png_enc = png::Encoder::new(file, width, height);
+
+    png_enc.set_color(png::ColorType::Rgba);
+    png_enc.set_depth(png::BitDepth::Eight);
+    let mut w = png_enc.write_header().unwrap();
     let mut img = Vec::with_capacity((width * height * bpp) as usize);
     for row in 0..height {
         let rs = (row * padded_row) as usize;
@@ -229,5 +230,5 @@ fn wgpu_msdf_tufte_render() {
     drop(data);
     readback.unmap();
 
-    println!("PNG: {}", png_path.display());
+    println!("PNG: {}", png_path);
 }

@@ -45,7 +45,10 @@ pub fn mtd1_to_sdf(
     let mut current_color: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
     let mut is_pictographic = false;
 
-    // Text batching state
+    // Use a consistent line box height that matches the atlas cell proportions.
+    // 1.3 matches the 30% safety margin added in FontAtlasBuilder.
+    let line_box_h = font_size * 1.3;
+
     let mut batch_start_x: f32 = 0.0;
     let mut batch_y: f32 = 0.0;
     let mut batch_char_offset: u32 = 0;
@@ -62,7 +65,8 @@ pub fn mtd1_to_sdf(
                  color: [f32; 4],
                  font_size: f32,
                  px_range: f32,
-                 pictographic: bool| {
+                 pictographic: bool,
+                 line_box_h: f32| {
         if char_count == 0 {
             return;
         }
@@ -78,8 +82,7 @@ pub fn mtd1_to_sdf(
             });
         } else {
             // MSDF path — default for all text
-            // size.y = line box height (ascender + descender)
-            let line_box_h = font_size / baseline_frac.max(0.1);
+            // size.y = line box height (ascender + descender + margins)
             draws.push(SdfDrawCmd {
                 pos: [start_x, y],
                 size: [total_width, line_box_h],
@@ -96,7 +99,7 @@ pub fn mtd1_to_sdf(
                     flush(
                         &mut draws, batch_start_x, batch_y,
                         batch_char_offset, batch_char_count,
-                        batch_color, font_size, px_range, batch_pictographic,
+                        batch_color, font_size, px_range, batch_pictographic, line_box_h,
                     );
                     in_batch = false;
                 }
@@ -110,7 +113,7 @@ pub fn mtd1_to_sdf(
                     flush(
                         &mut draws, batch_start_x, batch_y,
                         batch_char_offset, batch_char_count,
-                        batch_color, font_size, px_range, batch_pictographic,
+                        batch_color, font_size, px_range, batch_pictographic, line_box_h,
                     );
                     in_batch = false;
                 }
@@ -129,7 +132,7 @@ pub fn mtd1_to_sdf(
                     flush(
                         &mut draws, batch_start_x, batch_y,
                         batch_char_offset, batch_char_count,
-                        batch_color, font_size, px_range, batch_pictographic,
+                        batch_color, font_size, px_range, batch_pictographic, line_box_h,
                     );
                     in_batch = false;
                 }
@@ -168,7 +171,7 @@ pub fn mtd1_to_sdf(
                     flush(
                         &mut draws, batch_start_x, batch_y,
                         batch_char_offset, batch_char_count,
-                        batch_color, font_size, px_range, batch_pictographic,
+                        batch_color, font_size, px_range, batch_pictographic, line_box_h,
                     );
                     in_batch = false;
                 }
@@ -190,7 +193,7 @@ pub fn mtd1_to_sdf(
         flush(
             &mut draws, batch_start_x, batch_y,
             batch_char_offset, batch_char_count,
-            batch_color, font_size, px_range, batch_pictographic,
+            batch_color, font_size, px_range, batch_pictographic, line_box_h,
         );
     }
 

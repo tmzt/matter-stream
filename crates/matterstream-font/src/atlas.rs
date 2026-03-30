@@ -211,7 +211,7 @@ impl FontAtlasBuilder {
 
     /// Build the MSDF atlas from all queued glyphs.
     pub fn build(&self) -> Result<FontAtlas, String> {
-        use msdfgen::{Bitmap, FontExt, Framing, MsdfGeneratorConfig, Range, Rgb, FillRule};
+        use msdfgen::{Bitmap, FontExt, Framing, MsdfGeneratorConfig, Rgb, FillRule};
 
         // Use ttf-parser 0.25 for metrics
         let face25 = ttf_parser::Face::parse(&self.font_data, 0)
@@ -236,24 +236,15 @@ impl FontAtlasBuilder {
         // preserving relative glyph sizes. We use the em height directly so
         // the shader can map 1:1 between screen and atlas with a simple scale.
         let upem = face25.units_per_em() as f64;
-        let margin = self.px_range;
-        let usable = gs as f64 - 2.0 * margin;
 
-        // Compute baseline position: ascender / (ascender + |descender|)
-        let ascender_val = face25.ascender() as f64;
-        let descender_val = face25.descender() as f64; // negative
-        // Add 10% margin to descender to ensure glyph ink near the boundary renders
-        let descender_padded = descender_val * 1.1;
-        let line_height_units = ascender_val - descender_padded;
-        let baseline_frac_val = ascender_val / line_height_units;
+        // Use a sane 1.3x scale factor relative to UPEM.
+        // The EM square will occupy ~77% of the cell.
+        let em_scale = gs as f64 / (upem * 1.3);
 
-        // Scale: map the full line height to fill the ENTIRE cell (not just usable)
-        // so the shader's line box maps exactly to the cell
-        let em_scale = (gs as f64 * baseline_frac_val) / upem;
-
-        let tx = margin;
-        // ty: baseline from cell bottom = |descender_padded| * em_scale
-        let ty = (-descender_padded) * em_scale;
+        // Calculate translation in font units.
+        // 15% horizontal margin, 25% bottom margin (baseline at 75% from top).
+        let tx = (gs as f64 * 0.15) / em_scale;
+        let ty = (gs as f64 * 0.25) / em_scale;
 
         // Projection: font_units → atlas_pixels
         let framing = Framing {
@@ -266,15 +257,14 @@ impl FontAtlasBuilder {
 
         // Shader layout metrics (same for all glyphs, uniform projection)
         // baseline_row: which atlas row (from top) the baseline sits at.
-        // In the atlas, row 0 is top. The projection puts baseline (font Y=0)
-        // at atlas Y = ty (from bottom). After blit Y-flip, baseline is at
-        // row gs - ty from top.
-        // baseline_row from top = gs - ty
-        let baseline_row = (gs as f64 - ty) as f32;
-        // px_per_em = em_scale * upem = gs * baseline_frac
+        // The baseline is at ty font units from bottom, which is (em_scale * ty) pixels from bottom.
+        // baseline_row from top = gs - (em_scale * ty)
+        let baseline_row = (gs as f64 - (em_scale * ty)) as f32;
         let px_per_em = (em_scale * upem) as f32;
-        let x_margin = tx as f32;
+        // x_margin: how many pixels from the left of the cell the font origin sits.
+        let x_margin = (em_scale * tx) as f32;
 
+        let baseline_frac_val = (baseline_row / gs as f32) as f64;
 
         struct GlyphResult {
             glyph_id: u16,
@@ -296,7 +286,7 @@ impl FontAtlasBuilder {
             let has_outline = face18.glyph_shape(gid18).is_some()
                 && face25.glyph_bounding_box(gid25).is_some();
 
-            let mut msdf_data = vec![0u8; (gs * gs * channels) as usize];
+            let mut msdf_data = vec![255u8; (gs * gs * channels) as usize];
 
             if has_outline {
                 let mut bitmap: Bitmap<Rgb<f32>> = Bitmap::new(gs, gs);
@@ -329,7 +319,7 @@ impl FontAtlasBuilder {
 
         // Finalize atlas
         let atlas_h = packer.used_height().max(1);
-        let mut pixel_data = vec![0u8; (atlas_w * atlas_h * channels) as usize];
+        let mut pixel_data = vec![255u8; (atlas_w * atlas_h * channels) as usize];
         let mut glyphs = Vec::with_capacity(num_glyphs);
         let mut glyph_index = std::collections::HashMap::new();
 
@@ -337,8 +327,9 @@ impl FontAtlasBuilder {
             for row in 0..gs {
                 for col in 0..gs {
                     let src_idx = ((row * gs + col) * channels) as usize;
+                    // Y-flip blit: row 0 (bottom of glyph) -> bottom of atlas cell
                     let dst_idx =
-                        (((result.atlas_y + row) * atlas_w + result.atlas_x + col) * channels)
+                        (((result.atlas_y + (gs - 1 - row)) * atlas_w + result.atlas_x + col) * channels)
                             as usize;
                     if src_idx + 2 < result.msdf_data.len()
                         && dst_idx + 2 < pixel_data.len()
@@ -379,11 +370,10 @@ impl FontAtlasBuilder {
 
 /// Map a raw MSDF signed distance to u8.
 /// `inv_range` = 0.5 / px_range.
-/// Map raw MSDF signed distance to u8.
-/// Map raw MSDF distance to u8 [0,255].
 /// Map raw MSDF distance to u8 [0,255].
 /// msdfgen with TrueType: positive = outside, negative = inside.
-/// No sign flip — store raw normalized distance. Shader handles convention.
+/// We map raw distance so that inside is < 0.5 (Dark) and outside is > 0.5 (Light).
+/// This matches the black-text-on-white-background requirement.
 fn msdf_to_u8(value: f32, inv_range: f32) -> u8 {
     let normalized = (value * inv_range + 0.5).clamp(0.0, 1.0);
     (normalized * 255.0) as u8

@@ -44,8 +44,8 @@ fn main() {
     let atlas = builder.build().expect("atlas build failed");
     println!("Atlas: {}x{}, {} glyphs, baseline_frac={:.3}", atlas.width, atlas.height, atlas.glyphs.len(), atlas.baseline_frac);
 
-    // Line box: top → ascender space → baseline → descender space → bottom
-    let line_box_h: f32 = font_size / atlas.baseline_frac.max(0.1);
+    // Line box: sane 1.3x scaling (~77% EM size) to match atlas cell
+    let line_box_h: f32 = font_size * 1.3;
     let line_gap: f32 = font_size * 0.3;
 
     let mut gid_to_idx: HashMap<u16, u16> = HashMap::new();
@@ -91,6 +91,39 @@ fn main() {
         }
     }
 
+    fn msdf_median(r: f32, g: f32, b: f32) -> f32 {
+        r.min(g).max(r.max(g).min(b))
+    }
+
+    // Dump raw atlas as PNG for inspection
+    {
+        let mut rgba = Vec::with_capacity((atlas.width * atlas.height * 4) as usize);
+        for i in 0..(atlas.width * atlas.height) as usize {
+            let s = i * 3;
+            let r = atlas.pixel_data.get(s).copied().unwrap_or(255);
+            let g = atlas.pixel_data.get(s + 1).copied().unwrap_or(255);
+            let b = atlas.pixel_data.get(s + 2).copied().unwrap_or(255);
+            
+            // For the RGB channels, we use the MSDF data itself.
+            // Since inside=dark, the RGB will be near (0,0,0) for the glyph interior.
+            rgba.push(r);
+            rgba.push(g);
+            rgba.push(b);
+
+            // Alpha: glyph interior is dark in atlas (r,g,b near 0)
+            // sd < 0.5 is inside. We want alpha=0 (transparent) for inside, alpha=255 for outside.
+            let sd = msdf_median(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+            rgba.push((sd.clamp(0.0, 1.0) * 255.0) as u8);
+        }
+        let f = std::fs::File::create("/Users/tmeade/src/common-data/atlas_raw.png").unwrap();
+        let mut enc = png::Encoder::new(f, atlas.width, atlas.height);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&rgba).unwrap();
+        println!("Atlas raw PNG: {}x{} → ~/src/common-data/atlas_raw.png", atlas.width, atlas.height);
+    }
+
     let sdf_frame = mtd1_to_sdf(&doc, &gid_to_idx, &std_advances, font_size, px_range, atlas.baseline_frac);
     println!("Draws: {}, chars: {}", sdf_frame.draws.len(), sdf_frame.char_buffer.len());
 
@@ -98,9 +131,12 @@ fn main() {
     let mut atlas_rgba = Vec::with_capacity((atlas.width * atlas.height * 4) as usize);
     for i in 0..(atlas.width * atlas.height) as usize {
         let s = i * 3;
-        atlas_rgba.push(atlas.pixel_data.get(s).copied().unwrap_or(0));
-        atlas_rgba.push(atlas.pixel_data.get(s + 1).copied().unwrap_or(0));
-        atlas_rgba.push(atlas.pixel_data.get(s + 2).copied().unwrap_or(0));
+        let r = atlas.pixel_data.get(s).copied().unwrap_or(255);
+        let g = atlas.pixel_data.get(s + 1).copied().unwrap_or(255);
+        let b = atlas.pixel_data.get(s + 2).copied().unwrap_or(255);
+        atlas_rgba.push(r);
+        atlas_rgba.push(g);
+        atlas_rgba.push(b);
         atlas_rgba.push(255);
     }
 

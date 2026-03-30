@@ -141,9 +141,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var bg: vec3<f32>;
     if is_dark > 0.5 {
-        bg = vec3<f32>(0.1, 0.1, 0.12);
+        bg = vec3<f32>(1.0, 0.0, 1.0); // magenta
     } else {
-        bg = vec3<f32>(0.95, 0.95, 0.97);
+        bg = vec3<f32>(1.0, 0.0, 1.0); // magenta
     }
     var result = vec4<f32>(bg, 1.0);
 
@@ -274,18 +274,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 }
             }
             case 8u: { // MSDF Text — uniform em-square projection
-                //
-                // Line box model:
-                //   pos.y    = top of the line box
-                //   size.y   = line box height
-                //   params.z = baseline_frac (baseline position from top, e.g. 0.75)
-                //
-                // Uniform projection: all glyphs share the same scale mapping
-                // em-normalized coords → atlas cell pixels. Stored in glyph table
-                // as proj_sx/sy/tx/ty (identical for all entries).
-                //
                 let px_range = max(cmd.params.y, 2.0);
-                let baseline_frac = cmd.params.z;
                 let packed = bitcast<u32>(cmd.params.w);
                 let char_offset = packed >> 16u;
                 let char_count = packed & 0xFFFFu;
@@ -293,8 +282,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let line_x = cmd.pos.x;
                 let line_y = cmd.pos.y;
                 let line_h = cmd.size.y;
-                let font_size = baseline_frac * line_h;
-                let baseline_screen_y = line_y + baseline_frac * line_h;
 
                 let atlas_dim = vec2<f32>(textureDimensions(msdf_atlas));
 
@@ -313,39 +300,45 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let atlas_gy = f32(g0.y >> 16u);
                     let atlas_gw = f32(g0.z & 0xFFFFu);
                     let atlas_gh = f32(g0.z >> 16u);
+                    
+                    // Fetch projection metrics from g1
+                    let baseline_row = bitcast<f32>(g1.x);
+                    let px_per_em_atlas = bitcast<f32>(g1.y);
+                    let x_margin = bitcast<f32>(g1.z);
+
+                    // Scale: atlas pixels per screen pixel.
+                    // To avoid clipping, we map the entire line_h box to the entire atlas_gh cell.
+                    let scale = atlas_gh / line_h;
+                    // Derived EM size on screen:
+                    let font_size = px_per_em_atlas / scale;
+
                     let advance_x_norm = bitcast<f32>(g0.w);
-
-                    // Layout metrics from glyph table
-                    let baseline_row = bitcast<f32>(g1.x);  // atlas row of baseline (from top)
-                    let px_per_em = bitcast<f32>(g1.y);      // atlas pixels per em
-                    let x_margin_px = bitcast<f32>(g1.z);    // left margin in atlas px
-
                     let advance_px = advance_x_norm * font_size + delta_px;
+
                     let gx = line_x + cursor_x;
+                    let gy = line_y;
 
-                    // Screen → atlas cell coordinates (simple proportional mapping)
-                    // X: screen offset from glyph origin → atlas pixels
-                    let screen_dx = effective_pixel.x - gx;
-                    let acx = screen_dx / font_size * px_per_em + x_margin_px;
+                    // Screen pixel → atlas cell pixel
+                    // Shift by x_margin so the font origin (fx=0) maps to the cursor (gx)
+                    let acx = (effective_pixel.x - gx) * scale + x_margin;
+                    // Vertical mapping: line_y corresponds to the atlas cell top (0.0).
+                    // The scale ensures the line box maps perfectly to the gs x gs cell.
+                    let acy = (effective_pixel.y - gy) * scale;
 
-                    // Y: screen offset from baseline → atlas pixels from baseline row
-                    // Screen Y increases downward; atlas row increases downward
-                    // So screen pixels below baseline → atlas rows below baseline_row
-                    let screen_dy = effective_pixel.y - baseline_screen_y;
-                    let acy = baseline_row + screen_dy / font_size * px_per_em;
 
-                    // Flip Y for atlas storage (bitmap row 0 = bottom at atlas row 0 = top)
-                    let acy_flipped = atlas_gh - acy;
-
+                    // Sample within cell, MSDF masks via distance field
                     if acx >= 0.0 && acx < atlas_gw &&
-                       acy_flipped >= 0.0 && acy_flipped < atlas_gh {
-                        let u = (atlas_gx + acx) / atlas_dim.x;
-                        let v = (atlas_gy + acy_flipped) / atlas_dim.y;
+                       acy >= 0.0 && acy < atlas_gh {
+                        // Offset by 0.5 to sample from pixel centers and avoid edge bleed
+                        let u = (atlas_gx + acx + 0.5) / atlas_dim.x;
+                        let v = (atlas_gy + acy + 0.5) / atlas_dim.y;
 
                         let sample = textureSample(msdf_atlas, msdf_sampler, vec2<f32>(u, v));
                         let sd = msdf_median(sample.r, sample.g, sample.b);
 
-                        let alpha = clamp(px_range * (sd - 0.5) + 0.5, 0.0, 1.0);
+                        // Invert: sd < 0.5 is inside (since atlas is black-on-white)
+                        let alpha = clamp(px_range * (0.5 - sd) + 0.5, 0.0, 1.0);
+
                         if alpha > 0.01 {
                             let glyph_color = vec4<f32>(cmd.color.rgb, cmd.color.a * alpha);
                             result = blend_over(result, glyph_color);
