@@ -68,10 +68,6 @@ fn main() {
 
             let s = ch.to_string();
             let run = shaper.shape(&s);
-            if ch.is_ascii_digit() {
-                let g = &run.glyphs[0];
-                println!("Digit '{}': GID={}, x_off={}, y_off={}", ch, g.glyph_id, g.x_offset, g.y_offset);
-            }
             for g in &run.glyphs {
                 let adv = (g.x_advance as f32 * scale + 0.5) as u16;
                 doc.instructions.push(Command32::draw_glyph(adv.max(1).min(4095), g.glyph_id));

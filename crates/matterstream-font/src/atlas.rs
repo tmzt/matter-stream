@@ -243,16 +243,7 @@ impl FontAtlasBuilder {
         let tx = (gs as f64 * 0.15) / em_scale;
         let ty = (gs as f64 * 0.25) / em_scale;
 
-        // Projection: font_units → atlas_pixels
-        let framing = Framing {
-            range: self.px_range,
-            projection: msdfgen::Projection::new(
-                msdfgen::Vector2::new(em_scale, em_scale),
-                msdfgen::Vector2::new(tx, ty),
-            ),
-        };
-
-        // Shader layout metrics (derived from actual framing)
+        // Default layout metrics (used as fallback for glyphs without outlines)
         let baseline_row = (gs as f64 - em_scale * ty) as f32;
         let px_per_em = (em_scale * upem) as f32;
         let x_margin = (em_scale * tx) as f32;
@@ -265,6 +256,9 @@ impl FontAtlasBuilder {
             atlas_y: u32,
             advance_x: f32,
             msdf_data: Vec<u8>,
+            baseline_row: f32,
+            x_margin: f32,
+            px_per_em: f32,
         }
 
         let mut results = Vec::with_capacity(num_glyphs);
@@ -280,20 +274,44 @@ impl FontAtlasBuilder {
                 && face25.glyph_bounding_box(gid25).is_some();
 
             let mut msdf_data = vec![255u8; (gs * gs * channels) as usize];
+            let mut res_baseline_row = baseline_row;
+            let mut res_x_margin = x_margin;
 
             if has_outline {
+                // Per-glyph centering: center the bounding box in the cell
+                let bbox = face25.glyph_bounding_box(gid25).unwrap();
+                let glyph_w = (bbox.x_max - bbox.x_min) as f64 * em_scale;
+                let glyph_h = (bbox.y_max - bbox.y_min) as f64 * em_scale;
+                
+                // Target pixel offsets to center the ink
+                let target_px_x = (gs as f64 - glyph_w) * 0.5;
+                let target_px_y = (gs as f64 - glyph_h) * 0.5;
+                
+                // Derive translation in font units
+                // Formula: pixel = scale * (font_units + translation)
+                // target_px_x = em_scale * (bbox.x_min + tx)  => tx = target_px_x/em_scale - bbox.x_min
+                // target_px_y = em_scale * (bbox.y_min + ty)  => ty = target_px_y/em_scale - bbox.y_min
+                let g_tx = target_px_x / em_scale - bbox.x_min as f64;
+                let g_ty = target_px_y / em_scale - bbox.y_min as f64;
+
+                let g_framing = Framing {
+                    range: self.px_range,
+                    projection: msdfgen::Projection::new(
+                        msdfgen::Vector2::new(em_scale, em_scale),
+                        msdfgen::Vector2::new(g_tx, g_ty),
+                    ),
+                };
+
                 let mut bitmap: Bitmap<Rgb<f32>> = Bitmap::new(gs, gs);
                 if let Some(mut shape) = face18.glyph_shape(gid18) {
                     shape.edge_coloring_simple(3.0, 0);
-                    shape.generate_msdf(&mut bitmap, &framing, MsdfGeneratorConfig::default());
-                    shape.correct_sign(&mut bitmap, &framing, FillRule::default());
+                    shape.generate_msdf(&mut bitmap, &g_framing, MsdfGeneratorConfig::default());
+                    shape.correct_sign(&mut bitmap, &g_framing, FillRule::default());
                 }
 
                 let inv_range = 0.5 / self.px_range as f32;
                 for y in 0..gs {
                     for x in 0..gs {
-                        // msdfgen bitmap row 0 is BOTTOM.
-                        // We store in msdf_data with row 0 as TOP.
                         let pixel = bitmap.pixel(x, y);
                         let idx = (((gs - 1 - y) * gs + x) * channels) as usize;
                         msdf_data[idx] = msdf_to_u8(pixel.r, inv_range);
@@ -301,6 +319,10 @@ impl FontAtlasBuilder {
                         msdf_data[idx + 2] = msdf_to_u8(pixel.b, inv_range);
                     }
                 }
+                
+                // Update metrics for this specific glyph
+                res_baseline_row = (gs as f64 - em_scale * g_ty) as f32;
+                res_x_margin = (em_scale * g_tx) as f32;
             }
 
             results.push(GlyphResult {
@@ -309,6 +331,9 @@ impl FontAtlasBuilder {
                 atlas_y: atlas_y + 1,
                 advance_x,
                 msdf_data,
+                baseline_row: res_baseline_row,
+                x_margin: res_x_margin,
+                px_per_em,
             });
         }
 
@@ -343,7 +368,9 @@ impl FontAtlasBuilder {
                 atlas_w: gs as u16,
                 atlas_h: gs as u16,
                 advance_x: result.advance_x,
-                baseline_row, px_per_em, x_margin,
+                baseline_row: result.baseline_row,
+                px_per_em: result.px_per_em,
+                x_margin: result.x_margin,
             };
             glyph_index.insert(result.glyph_id, glyphs.len());
             glyphs.push(entry);
