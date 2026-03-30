@@ -25,6 +25,9 @@ pub trait OrPageHandler: Send {
     /// Gas cost for a given sub-op. Return 0 to use the VM's default OR page cost.
     fn gas_cost(&self, sub_op: u8) -> u64;
 
-    /// Downcast support.
+    /// Downcast support (consuming).
     fn as_any(self: Box<Self>) -> Box<dyn Any>;
+
+    /// Downcast support (by reference).
+    fn as_any_ref(&self) -> &dyn Any;
 }

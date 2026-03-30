@@ -153,6 +153,7 @@ mod with_ui {
             }
             fn gas_cost(&self, _: u8) -> u64 { 100 }
             fn as_any(self: Box<Self>) -> Box<dyn Any> { self }
+            fn as_any_ref(&self) -> &dyn Any { self }
         }
 
         let mut vm = RpnVm::new();

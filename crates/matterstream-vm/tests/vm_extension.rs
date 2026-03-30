@@ -252,6 +252,9 @@ impl OrPageHandler for TestPageHandler {
     fn as_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
+    fn as_any_ref(&self) -> &dyn Any {
+        self
+    }
 }
 
 #[test]

@@ -992,6 +992,12 @@ impl RpnVm {
     }
 
 
+    /// Read-only access to an OR page handler by FourCC, downcast to a concrete type.
+    pub fn or_page_handle<T: 'static>(&self, fourcc: u32) -> Option<&T> {
+        let (_, handler) = self.or_pages.iter().find(|(f, _)| *f == fourcc)?;
+        handler.as_any_ref().downcast_ref::<T>()
+    }
+
     fn register_or_page_inner(&mut self, fourcc: u32, handler: Box<dyn OrPageHandler>) {
         if let Some(entry) = self.or_pages.iter_mut().find(|(f, _)| *f == fourcc) {
             entry.1 = handler;
