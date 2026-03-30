@@ -39,7 +39,7 @@ fn main() {
     let origin_y: f32 = 10.0; // top of first line box
 
     // Build MSDF atlas
-    let mut builder = FontAtlasBuilder::new(font_data, 256, px_range as f64);
+    let mut builder = FontAtlasBuilder::new(font_data, 512, px_range as f64);
     builder.add_ascii();
     let atlas = builder.build().expect("atlas build failed");
     println!("Atlas: {}x{}, {} glyphs, baseline_frac={:.3}", atlas.width, atlas.height, atlas.glyphs.len(), atlas.baseline_frac);
