@@ -334,11 +334,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let screen_dy = effective_pixel.y - baseline_screen_y;
                     let acy = baseline_row + screen_dy / font_size * px_per_em;
 
-                    // Atlas cell bounds check (prevents sampling adjacent cells)
+                    // Flip Y for atlas storage (bitmap row 0 = bottom at atlas row 0 = top)
+                    let acy_flipped = atlas_gh - acy;
+
                     if acx >= 0.0 && acx < atlas_gw &&
-                       acy >= 0.0 && acy < atlas_gh {
+                       acy_flipped >= 0.0 && acy_flipped < atlas_gh {
                         let u = (atlas_gx + acx) / atlas_dim.x;
-                        let v = (atlas_gy + acy) / atlas_dim.y;
+                        let v = (atlas_gy + acy_flipped) / atlas_dim.y;
 
                         let sample = textureSample(msdf_atlas, msdf_sampler, vec2<f32>(u, v));
                         let sd = msdf_median(sample.r, sample.g, sample.b);

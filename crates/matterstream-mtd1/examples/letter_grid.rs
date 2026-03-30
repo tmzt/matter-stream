@@ -118,8 +118,8 @@ fn main() {
     }
 
     let num_rows = rows.len() as f32;
-    let width = 750u32;
-    let height = (origin_y * 2.0 + num_rows * (line_box_h + line_gap)) as u32;
+    let width = (origin_x * 2.0 + rows.iter().map(|r| r.chars().count()).max().unwrap_or(1) as f32 * cell_w) as u32;
+    let height = (origin_y * 2.0 + num_rows * (line_box_h + line_gap) + line_box_h * 0.5) as u32;
 
     if let Some(path) = png_path {
         // Offscreen render
