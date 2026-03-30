@@ -231,79 +231,56 @@ impl FontAtlasBuilder {
         let channels = 3u32; // MSDF = RGB
         let mut packer = ShelfPacker::new(atlas_w);
 
-        // First pass: generate MSDF for each glyph and record positions
+        // Per-glyph MSDF generation with autoframe projection
         struct GlyphResult {
             glyph_id: u16,
             atlas_x: u32,
             atlas_y: u32,
             advance_x: f32,
-            bearing_x: f32,
-            bearing_y: f32,
+            proj_sx: f32,
+            proj_sy: f32,
+            proj_tx: f32,
+            proj_ty: f32,
             msdf_data: Vec<u8>,
         }
 
+        let upem = face25.units_per_em() as f64;
         let mut results = Vec::with_capacity(num_glyphs);
 
         for &glyph_id in &self.queued_glyphs {
-            // Metrics from v0.25 — all normalized to [0,1] relative to em square
-            let upem = face25.units_per_em() as f32;
             let gid25 = ttf_parser::GlyphId(glyph_id);
-            let advance_x = face25.glyph_hor_advance(gid25).unwrap_or(0) as f32 / upem;
-            let bbox = face25.glyph_bounding_box(gid25);
-            let (bearing_x, bearing_y) = bbox
-                .map(|b| (b.x_min as f32 / upem, b.y_max as f32 / upem))
-                .unwrap_or((0.0, 0.0));
+            let advance_x = face25.glyph_hor_advance(gid25).unwrap_or(0) as f32 / upem as f32;
 
-            // Pack into atlas
             let (atlas_x, atlas_y) = packer.pack(padded, padded);
 
-            // Skip non-printing glyphs (space, control chars) — no outlines to render.
-            // They get a zero-filled atlas cell; the shader uses advance-only for spacing.
             let gid18 = ttf_parser_018::GlyphId(glyph_id);
             let has_outline = face18.glyph_shape(gid18).is_some()
                 && face25.glyph_bounding_box(gid25).is_some();
 
             let mut msdf_data = vec![0u8; (gs * gs * channels) as usize];
+            let mut proj_sx: f32 = 0.0;
+            let mut proj_sy: f32 = 0.0;
+            let mut proj_tx: f32 = 0.0;
+            let mut proj_ty: f32 = 0.0;
 
             if has_outline {
                 let mut bitmap: Bitmap<Rgb<f32>> = Bitmap::new(gs, gs);
                 if let Some(mut shape) = face18.glyph_shape(gid18) {
-                    // Use a uniform projection based on the em square so all glyphs
-                    // share the same scale. This preserves relative sizes (lowercase
-                    // letters are smaller than uppercase in the atlas cell).
-                    //
-                    // Projection maps font units → atlas pixels:
-                    //   scale = atlas_size / em_size (with padding margin)
-                    //   translate = offset to center in cell
-                    let margin = self.px_range;
-                    let usable = gs as f64 - 2.0 * margin;
+                    // Per-glyph autoframe: each glyph fills its cell for maximum
+                    // MSDF resolution. The projection is stored per-glyph.
+                    let bound = shape.get_bound();
+                    let framing = bound
+                        .autoframe(gs, gs, Range::Px(self.px_range), None)
+                        .unwrap_or_else(|| Framing::default());
 
-                    // Use hhea ascender/descender with extra margin for glyphs
-                    // that extend beyond (like deep g descender).
-                    // head.yMin/yMax includes extreme accents (yMax=3679) which
-                    // wastes atlas space. Instead, pad the hhea metrics by 50%.
-                    let ascender = face25.ascender() as f64;   // e.g. 1878
-                    let descender = face25.descender() as f64; // e.g. -449
-                    let asc_padded = ascender * 1.1;           // 10% headroom for accents
-                    let desc_padded = descender * 2.0;         // 2x for deep descenders (Georgia g)
-                    let total_height = asc_padded - desc_padded;
-
-                    // Scale to fit total vertical extent in usable cell area
-                    let em_scale = usable / total_height;
-
-                    // X: left margin
-                    let tx = margin;
-                    // Y: font origin is at baseline (y=0 in font coords).
-                    // Shift so padded descender bottom = margin (bottom of cell).
-                    let ty = margin + (-desc_padded) * em_scale;
-
-                    let framing = Framing {
-                        range: self.px_range,
-                        projection: msdfgen::Projection::new(
-                            msdfgen::Vector2::new(em_scale, em_scale),
-                            msdfgen::Vector2::new(tx, ty),
-                        ),
-                    };
+                    // Store projection pre-scaled by upem so the shader can use
+                    // em-normalized coordinates (screen_delta / font_size) directly.
+                    // Original projection: atlas_px = font_units * scale + translate
+                    // Pre-scaled:          atlas_px = em_norm * (scale * upem) + translate
+                    proj_sx = (framing.projection.scale.x * upem) as f32;
+                    proj_sy = (framing.projection.scale.y * upem) as f32;
+                    proj_tx = framing.projection.translate.x as f32;
+                    proj_ty = framing.projection.translate.y as f32;
 
                     shape.edge_coloring_simple(3.0, 0);
                     shape.generate_msdf(&mut bitmap, &framing, MsdfGeneratorConfig::default());
@@ -327,20 +304,18 @@ impl FontAtlasBuilder {
                 atlas_x: atlas_x + 1,
                 atlas_y: atlas_y + 1,
                 advance_x,
-                bearing_x,
-                bearing_y,
+                proj_sx, proj_sy, proj_tx, proj_ty,
                 msdf_data,
             });
         }
 
-        // Finalize atlas dimensions
+        // Finalize atlas
         let atlas_h = packer.used_height().max(1);
         let mut pixel_data = vec![0u8; (atlas_w * atlas_h * channels) as usize];
         let mut glyphs = Vec::with_capacity(num_glyphs);
         let mut glyph_index = std::collections::HashMap::new();
 
         for result in &results {
-            // Blit MSDF into atlas
             for row in 0..gs {
                 for col in 0..gs {
                     let src_idx = ((row * gs + col) * channels) as usize;
@@ -364,24 +339,19 @@ impl FontAtlasBuilder {
                 atlas_w: gs as u16,
                 atlas_h: gs as u16,
                 advance_x: result.advance_x,
-                bearing_x: result.bearing_x,
-                bearing_y: result.bearing_y,
+                proj_sx: result.proj_sx,
+                proj_sy: result.proj_sy,
+                proj_tx: result.proj_tx,
+                proj_ty: result.proj_ty,
             };
             glyph_index.insert(result.glyph_id, glyphs.len());
             glyphs.push(entry);
         }
 
-        // Compute baseline_frac matching the projection used above.
+        // baseline_frac from hhea metrics: ascender / (ascender - descender)
         let ascender = face25.ascender() as f64;
         let descender = face25.descender() as f64;
-        let asc_padded = ascender * 1.1;
-        let desc_padded = descender * 2.0;
-        let total_height = asc_padded - desc_padded;
-        let margin = self.px_range;
-        let usable = gs as f64 - 2.0 * margin;
-        let em_scale = usable / total_height;
-        let ty = margin + (-desc_padded) * em_scale;
-        let baseline_frac = (1.0 - ty / gs as f64) as f32;
+        let baseline_frac = (ascender / (ascender - descender)) as f32;
 
         Ok(FontAtlas {
             width: atlas_w,
