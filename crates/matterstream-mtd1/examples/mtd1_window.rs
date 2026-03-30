@@ -19,12 +19,8 @@ use matterstream_ui_gpu::GpuSdfRenderer;
 /// Load a system font suitable for Tufte-style data display.
 fn load_system_font() -> Vec<u8> {
     let candidates = [
-        "/System/Library/Fonts/Supplemental/Georgia.ttf",
-        "/Library/Fonts/Georgia.ttf",
-        "/System/Library/Fonts/NewYork.ttf",
-        "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+        "/Users/tmeade/src/Projects/CasualEffects/TerminalVelocity/worktrees/game-terminalvelocity1/game-connect4/assets/fonts/Inter-Regular.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/SFNS.ttf",
         "/Library/Fonts/Arial.ttf",
     ];
     for path in &candidates {

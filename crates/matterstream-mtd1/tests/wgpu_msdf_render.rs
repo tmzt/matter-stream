@@ -11,10 +11,8 @@ use matterstream_mtd1::mtd1_to_sdf::mtd1_to_sdf;
 
 fn load_system_font() -> Option<Vec<u8>> {
     let paths = [
-        "/System/Library/Fonts/Supplemental/Georgia.ttf",
-        "/Library/Fonts/Georgia.ttf",
+        "/Users/tmeade/src/Projects/CasualEffects/TerminalVelocity/worktrees/game-terminalvelocity1/game-connect4/assets/fonts/Inter-Regular.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/SFNS.ttf",
         "/Library/Fonts/Arial.ttf",
     ];
     for p in &paths {

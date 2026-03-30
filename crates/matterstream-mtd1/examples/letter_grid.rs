@@ -16,7 +16,7 @@ use matterstream_ui_gpu::GpuSdfRenderer;
 
 fn load_system_font() -> Vec<u8> {
     let candidates = [
-        "/System/Library/Fonts/Supplemental/Georgia.ttf",
+        "/Users/tmeade/src/Projects/CasualEffects/TerminalVelocity/worktrees/game-terminalvelocity1/game-connect4/assets/fonts/Inter-Regular.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
         "/Library/Fonts/Arial.ttf",
     ];
@@ -68,7 +68,6 @@ fn main() {
 
             let s = ch.to_string();
             let run = shaper.shape(&s);
-            
             for g in &run.glyphs {
                 let adv = (g.x_advance as f32 * scale + 0.5) as u16;
                 doc.instructions.push(Command32::draw_glyph(adv.max(1).min(4095), g.glyph_id));
@@ -107,14 +106,10 @@ fn main() {
             let g = atlas.pixel_data.get(s + 1).copied().unwrap_or(255);
             let b = atlas.pixel_data.get(s + 2).copied().unwrap_or(255);
             
-            // For the RGB channels, we use the MSDF data itself.
-            // Since inside=dark, the RGB will be near (0,0,0) for the glyph interior.
             rgba.push(r);
             rgba.push(g);
             rgba.push(b);
 
-            // Alpha: glyph interior is light in atlas (sd > 0.5)
-            // sd > 0.5 is inside. We want alpha=0 (transparent) for inside, alpha=255 for outside.
             let sd = msdf_median(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
             rgba.push(((1.0 - sd.clamp(0.0, 1.0)) * 255.0) as u8);
         }
@@ -153,23 +148,6 @@ fn main() {
             i += 2;
         } else {
             i += 1;
-        }
-    }
-
-    if let Ok(face) = ttf_parser::Face::parse(&font_data, 0) {
-        println!("Searching for all glyphs named 'zero' through 'nine'...");
-        let digit_names = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
-        for name_to_find in &digit_names {
-            print!("  {} matches:", name_to_find);
-            for i in 0..face.number_of_glyphs() {
-                let gid = ttf_parser::GlyphId(i);
-                if let Some(name) = face.glyph_name(gid) {
-                    if name == *name_to_find || name.starts_with(&(name_to_find.to_string() + ".")) {
-                        print!(" GID {}({}),", i, name);
-                    }
-                }
-            }
-            println!();
         }
     }
 
