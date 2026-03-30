@@ -238,17 +238,23 @@ impl FontAtlasBuilder {
         // Use a sane 1.3x scale factor relative to UPEM.
         let em_scale = gs as f64 / (upem * 1.3);
 
-        // Formula: pixel = scale * (font_units + translation)
-        // We want font origin (0,0) to map to atlas pixel (x_margin, gs - baseline_row).
-        let tx = (gs as f64 * 0.15) / em_scale;
-        let ty = (gs as f64 * 0.25) / em_scale;
+        // 1. Determine "Cap Height" ink alignment target using uppercase 'A' (GID 36)
+        // Georgia's uppercase letters sit on the baseline and go up to cap-height.
+        let cap_y_max = if let Some(bbox) = face25.glyph_bounding_box(ttf_parser::GlyphId(36)) {
+            bbox.y_max as f64
+        } else {
+            1450.0 // default fallback
+        };
+        
+        // Target: map cap_y_max to exactly 15% from the top of the atlas cell.
+        let target_top_px = gs as f64 * 0.15;
 
         // Default layout metrics (used as fallback for glyphs without outlines)
-        let baseline_row = (gs as f64 - em_scale * ty) as f32;
+        let baseline_row_def = (gs as f64 * 0.75) as f32;
         let px_per_em = (em_scale * upem) as f32;
-        let x_margin = (em_scale * tx) as f32;
+        let x_margin_def = (gs as f64 * 0.15) as f32;
 
-        let baseline_frac_val = (baseline_row / gs as f32) as f64;
+        let baseline_frac_val = (baseline_row_def / gs as f32) as f64;
 
         struct GlyphResult {
             glyph_id: u16,
@@ -274,25 +280,22 @@ impl FontAtlasBuilder {
                 && face25.glyph_bounding_box(gid25).is_some();
 
             let mut msdf_data = vec![255u8; (gs * gs * channels) as usize];
-            let mut res_baseline_row = baseline_row;
-            let mut res_x_margin = x_margin;
+            let mut res_baseline_row = baseline_row_def;
+            let mut res_x_margin = x_margin_def;
 
             if has_outline {
-                // Per-glyph centering: center the bounding box in the cell
                 let bbox = face25.glyph_bounding_box(gid25).unwrap();
-                let glyph_w = (bbox.x_max - bbox.x_min) as f64 * em_scale;
-                let glyph_h = (bbox.y_max - bbox.y_min) as f64 * em_scale;
                 
-                // Target pixel offsets to center the ink
-                let target_px_x = (gs as f64 - glyph_w) * 0.5;
-                let target_px_y = (gs as f64 - glyph_h) * 0.5;
-                
-                // Derive translation in font units
-                // Formula: pixel = scale * (font_units + translation)
-                // target_px_x = em_scale * (bbox.x_min + tx)  => tx = target_px_x/em_scale - bbox.x_min
-                // target_px_y = em_scale * (bbox.y_min + ty)  => ty = target_px_y/em_scale - bbox.y_min
+                // Horizontal: Center the ink in the cell
+                let ink_w = (bbox.x_max - bbox.x_min) as f64 * em_scale;
+                let target_px_x = (gs as f64 - ink_w) * 0.5;
                 let g_tx = target_px_x / em_scale - bbox.x_min as f64;
-                let g_ty = target_px_y / em_scale - bbox.y_min as f64;
+
+                // Vertical: Align top of ink to target_top_px.
+                // We'll align the font's standard 'cap-height' (derived from 'A') to the 15% target.
+                // This ensures that all digits and caps share a perfectly level top boundary.
+                // Formula: gs - target_top_px = em_scale * (cap_y_max + g_ty)
+                let g_ty = (gs as f64 - target_top_px) / em_scale - cap_y_max;
 
                 let g_framing = Framing {
                     range: self.px_range,
@@ -320,7 +323,6 @@ impl FontAtlasBuilder {
                     }
                 }
                 
-                // Update metrics for this specific glyph
                 res_baseline_row = (gs as f64 - em_scale * g_ty) as f32;
                 res_x_margin = (em_scale * g_tx) as f32;
             }
