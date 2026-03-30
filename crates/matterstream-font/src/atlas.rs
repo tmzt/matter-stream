@@ -242,7 +242,9 @@ impl FontAtlasBuilder {
         // Compute baseline position: ascender / (ascender + |descender|)
         let ascender_val = face25.ascender() as f64;
         let descender_val = face25.descender() as f64; // negative
-        let line_height_units = ascender_val - descender_val;
+        // Add 10% margin to descender to ensure glyph ink near the boundary renders
+        let descender_padded = descender_val * 1.1;
+        let line_height_units = ascender_val - descender_padded;
         let baseline_frac_val = ascender_val / line_height_units;
 
         // Scale: map the full line height to fill the ENTIRE cell (not just usable)
@@ -250,8 +252,8 @@ impl FontAtlasBuilder {
         let em_scale = (gs as f64 * baseline_frac_val) / upem;
 
         let tx = margin;
-        // ty: baseline from cell bottom = |descender| * em_scale
-        let ty = (-descender_val) * em_scale;
+        // ty: baseline from cell bottom = |descender_padded| * em_scale
+        let ty = (-descender_padded) * em_scale;
 
         // Projection: font_units → atlas_pixels
         let framing = Framing {
@@ -361,8 +363,7 @@ impl FontAtlasBuilder {
             glyphs.push(entry);
         }
 
-        // baseline_frac: ascender / (ascender + |descender|)
-        let baseline_frac = (ascender_val / line_height_units) as f32;
+        let baseline_frac = baseline_frac_val as f32;
 
         Ok(FontAtlas {
             width: atlas_w,
