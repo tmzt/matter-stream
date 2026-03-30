@@ -18,6 +18,7 @@ pub struct CompiledComponent {
 pub struct PackageBuilder {
     name: String,
     components: Vec<(String, Oid, u128, CompiledComponent)>, // (name, oid, fqa, compiled)
+    hooks: Vec<(String, Oid, u32)>, // (name, oid, dispatch_id)
     next_fqa: u128,
 }
 
@@ -26,6 +27,7 @@ impl PackageBuilder {
         Self {
             name: name.to_string(),
             components: Vec::new(),
+            hooks: Vec::new(),
             // Start FQAs at a deterministic base derived from package name
             next_fqa: {
                 let mut h: u128 = 0x0001_0000_0000_0000;
@@ -40,6 +42,12 @@ impl PackageBuilder {
     /// Add a compiled component with an explicit FQA.
     pub fn add_with_fqa(&mut self, name: &str, oid: Oid, fqa: u128, compiled: CompiledComponent) {
         self.components.push((name.to_string(), oid, fqa, compiled));
+    }
+
+    /// Add a native hook mapping (no component bytecode needed).
+    /// The dispatch_id indexes into `vm.native_hooks[]` at runtime.
+    pub fn add_hook(&mut self, name: &str, oid: Oid, dispatch_id: u32) {
+        self.hooks.push((name.to_string(), oid, dispatch_id));
     }
 
     /// Add a compiled component with an auto-generated FQA.
@@ -99,6 +107,11 @@ impl PackageBuilder {
             // Register in OID index
             let fqa_addr = Fqa::new(*fqa);
             oid_builder.add_fqa(*oid, ImportKind::Component, fqa_addr);
+        }
+
+        // Register native hooks in OID index
+        for (_, oid, dispatch_id) in &self.hooks {
+            oid_builder.add_native_hook(*oid, *dispatch_id);
         }
 
         // .mrbc (ordinal 2)
@@ -182,5 +195,34 @@ mod tests {
         assert_eq!(cb.string_base, 1);
 
         assert!(loaded.osym.is_some());
+    }
+
+    #[test]
+    fn builder_with_hooks() {
+        use matterstream_vm_addressing::oid_index::OidIndex;
+        use matterstream_vm_addressing::oid::ImportKind;
+
+        let hook_oid = Oid::from_segments(&[1, 1, 1, 2, 1]);
+
+        let mut builder = PackageBuilder::new("hook-pkg");
+        builder.add_hook("Param", hook_oid, 0);
+        builder.add_hook("Trigger", Oid::from_segments(&[1, 1, 1, 2, 2]), 1);
+        let archive = builder.build();
+
+        let bytes = archive.to_ar_bytes();
+        let parsed = MtsmArchive::from_ar_bytes(&bytes).unwrap();
+        let loaded = load_package(&parsed).unwrap();
+
+        // No components, but .osym should have hook entries
+        assert_eq!(loaded.components.len(), 0);
+        assert_eq!(loaded.bytecode.len(), 0);
+
+        let osym = loaded.osym.expect("should have .osym");
+        let idx = OidIndex::from_bytes(&osym).unwrap();
+        assert_eq!(idx.len(), 2);
+
+        let entry = idx.lookup(hook_oid).expect("hook OID should be found");
+        assert_eq!(entry.kind, ImportKind::NativeHook);
+        assert_eq!(entry.dispatch_id(), 0);
     }
 }
