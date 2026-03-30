@@ -5,6 +5,8 @@
 //!    Labels, globals, strings are opaque typed IDs.
 //! 2. Resolution (`finish()`): labels → byte offsets, strings → table indices.
 
+pub mod tkv_handler;
+
 use matterstream_vm::hooks::StateSlot;
 use matterstream_vm::rpn::RpnOp;
 // FourCC constants imported but only used by callers via the sub-op modules

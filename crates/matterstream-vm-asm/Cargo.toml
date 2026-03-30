@@ -5,6 +5,4 @@ edition = "2021"
 
 [dependencies]
 matterstream-vm = { path = "../matterstream-vm" }
-
-[dev-dependencies]
 matterstream-vm-arena = { path = "../matterstream-vm-arena" }
