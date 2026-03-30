@@ -2752,7 +2752,39 @@ impl fmt::Debug for RpnVm {
 
 // ── VmSetupHandle ─────────────────────────────────────────────────────
 
-/// Setup-time API surface for registering handlers before execution.
+// ── VmConstructor ─────────────────────────────────────────────────────
+
+/// Owns an RpnVm and exposes only `.setup()` as the entry point.
+/// This is the intended public API for creating a VM.
+pub struct VmConstructor {
+    vm: RpnVm,
+}
+
+impl VmConstructor {
+    /// Create a new VM with default settings.
+    pub fn new() -> Self {
+        Self { vm: RpnVm::new() }
+    }
+
+    /// Create a VM with a specific gas budget.
+    pub fn with_gas(budget: u64) -> Self {
+        Self { vm: RpnVm::with_gas(budget) }
+    }
+
+    /// Create a VM with a specific gas configuration.
+    pub fn with_gas_config(config: GasConfig) -> Self {
+        Self { vm: RpnVm::with_gas_config(config) }
+    }
+
+    /// Get a setup handle for registration and execution.
+    pub fn setup(&mut self) -> VmSetupHandle<'_> {
+        VmSetupHandle { vm: &mut self.vm }
+    }
+}
+
+// ── VmSetupHandle ─────────────────────────────────────────────────────
+
+/// Setup-time API surface for registering handlers and executing bytecode.
 pub struct VmSetupHandle<'a> {
     vm: &'a mut RpnVm,
 }
@@ -2768,7 +2800,7 @@ impl<'a> VmSetupHandle<'a> {
         self.vm.register_user_call_inner(action_op, handler);
     }
 
-    /// Transition to the runtime handle (no more registration).
+    /// Transition to the runtime handle (registration complete).
     pub fn to_vm_handle(self) -> crate::vm_handle::VmHandle<'a> {
         crate::vm_handle::VmHandle { vm: self.vm }
     }
