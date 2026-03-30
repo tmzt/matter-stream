@@ -224,6 +224,126 @@ impl fmt::Display for TkvKey {
     }
 }
 
+// ── TkvFixedEntry — 16-byte arena entry ────────────────────────────────
+
+/// String reference discriminant for TKV values and key names.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[repr(u8)]
+pub enum StrRefDisc {
+    /// Index into compile-time string_table (immutable).
+    StringTable = 0x00,
+    /// Index into runtime string_values table (mutable, arena-allocated).
+    StringValues = 0x01,
+}
+
+/// 16-byte fixed-size TKV arena entry.
+///
+/// ```text
+/// [0..3]   key_path      TkvKey (u32 LE)
+/// [4]      value_type    TkvType tag
+/// [5..12]  value         8 bytes payload (format per type)
+/// [13]     key_str_disc  StrRefDisc for key name
+/// [14..15] key_str_idx   u16 LE index for key name
+/// ```
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(C, packed)]
+pub struct TkvFixedEntry {
+    pub key_path: u32,
+    pub value_type: u8,
+    pub value: [u8; 8],
+    pub key_str_disc: u8,
+    pub key_str_idx: u16,
+}
+
+const _ASSERT_SIZE: () = assert!(std::mem::size_of::<TkvFixedEntry>() == 16);
+
+impl TkvFixedEntry {
+    /// Create an entry with a string value (string table ref).
+    pub const fn string(key: TkvKey, str_idx: u32, key_name_disc: u8, key_name_idx: u16) -> Self {
+        let mut value = [0u8; 8];
+        value[0] = StrRefDisc::StringTable as u8;
+        let bytes = str_idx.to_le_bytes();
+        value[1] = bytes[0];
+        value[2] = bytes[1];
+        value[3] = bytes[2];
+        value[4] = bytes[3];
+        Self {
+            key_path: key.raw(),
+            value_type: TkvType::String as u8,
+            value,
+            key_str_disc: key_name_disc,
+            key_str_idx: key_name_idx,
+        }
+    }
+
+    /// Create an entry with an integer value.
+    pub const fn integer(key: TkvKey, val: u64, key_name_disc: u8, key_name_idx: u16) -> Self {
+        Self {
+            key_path: key.raw(),
+            value_type: TkvType::Integer as u8,
+            value: val.to_le_bytes(),
+            key_str_disc: key_name_disc,
+            key_str_idx: key_name_idx,
+        }
+    }
+
+    /// Create an entry with a boolean value.
+    pub const fn boolean(key: TkvKey, val: bool, key_name_disc: u8, key_name_idx: u16) -> Self {
+        let mut value = [0u8; 8];
+        value[0] = if val { 1 } else { 0 };
+        Self {
+            key_path: key.raw(),
+            value_type: TkvType::Boolean as u8,
+            value,
+            key_str_disc: key_name_disc,
+            key_str_idx: key_name_idx,
+        }
+    }
+
+    /// Create a null entry (placeholder).
+    pub const fn null(key: TkvKey, key_name_disc: u8, key_name_idx: u16) -> Self {
+        Self {
+            key_path: key.raw(),
+            value_type: TkvType::Null as u8,
+            value: [0u8; 8],
+            key_str_disc: key_name_disc,
+            key_str_idx: key_name_idx,
+        }
+    }
+
+    /// The TkvKey for this entry.
+    pub const fn key(&self) -> TkvKey {
+        TkvKey(self.key_path)
+    }
+
+    /// Sort key (segment bits only, for ordering).
+    pub const fn sort_key(&self) -> u32 {
+        self.key_path & SORT_MASK
+    }
+
+    /// Encode to 16 bytes (little-endian).
+    pub fn to_bytes(&self) -> [u8; 16] {
+        let mut buf = [0u8; 16];
+        buf[0..4].copy_from_slice(&self.key_path.to_le_bytes());
+        buf[4] = self.value_type;
+        buf[5..13].copy_from_slice(&self.value);
+        buf[13] = self.key_str_disc;
+        buf[14..16].copy_from_slice(&self.key_str_idx.to_le_bytes());
+        buf
+    }
+
+    /// Decode from 16 bytes (little-endian).
+    pub fn from_bytes(b: &[u8; 16]) -> Self {
+        Self {
+            key_path: u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            value_type: b[4],
+            value: [b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12]],
+            key_str_disc: b[13],
+            key_str_idx: u16::from_le_bytes([b[14], b[15]]),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

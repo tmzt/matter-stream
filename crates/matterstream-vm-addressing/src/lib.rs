@@ -12,4 +12,4 @@ pub use fqa::{Fqa, Ordinal, FourCC};
 pub use ova::{Ova, ArenaId};
 pub use oid::{Oid, SecurityMode, ImportKind, InstanceRef};
 pub use oid_index::{OidIndex, OidIndexBuilder, OidEntry, OidIndexError};
-pub use tkv_key::TkvKey;
+pub use tkv_key::{TkvKey, TkvType, TkvFixedEntry, StrRefDisc};
