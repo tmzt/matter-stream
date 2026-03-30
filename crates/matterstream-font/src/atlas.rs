@@ -21,6 +21,9 @@ pub struct FontAtlas {
     pub glyphs: Vec<GlyphEntry>,
     /// Map from glyph_id to index in `glyphs`
     glyph_index: std::collections::HashMap<u16, usize>,
+    /// Fraction from cell top to baseline (e.g. 0.75 = baseline at 75% from top).
+    /// Used by the shader to align glyphs on the baseline.
+    pub baseline_frac: f32,
 }
 
 impl FontAtlas {
@@ -97,6 +100,7 @@ impl FontAtlas {
             channels,
             pixel_data,
             glyphs,
+            baseline_frac: 0.75, // default for deserialized atlases
             glyph_index,
         })
     }
@@ -271,16 +275,24 @@ impl FontAtlasBuilder {
                     // Projection maps font units → atlas pixels:
                     //   scale = atlas_size / em_size (with padding margin)
                     //   translate = offset to center in cell
-                    let em = upem as f64;
-                    let margin = self.px_range; // px padding for distance field
+                    let margin = self.px_range;
                     let usable = gs as f64 - 2.0 * margin;
-                    let em_scale = usable / em;
 
-                    // Center the em square in the atlas cell
+                    // Use the font's actual ascender+descender extent for vertical scaling
+                    // so descenders fit fully in the atlas cell.
+                    let ascender = face25.ascender() as f64;   // positive
+                    let descender = face25.descender() as f64; // negative
+                    let total_height = ascender - descender;   // e.g. 2048 + 500 = 2548
+
+                    // Scale to fit total vertical extent in usable cell area
+                    let em = upem as f64;
+                    let em_scale = usable / total_height;
+
+                    // X: left margin
                     let tx = margin;
-                    // Y: font origin at baseline, descenders go negative.
-                    // Shift up so descenders (typically -0.25 em) are visible.
-                    let ty = margin + usable * 0.25; // 25% of cell for descenders
+                    // Y: font origin is at baseline. Descender goes to negative y.
+                    // Shift so descender bottom = margin (bottom of cell).
+                    let ty = margin + (-descender) * em_scale;
 
                     let framing = Framing {
                         range: self.px_range,
@@ -356,6 +368,17 @@ impl FontAtlasBuilder {
             glyphs.push(entry);
         }
 
+        // Compute baseline fraction: baseline is at ty from the bottom of the cell.
+        // In screen coordinates (Y down), baseline_frac = 1 - ty / gs.
+        let ascender = face25.ascender() as f64;
+        let descender = face25.descender() as f64;
+        let total_height = ascender - descender;
+        let margin = self.px_range;
+        let usable = gs as f64 - 2.0 * margin;
+        let em_scale = usable / total_height;
+        let ty = margin + (-descender) * em_scale;
+        let baseline_frac = (1.0 - ty / gs as f64) as f32;
+
         Ok(FontAtlas {
             width: atlas_w,
             height: atlas_h,
@@ -363,6 +386,7 @@ impl FontAtlasBuilder {
             pixel_data,
             glyphs,
             glyph_index,
+            baseline_frac,
         })
     }
 }

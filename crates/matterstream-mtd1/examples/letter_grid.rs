@@ -87,7 +87,7 @@ fn main() {
         }
     }
 
-    let sdf_frame = mtd1_to_sdf(&doc, &gid_to_idx, &std_advances, font_size, px_range);
+    let sdf_frame = mtd1_to_sdf(&doc, &gid_to_idx, &std_advances, font_size, px_range, atlas.baseline_frac);
     println!("Draws: {}, chars: {}", sdf_frame.draws.len(), sdf_frame.char_buffer.len());
 
     // RGB → RGBA

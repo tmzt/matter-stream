@@ -27,12 +27,15 @@ pub struct SdfFrame {
 ///
 /// MSDF char_buffer entries: `[16b glyph_table_index | 16b advance_delta_biased]`
 /// Bitmap char_buffer entries: `[32b codepoint]`
+/// `baseline_frac` is the fraction from the top of the atlas cell to the baseline
+/// (e.g. 0.75 means baseline at 75% from top). Passed to shader via params.z.
 pub fn mtd1_to_sdf(
     doc: &Mtd1Document,
     glyph_id_to_table_index: &std::collections::HashMap<u16, u16>,
     standard_advances: &std::collections::HashMap<u16, f32>,
     font_size: f32,
     px_range: f32,
+    baseline_frac: f32,
 ) -> SdfFrame {
     let mut draws = Vec::new();
     let mut char_buffer: Vec<u32> = Vec::new();
@@ -79,7 +82,7 @@ pub fn mtd1_to_sdf(
                 pos: [start_x, y],
                 size: [total_width, font_size],
                 color,
-                params: [DRAW_TYPE_MSDF_TEXT, px_range, 0.0, f32::from_bits(packed_slot)],
+                params: [DRAW_TYPE_MSDF_TEXT, px_range, baseline_frac, f32::from_bits(packed_slot)],
             });
         }
     };
@@ -220,7 +223,7 @@ mod tests {
 
         let gid_map = std::collections::HashMap::from([(65u16, 0u16), (66, 1)]);
         let adv_map = std::collections::HashMap::from([(65u16, 0.5f32), (66, 0.5)]);
-        let frame = mtd1_to_sdf(&doc, &gid_map, &adv_map, 16.0, 4.0);
+        let frame = mtd1_to_sdf(&doc, &gid_map, &adv_map, 16.0, 4.0, 0.75);
 
         assert!(!frame.draws.is_empty());
         // Should be MSDF, not bitmap
@@ -241,7 +244,7 @@ mod tests {
 
         let gid_map = std::collections::HashMap::new();
         let adv_map = std::collections::HashMap::new();
-        let frame = mtd1_to_sdf(&doc, &gid_map, &adv_map, 16.0, 4.0);
+        let frame = mtd1_to_sdf(&doc, &gid_map, &adv_map, 16.0, 4.0, 0.75);
 
         let has_bitmap = frame.draws.iter().any(|d| d.draw_type() == DRAW_TYPE_TEXT);
         assert!(has_bitmap, "pictographic glyphs should use bitmap (type 4)");
@@ -264,7 +267,7 @@ mod tests {
 
         let gid_map = std::collections::HashMap::from([(72u16, 0u16)]);
         let adv_map = std::collections::HashMap::from([(72u16, 0.5f32)]);
-        let frame = mtd1_to_sdf(&doc, &gid_map, &adv_map, 16.0, 4.0);
+        let frame = mtd1_to_sdf(&doc, &gid_map, &adv_map, 16.0, 4.0, 0.75);
 
         let msdf_count = frame.draws.iter().filter(|d| d.draw_type() == DRAW_TYPE_MSDF_TEXT).count();
         let bitmap_count = frame.draws.iter().filter(|d| d.draw_type() == DRAW_TYPE_TEXT).count();
