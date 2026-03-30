@@ -284,8 +284,8 @@ impl FontAtlasBuilder {
                     // wastes atlas space. Instead, pad the hhea metrics by 50%.
                     let ascender = face25.ascender() as f64;   // e.g. 1878
                     let descender = face25.descender() as f64; // e.g. -449
-                    let asc_padded = ascender * 1.15;          // 15% headroom for accents
-                    let desc_padded = descender * 1.5;         // 50% extra for deep descenders
+                    let asc_padded = ascender * 1.1;           // 10% headroom for accents
+                    let desc_padded = descender * 2.0;         // 2x for deep descenders (Georgia g)
                     let total_height = asc_padded - desc_padded;
 
                     // Scale to fit total vertical extent in usable cell area
@@ -374,8 +374,8 @@ impl FontAtlasBuilder {
         // Compute baseline_frac matching the projection used above.
         let ascender = face25.ascender() as f64;
         let descender = face25.descender() as f64;
-        let asc_padded = ascender * 1.15;
-        let desc_padded = descender * 1.5;
+        let asc_padded = ascender * 1.1;
+        let desc_padded = descender * 2.0;
         let total_height = asc_padded - desc_padded;
         let margin = self.px_range;
         let usable = gs as f64 - 2.0 * margin;
