@@ -89,4 +89,12 @@ impl<'a> VmHandle<'a> {
         &self.vm.tkv_static_templates
     }
 
+    /// Execute bytecode against arenas.
+    pub fn execute(
+        &mut self,
+        bytecode: &[u8],
+        arenas: &mut matterstream_vm_arena::TripleArena,
+    ) -> Result<(), RpnError> {
+        self.vm.execute(bytecode, arenas)
+    }
 }
