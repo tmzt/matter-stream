@@ -1,5 +1,3 @@
-pub use matterstream_vm_addressing as addressing;
-
 pub mod rpn;
 pub mod ui_vm;
 pub mod skill_host;
@@ -9,7 +7,6 @@ pub mod hooks;
 pub mod or_page;
 pub mod shared;
 pub mod vm_handle;
-pub mod user_call_handler;
 #[cfg(feature = "ui")]
 pub mod gpu;
 

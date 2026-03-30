@@ -63,29 +63,4 @@ impl<'a> VmHandle<'a> {
             self.vm.string_bank[idx] = val;
         }
     }
-
-    /// Pop a u64 from the VM stack.
-    pub fn pop_u64(&mut self) -> Result<u64, RpnError> {
-        let v = self.pop()?;
-        match v {
-            RpnValue::U64(x) => Ok(x),
-            RpnValue::U32(x) => Ok(x as u64),
-            _ => Err(RpnError::TypeMismatch),
-        }
-    }
-
-    /// Pop an OVA from the VM stack.
-    pub fn pop_ova(&mut self) -> Result<matterstream_vm_addressing::ova::Ova, RpnError> {
-        let v = self.pop()?;
-        match v {
-            RpnValue::Ova(o) => Ok(o),
-            RpnValue::U32(x) => Ok(matterstream_vm_addressing::ova::Ova(x)),
-            _ => Err(RpnError::TypeMismatch),
-        }
-    }
-
-    /// Access the TKV static templates — OID → nursery OVA.
-    pub fn tkv_static_templates(&self) -> &std::collections::HashMap<u128, matterstream_vm_addressing::ova::Ova> {
-        &self.vm.tkv_static_templates
-    }
 }
