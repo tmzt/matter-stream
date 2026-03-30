@@ -327,49 +327,41 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Reconstruct actual advance: standard * font_size + delta
                     let advance_px = advance_x_norm * text_h + delta_px;
 
-                    // Scale: the atlas cell covers ascender + descender.
-                    // baseline_frac = ascender portion of the cell.
-                    // The ascender portion maps to ~text_h * baseline_frac screen pixels.
-                    // Full cell maps to text_h / baseline_frac screen pixels.
+                    // Scale: atlas cell covers ascender+descender (full vertical extent).
+                    // cell_screen_h = full cell height on screen.
                     let cell_screen_h = text_h / max(baseline_frac, 0.5);
                     let glyph_scale = cell_screen_h / atlas_gh;
 
-                    // Glyph position.
-                    // The atlas cell baseline sits at baseline_frac from the top.
-                    // Align so the baseline maps to text_y + baseline_frac * text_h.
+                    // Glyph position anchored at baseline.
+                    // text_y IS the baseline. Ascenders go up, descenders go down.
+                    // The atlas cell top is at baseline_frac from top, so the cell
+                    // starts at baseline - ascender_height above.
                     let gx = text_x + cursor_x;
-                    let gy = text_y;
+                    let cell_top_y = text_y - baseline_frac * cell_screen_h;
 
                     let local_x = effective_pixel.x - gx;
-                    let local_y = effective_pixel.y - gy;
+                    let local_y = effective_pixel.y - cell_top_y;
 
-                    // Hit-test: full glyph bitmap extents
-                    let screen_glyph_w = atlas_gw * glyph_scale;
-                    if local_x >= 0.0 && local_x < max(advance_px, screen_glyph_w) &&
-                       local_y >= 0.0 && local_y < cell_screen_h {
-                        // Map screen position to atlas UV.
-                        // autoframe maps glyph bbox to fill the atlas cell.
-                        // Uniform scale: map screen pixels to atlas pixels
-                        // Use the same scale for X and Y to preserve aspect ratio
-                        let atlas_local_x = local_x / glyph_scale;
-                        // Y: flipped (font Y up → screen Y down)
-                        let atlas_local_y = atlas_gh - local_y / glyph_scale;
+                    // Map screen position to atlas UV — no bounding box hit-test.
+                    // The MSDF itself determines inside/outside via the distance field.
+                    let atlas_local_x = local_x / glyph_scale;
+                    // Y: flipped (font Y up → screen Y down)
+                    let atlas_local_y = atlas_gh - local_y / glyph_scale;
 
-                        if atlas_local_x >= 0.0 && atlas_local_x < atlas_gw &&
-                           atlas_local_y >= 0.0 && atlas_local_y < atlas_gh {
-                            let u = (atlas_gx + atlas_local_x) / atlas_dim.x;
-                            let v = (atlas_gy + atlas_local_y) / atlas_dim.y;
+                    // Only sample if within the atlas cell — outside means no glyph data
+                    if atlas_local_x >= 0.0 && atlas_local_x < atlas_gw &&
+                       atlas_local_y >= 0.0 && atlas_local_y < atlas_gh {
+                        let u = (atlas_gx + atlas_local_x) / atlas_dim.x;
+                        let v = (atlas_gy + atlas_local_y) / atlas_dim.y;
 
-                            let sample = textureSample(msdf_atlas, msdf_sampler, vec2<f32>(u, v));
-                            let sd = msdf_median(sample.r, sample.g, sample.b);
+                        let sample = textureSample(msdf_atlas, msdf_sampler, vec2<f32>(u, v));
+                        let sd = msdf_median(sample.r, sample.g, sample.b);
 
-                            // Anti-aliased edge.
-                            // MSDF as mask: sd > 0.5 = inside glyph
-                            let alpha = clamp(px_range * (sd - 0.5) + 0.5, 0.0, 1.0);
-                            if alpha > 0.01 {
-                                let glyph_color = vec4<f32>(cmd.color.rgb, cmd.color.a * alpha);
-                                result = blend_over(result, glyph_color);
-                            }
+                        // MSDF as mask: sd > 0.5 = inside glyph
+                        let alpha = clamp(px_range * (sd - 0.5) + 0.5, 0.0, 1.0);
+                        if alpha > 0.01 {
+                            let glyph_color = vec4<f32>(cmd.color.rgb, cmd.color.a * alpha);
+                            result = blend_over(result, glyph_color);
                         }
                     }
 

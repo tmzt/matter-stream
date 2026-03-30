@@ -278,21 +278,21 @@ impl FontAtlasBuilder {
                     let margin = self.px_range;
                     let usable = gs as f64 - 2.0 * margin;
 
-                    // Use the font's actual ascender+descender extent for vertical scaling
-                    // so descenders fit fully in the atlas cell.
-                    let ascender = face25.ascender() as f64;   // positive
-                    let descender = face25.descender() as f64; // negative
-                    let total_height = ascender - descender;   // e.g. 2048 + 500 = 2548
+                    // Use the font's global bounding box (head table yMin/yMax)
+                    // for the actual glyph extremes — covers all descenders and accents.
+                    let global_bbox = face25.global_bounding_box();
+                    let y_min = global_bbox.y_min as f64; // deepest descender (negative)
+                    let y_max = global_bbox.y_max as f64; // tallest ascender (positive)
+                    let total_height = y_max - y_min;
 
                     // Scale to fit total vertical extent in usable cell area
-                    let em = upem as f64;
                     let em_scale = usable / total_height;
 
                     // X: left margin
                     let tx = margin;
-                    // Y: font origin is at baseline. Descender goes to negative y.
-                    // Shift so descender bottom = margin (bottom of cell).
-                    let ty = margin + (-descender) * em_scale;
+                    // Y: font origin is at baseline (y=0 in font coords).
+                    // Shift so y_min maps to bottom of cell (margin from edge).
+                    let ty = margin + (-y_min) * em_scale;
 
                     let framing = Framing {
                         range: self.px_range,
@@ -368,15 +368,17 @@ impl FontAtlasBuilder {
             glyphs.push(entry);
         }
 
-        // Compute baseline fraction: baseline is at ty from the bottom of the cell.
+        // Compute baseline fraction from global bbox.
+        // baseline is at ty from the bottom of the cell.
         // In screen coordinates (Y down), baseline_frac = 1 - ty / gs.
-        let ascender = face25.ascender() as f64;
-        let descender = face25.descender() as f64;
-        let total_height = ascender - descender;
+        let global_bbox = face25.global_bounding_box();
+        let y_min = global_bbox.y_min as f64;
+        let y_max = global_bbox.y_max as f64;
+        let total_height = y_max - y_min;
         let margin = self.px_range;
         let usable = gs as f64 - 2.0 * margin;
         let em_scale = usable / total_height;
-        let ty = margin + (-descender) * em_scale;
+        let ty = margin + (-y_min) * em_scale;
         let baseline_frac = (1.0 - ty / gs as f64) as f32;
 
         Ok(FontAtlas {

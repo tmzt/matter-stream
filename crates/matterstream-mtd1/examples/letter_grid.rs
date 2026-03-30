@@ -37,7 +37,7 @@ fn main() {
     let cell_w: f32 = 52.0;
     let line_spacing: f32 = font_size * 0.6; // blank gap between descenders and next ascenders
     let origin_x: f32 = 30.0;
-    let origin_y: f32 = 30.0;
+    let origin_y: f32 = font_size + 10.0; // baseline of first row (leave room for ascenders)
 
     // Build MSDF atlas
     let mut builder = FontAtlasBuilder::new(font_data, 128, px_range as f64);
