@@ -67,15 +67,8 @@ fn main() {
             doc.instructions.push(Command32::set_cursor(y as i16, x as i16));
 
             let s = ch.to_string();
-            let mut run = shaper.shape(&s);
+            let run = shaper.shape(&s);
             
-            // Manual override for digits to use the lining GIDs found in the potential lining range
-            if ch.is_ascii_digit() {
-                let digit_val = ch.to_digit(10).unwrap() as u16;
-                let lining_gid = 53 + digit_val;
-                run.glyphs[0].glyph_id = lining_gid;
-            }
-
             for g in &run.glyphs {
                 let adv = (g.x_advance as f32 * scale + 0.5) as u16;
                 doc.instructions.push(Command32::draw_glyph(adv.max(1).min(4095), g.glyph_id));
