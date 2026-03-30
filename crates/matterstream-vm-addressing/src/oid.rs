@@ -118,6 +118,15 @@ impl Oid {
     pub const PKG_ROOT_CHT_SYSTEM: Oid = Oid::from_segments(&[1, 1, 1, 3]);
     /// `1.1.2` — Public package tree (third-party)
     pub const PKG_ROOT_PUBLIC: Oid = Oid::from_segments(&[1, 1, 2]);
+
+    // ── @chitin/skills package OIDs (1.1.1.2.1-2) ─────────────────────
+    /// `1.1.1.2.1` — `<Param>` element (skill parameter definition)
+    pub const SKILLS_PARAM: Oid = Oid::from_segments(&[1, 1, 1, 2, 1]);
+    /// `1.1.1.2.2` — `<Trigger>` element (heuristic routing pattern)
+    pub const SKILLS_TRIGGER: Oid = Oid::from_segments(&[1, 1, 1, 2, 2]);
+
+    /// Package name for `@chitin/skills` imports.
+    pub const SKILLS_PACKAGE_NAME: &'static str = "@chitin/skills";
 }
 
 impl fmt::Debug for Oid {
