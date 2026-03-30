@@ -73,23 +73,11 @@ const fn lo_seg_shift(i: usize) -> u32 {
 }
 
 /// OID — hierarchical 2×u64 address with 3-bit segments.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// Full identity: hi + lo including prefix_len, flags, instance data.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Oid {
     pub hi: u64,
     pub lo: u64,
-}
-
-impl Ord for Oid {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.hi.cmp(&other.hi)
-            .then((self.lo & LO_SORT_MASK).cmp(&(other.lo & LO_SORT_MASK)))
-    }
-}
-
-impl PartialOrd for Oid {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
 }
 
 impl Oid {
