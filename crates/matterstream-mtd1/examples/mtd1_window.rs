@@ -54,6 +54,7 @@ fn is_non_printing(shaper: &TextShaper, glyph_id: u16) -> bool {
 fn emit_shaped_run(
     doc: &mut Mtd1Document,
     shaper: &TextShaper,
+    builder: &mut FontAtlasBuilder,
     text: &str,
     scale: f32,
     cursor_x: &mut f32,
@@ -63,6 +64,7 @@ fn emit_shaped_run(
     let mut pending_advance: f32 = 0.0;
 
     for g in &run.glyphs {
+        builder.add_glyph(g.glyph_id);
         let adv_px = g.x_advance as f32 * scale;
         if is_non_printing(shaper, g.glyph_id) {
             // Accumulate advance for non-printing, don't emit DRAW_GLYPH
@@ -88,27 +90,9 @@ fn build_scene() -> PreparedScene {
     let font_size: f32 = 28.0;
     let px_range: f32 = 4.0;
 
-    // Build MSDF atlas
+    // First pass: collect glyphs
     let mut atlas_builder = FontAtlasBuilder::new(font_data, 128, px_range as f64);
-    atlas_builder.add_ascii();
-    let atlas = atlas_builder.build().expect("atlas build failed");
-
-    println!(
-        "MSDF Atlas: {}x{}, {} glyphs, {}KB",
-        atlas.width, atlas.height, atlas.glyphs.len(),
-        atlas.pixel_data.len() / 1024
-    );
-
-    let mut glyph_id_to_table_index: HashMap<u16, u16> = HashMap::new();
-    let mut standard_advances: HashMap<u16, f32> = HashMap::new();
-    let mut glyph_table_u32s: Vec<u32> = Vec::new();
-    for (i, entry) in atlas.glyphs.iter().enumerate() {
-        glyph_id_to_table_index.insert(entry.glyph_id, i as u16);
-        standard_advances.insert(entry.glyph_id, entry.advance_x);
-        glyph_table_u32s.extend_from_slice(&entry.to_gpu_u32s());
-    }
-
-    // Shape and compile
+    
     let upem = shaper.units_per_em();
     let scale = font_size / upem as f32;
 
@@ -148,7 +132,7 @@ fn build_scene() -> PreparedScene {
             line_x = origin_x;
         }
         doc.instructions.push(Command32::set_cursor(y as i16, line_x as i16));
-        emit_shaped_run(&mut doc, &shaper, word, scale, &mut line_x, y);
+        emit_shaped_run(&mut doc, &shaper, &mut atlas_builder, word, scale, &mut line_x, y);
         line_x += space_w;
     }
 
@@ -173,9 +157,27 @@ fn build_scene() -> PreparedScene {
         for (col, cell) in row.iter().enumerate() {
             let mut cx = col_x[col] as f32;
             doc.instructions.push(Command32::set_cursor(y as i16, col_x[col]));
-            emit_shaped_run(&mut doc, &shaper, cell, scale, &mut cx, y);
+            emit_shaped_run(&mut doc, &shaper, &mut atlas_builder, cell, scale, &mut cx, y);
         }
         y += font_size * 1.3;
+    }
+
+    // Finalize atlas
+    let atlas = atlas_builder.build().expect("atlas build failed");
+
+    println!(
+        "MSDF Atlas: {}x{}, {} glyphs, {}KB",
+        atlas.width, atlas.height, atlas.glyphs.len(),
+        atlas.pixel_data.len() / 1024
+    );
+
+    let mut glyph_id_to_table_index: HashMap<u16, u16> = HashMap::new();
+    let mut standard_advances: HashMap<u16, f32> = HashMap::new();
+    let mut glyph_table_u32s: Vec<u32> = Vec::new();
+    for (i, entry) in atlas.glyphs.iter().enumerate() {
+        glyph_id_to_table_index.insert(entry.glyph_id, i as u16);
+        standard_advances.insert(entry.glyph_id, entry.advance_x);
+        glyph_table_u32s.extend_from_slice(&entry.to_gpu_u32s());
     }
 
     // Sparkline
@@ -194,14 +196,43 @@ fn build_scene() -> PreparedScene {
         sdf_frame.draws.iter().filter(|d| d.draw_type() == DRAW_TYPE_MSDF_TEXT).count()
     );
 
-    // RGB → RGBA for GPU
+    fn msdf_median(r: f32, g: f32, b: f32) -> f32 {
+        r.min(g).max(r.max(g).min(b))
+    }
+
+    // RGB → RGBA for GPU (and inspection)
     let mut atlas_rgba = Vec::with_capacity((atlas.width * atlas.height * 4) as usize);
     for i in 0..(atlas.width * atlas.height) as usize {
         let src = i * 3;
-        atlas_rgba.push(atlas.pixel_data.get(src).copied().unwrap_or(0));
-        atlas_rgba.push(atlas.pixel_data.get(src + 1).copied().unwrap_or(0));
-        atlas_rgba.push(atlas.pixel_data.get(src + 2).copied().unwrap_or(0));
+        let r = atlas.pixel_data.get(src).copied().unwrap_or(0);
+        let g = atlas.pixel_data.get(src + 1).copied().unwrap_or(0);
+        let b = atlas.pixel_data.get(src + 2).copied().unwrap_or(0);
+        atlas_rgba.push(r);
+        atlas_rgba.push(g);
+        atlas_rgba.push(b);
         atlas_rgba.push(255);
+    }
+
+    // Dump atlas for inspection
+    {
+        let mut rgba_preview = Vec::with_capacity(atlas_rgba.len());
+        for i in 0..(atlas.width * atlas.height) as usize {
+            let src = i * 4;
+            let r = atlas_rgba[src];
+            let g = atlas_rgba[src + 1];
+            let b = atlas_rgba[src + 2];
+            rgba_preview.push(r);
+            rgba_preview.push(g);
+            rgba_preview.push(b);
+            let sd = msdf_median(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+            rgba_preview.push(((1.0 - sd.clamp(0.0, 1.0)) * 255.0) as u8);
+        }
+        let f = std::fs::File::create("/Users/tmeade/src/common-data/tufte_atlas_raw.png").unwrap();
+        let mut enc = png::Encoder::new(f, atlas.width, atlas.height);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&rgba_preview).unwrap();
     }
 
     PreparedScene {
