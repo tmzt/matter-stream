@@ -208,6 +208,7 @@ pub struct Asm {
     label_count: u32,
     global_count: u32,
     string_table: Vec<String>,
+    pub tkv_static_table: Vec<TkvTemplate>,
 }
 
 impl Asm {
@@ -217,6 +218,7 @@ impl Asm {
             label_count: 0,
             global_count: 0,
             string_table: Vec::new(),
+            tkv_static_table: Vec::new(),
         }
     }
 
@@ -359,6 +361,12 @@ impl Asm {
     }
     pub fn rand(&mut self) -> &mut Self {
         self.tokens.push(AsmToken::UserCall(user_call::RAND, 0));
+        self
+    }
+
+    /// Emit a generic UserCall with action_op and data.
+    pub fn user_call(&mut self, action_op: u64, data: u64) -> &mut Self {
+        self.tokens.push(AsmToken::UserCall(action_op, data));
         self
     }
 
@@ -796,7 +804,7 @@ impl Asm {
         Ok(AsmOutput {
             bytecode,
             string_table: self.string_table,
-            tkv_static_table: Vec::new(), // populated by compiler when external components have props
+            tkv_static_table: self.tkv_static_table,
             global_count: self.global_count,
         })
     }

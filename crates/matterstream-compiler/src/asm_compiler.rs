@@ -16,7 +16,9 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 
 use matterstream_vm::ui_vm::{LlmUseCase, FOURCC_MTUI, FOURCC_VQL0, FOURCC_SKLL};
-use matterstream_vm_asm::{Asm, AsmOutput};
+use matterstream_vm_asm::{Asm, AsmOutput, TkvTemplate};
+use matterstream_vm_addressing::{TkvKey, TkvFixedEntry, TkvType, StrRefDisc};
+use matterstream_vm_addressing::oid::Oid;
 
 // ── Intermediate representation ──────────────────────────────────────────
 
@@ -901,6 +903,69 @@ fn get_num_prop(props: &[(String, PropValue)], name: &str) -> Option<i64> {
     })
 }
 
+/// Build a TkvTemplate from external component props.
+/// Props are sorted alphabetically (canonicalized), each assigned a sequential TkvKey.
+fn build_ext_props_template(
+    asm: &mut Asm,
+    oid_val: u128,
+    props: &[(String, PropValue)],
+) -> TkvTemplate {
+    // Sort props alphabetically for canonical ordering
+    let mut sorted: Vec<(String, PropValue)> = props.to_vec();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut entries = Vec::with_capacity(sorted.len());
+    for (i, (key_name, value)) in sorted.iter().enumerate() {
+        // TkvKey: sequential segments starting at 1 (segment 0 = 0 is unused by convention)
+        let seg = (i + 1) as u8;
+        let (tkv_type, val_bytes) = match value {
+            PropValue::Str(s) => {
+                let str_id = asm.def_string(s);
+                let mut v = [0u8; 8];
+                v[0] = StrRefDisc::StringTable as u8;
+                v[1..5].copy_from_slice(&str_id.0.to_le_bytes());
+                (TkvType::String, v)
+            }
+            PropValue::Num(n) => {
+                // Heuristic: 0 or 1 with a boolean-ish name → boolean
+                if (*n == 0 || *n == 1) && is_boolean_prop(key_name) {
+                    let mut v = [0u8; 8];
+                    v[0] = if *n != 0 { 1 } else { 0 };
+                    (TkvType::Boolean, v)
+                } else {
+                    (TkvType::Integer, (*n as u64).to_le_bytes())
+                }
+            }
+        };
+
+        let key = TkvKey::new(&[seg], tkv_type);
+        let key_name_id = asm.def_string(key_name);
+
+        entries.push(TkvFixedEntry {
+            key_path: key.raw(),
+            value_type: tkv_type as u8,
+            value: val_bytes,
+            key_str_disc: StrRefDisc::StringTable as u8,
+            key_str_idx: key_name_id.0 as u16,
+        });
+    }
+
+    // Entries are already sorted by TkvKey since we assigned sequential segments
+    // to alphabetically-sorted props
+    TkvTemplate {
+        oid: Oid::from_u128(oid_val),
+        entries,
+    }
+}
+
+/// Heuristic: prop names that are likely booleans.
+fn is_boolean_prop(name: &str) -> bool {
+    matches!(name,
+        "required" | "optional" | "disabled" | "enabled" | "hidden" |
+        "visible" | "checked" | "selected" | "readonly" | "fts" | "vec"
+    )
+}
+
 fn emit_nodes(asm: &mut Asm, nodes: &[JsxNode]) {
     for node in nodes {
         emit_node(asm, node);
@@ -1401,10 +1466,20 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
             if node.tag.starts_with("__ext:") {
                 let oid_str = &node.tag[6..];
                 if let Ok(oid_val) = oid_str.parse::<u128>() {
-                    // Push OID and resolve to FQA via .osym
+                    // Build TKV template from props (sorted, canonicalized)
+                    if !node.props.is_empty() {
+                        let template = build_ext_props_template(asm, oid_val, &node.props);
+                        asm.tkv_static_table.push(template);
+                        // Emit: push OID → UserCall(TKV, CLONE) to clone template
+                        asm.push128(oid_val);
+                        asm.user_call(
+                            matterstream_vm_asm::user_call::TKV,
+                            matterstream_vm_addressing::tkv_ops::TkvOp::Clone as u64,
+                        );
+                    }
+                    // Push OID and resolve → ExecComponent
                     asm.push128(oid_val);
                     asm.oid_import();
-                    // Execute the component
                     asm.op(matterstream_vm::rpn::RpnOp::ExecComponent);
                     return;
                 }
