@@ -12,7 +12,8 @@ matterstream-vm-scl = { path = "../matterstream-vm-scl" }
 matterstream-packaging = { path = "../matterstream-packaging" }
 matterstream-vm = { path = "../matterstream-vm" }
 futures = "0.3"
-
+dashmap = "5.5"
+smol_str = { workspace = true }
 
 [dev-dependencies]
 async-io = "2.6.0"

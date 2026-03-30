@@ -4,3 +4,4 @@
 target/
 Cargo.lock
 .claude/worktrees/
+.gemini/

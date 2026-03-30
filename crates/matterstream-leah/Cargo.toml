@@ -1,0 +1,14 @@
+[package]
+name = "matterstream-leah"
+version = "0.1.0"
+edition = "2021"
+description = "MatterStream GPU heuristic auditor (Leah)"
+license = "Apache-2.0"
+
+[dependencies]
+matterstream-core = { workspace = true }
+matterstream-compiler = { workspace = true }
+
+[[bin]]
+name = "leah-test"
+path = "src/main.rs"

@@ -9,12 +9,19 @@ oxc_parser = "0.13"
 oxc_allocator = "0.13"
 oxc_ast = "0.13"
 oxc_span = "0.13"
+oxc_syntax = "0.13"
 winit = "0.30.12"
 softbuffer = "0.4.8"
 bytemuck = { version = "1", features = ["derive"] }
+rusttype = "0.9.3"
+image = "0.25.9"
 smol = "2"
-tempfile = "3"
+smol_str = "0.1"
 async-io = "2.6.0"
+tempfile = "3"
+wgpu = "25"
+glyphon = "0.9"
+pollster = "0.4"
 
 # Internal workspace crates
 matterstream-core = { path = "crates/matterstream-core" }
@@ -24,4 +31,9 @@ matterstream-vm-addressing = { path = "crates/matterstream-vm-addressing" }
 matterstream-vm-arena = { path = "crates/matterstream-vm-arena" }
 matterstream-packaging = { path = "crates/matterstream-packaging" }
 matterstream-vm-scl = { path = "crates/matterstream-vm-scl" }
+matterstream-compiler = { path = "crates/matterstream-compiler" }
+matterstream-renderer = { path = "crates/matterstream-renderer" }
+matterstream-loader = { path = "crates/matterstream-loader" }
+font-atlas-gen = { path = "crates/font-atlas-gen" }
+matterstream-packages = { path = "crates/matterstream-packages" }
 matterstream = { path = "crates/matterstream" }

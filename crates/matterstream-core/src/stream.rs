@@ -115,6 +115,9 @@ impl MatterStream {
                 Op::PopState => {
                     self.state_stack.pop(&mut self.registers);
                 }
+                Op::SetSize(_) | Op::SetLabel(_) | Op::SetPadding(_) | Op::SetTextColor(_) => {
+                    // UI layout ops — handled by renderer
+                }
                 Op::BindZeroPage { .. } | Op::BindResource(_) => {
                     // Binding ops update execution context
                 }
@@ -155,7 +158,7 @@ impl MatterStream {
     }
 
     /// Execute a draw, resolving position via direct register index.
-    fn execute_draw(&self, header: &OpsHeader, _primitive: &Primitive, position_rsi: usize) -> Option<Draw> {
+    fn execute_draw(&self, header: &OpsHeader, primitive: &Primitive, position_rsi: usize) -> Option<Draw> {
         // Resolve position from the RSI pointer — O(1) direct register access (Test A)
         let rsi = header.rsi_pointers.get(position_rsi)?;
 
@@ -170,23 +173,23 @@ impl MatterStream {
         let color = *self.registers.vec4.read(0);
 
         // Translation fast-path check (Test D)
-        if header.translation_only {
-            // 12 bytes: vec3 addition
-            Some(Draw {
-                position,
-                color,
-                used_fast_path: true,
-                transform_bytes: Vec3Bank::register_bytes(),
-            })
+        let (used_fast_path, transform_bytes) = if header.translation_only {
+            (true, Vec3Bank::register_bytes())
         } else {
-            // 64 bytes: full mat4 multiplication
-            Some(Draw {
-                position,
-                color,
-                used_fast_path: false,
-                transform_bytes: Mat4Bank::register_bytes(),
-            })
-        }
+            (false, Mat4Bank::register_bytes())
+        };
+
+        Some(Draw {
+            primitive: primitive.clone(),
+            position,
+            color,
+            size: [0.0; 2],
+            label: None,
+            padding: [0.0; 4],
+            text_color: None,
+            used_fast_path,
+            transform_bytes,
+        })
     }
 }
 

@@ -1,0 +1,9 @@
+[package]
+name = "font-atlas-gen"
+version = "0.1.0"
+edition = "2021"
+description = "Build-time font atlas generation for MatterStream"
+license = "Apache-2.0"
+
+[dependencies]
+matterstream-loader = { workspace = true, features = ["ttf"] }

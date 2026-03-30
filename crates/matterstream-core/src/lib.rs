@@ -3,6 +3,8 @@
 //! Ops, registers, tiers, stream executor, RPN VM, and UI draw commands.
 //! VM_SPEC subsystems (addressing, arena, packaging, SCL) live in their own crates.
 
+pub mod ast_hook;
+pub mod ast_tsx;
 pub mod builder;
 // Compiler moved to matterstream-compiler crate
 pub mod ops;
@@ -18,7 +20,7 @@ pub mod tier3;
 pub mod ui_vm;
 
 pub use builder::StreamBuilder;
-pub use ops::{Op, OpsHeader, Primitive, RsiPointer};
+pub use ops::{CompiledOps, Draw, Op, OpsHeader, Primitive, RsiPointer};
 pub use parser::Parser;
 pub use registers::RegisterFile;
 pub use rpn::RpnVm;
@@ -29,3 +31,5 @@ pub use tier1::{IntBank, Mat4Bank, ScalarBank, Vec3Bank, Vec4Bank};
 pub use tier2::ZeroPage;
 pub use tier3::{ResourceHandle, ResourceTable};
 pub use ui_vm::{UiDrawCmd, UiDrawState};
+pub use ast_hook::{MtsmObject, MtsmVariant, AnyMtsmBinding, AnyMtsmHook, MtsmBinding, MtsmHook, MtsmActionGetter, MtsmActionSetter, MtsmSlotGetter, MtsmSlotSetter, MtsmPrimitive, TsShaderTransmissible, MtsmTsxFunctionalComponent, TsxElementContext, MtsmExecFunctionalComponent, Binder, BinderEntry, MtsmSecureSourceSymbol, MtsmBindHandle, MtsmPackageHandle, MtsmPackageRegistry};
+pub use ast_tsx::{TsxElement, TsxAttributes, TsxFragment, TsxKind, TsTypeValue, TsTypeDef, TypeValueBinder, SourceLoc};
