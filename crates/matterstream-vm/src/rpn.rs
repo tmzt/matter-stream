@@ -44,6 +44,7 @@ use crate::ui_vm::{
     FOURCC_MTUI, FOURCC_VQL0,
 };
 use crate::or_page::OrPageHandler;
+use crate::user_call_handler::UserCallHandler;
 use crate::vm_handle::VmHandle;
 #[cfg(feature = "ui")]
 use crate::ui_vm::{
@@ -822,6 +823,10 @@ pub struct RpnVm {
     pub zero_page: [u8; 256],
     // String table for UiTextStr
     pub string_table: Vec<String>,
+    /// TKV static templates — OID → nursery OVA. Each template is a contiguous
+    /// block of TkvFixedEntry (16 bytes each) in the nursery arena.
+    /// Populated at load time from compiled template data.
+    pub tkv_static_templates: std::collections::HashMap<u128, Ova>,
     /// Mutable string bank (runtime-writable, 256 nullable slots).
     pub string_bank: Vec<Option<String>>,
 
@@ -872,6 +877,8 @@ pub struct RpnVm {
 
     /// External OR page handlers — (fourcc, handler) pairs, linear scanned.
     or_pages: Vec<(u32, Box<dyn OrPageHandler>)>,
+    /// External UserCall handlers — action_op → handler.
+    user_call_handlers: std::collections::HashMap<u64, Box<dyn UserCallHandler>>,
 
     // ── UI state (requires "ui" feature) ────────────────────────────────
     #[cfg(feature = "ui")]
@@ -907,6 +914,7 @@ impl RpnVm {
             vec4_bank: [[0.0; 4]; 16],
             zero_page: [0; 256],
             string_table: Vec::new(),
+            tkv_static_templates: std::collections::HashMap::new(),
             string_bank: vec![None; 256],
             shared_state: None,
             user_atomics_readable: (0..256).map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
@@ -928,6 +936,7 @@ impl RpnVm {
             string_base_offset: 0,
             component_depth: 0,
             or_pages: Vec::new(),
+            user_call_handlers: std::collections::HashMap::new(),
             #[cfg(feature = "ui")]
             ui_draws: Vec::new(),
             #[cfg(feature = "ui")]
@@ -984,6 +993,16 @@ impl RpnVm {
         let idx = self.or_pages.iter().position(|(f, _)| *f == fourcc)?;
         let (_, handler) = self.or_pages.swap_remove(idx);
         handler.as_any().downcast::<T>().ok()
+    }
+
+    /// Register an external UserCall handler for a given action_op.
+    pub fn register_user_call(&mut self, action_op: u64, handler: Box<dyn UserCallHandler>) {
+        self.user_call_handlers.insert(action_op, handler);
+    }
+
+    /// Unregister a UserCall handler.
+    pub fn unregister_user_call(&mut self, action_op: u64) {
+        self.user_call_handlers.remove(&action_op);
     }
 
     /// Public push for native hooks (VM-escape).
@@ -1964,7 +1983,7 @@ impl RpnVm {
     fn dispatch_user_call(
         &mut self,
         action_op: u64,
-        _data: u64,
+        data: u64,
         _bytecode: &[u8],
         arenas: &mut TripleArena,
     ) -> Result<(), RpnError> {
@@ -2123,7 +2142,15 @@ impl RpnVm {
                 }
             }
             _ => {
-                return Err(RpnError::InvalidUserCallAction(action_op));
+                // Check registered external UserCall handlers
+                if let Some(mut handler) = self.user_call_handlers.remove(&action_op) {
+                    let mut handle = VmHandle { vm: self };
+                    let result = handler.dispatch(data, &mut handle, arenas);
+                    self.user_call_handlers.insert(action_op, handler);
+                    result?;
+                } else {
+                    return Err(RpnError::InvalidUserCallAction(action_op));
+                }
             }
         }
         Ok(())

@@ -27,6 +27,16 @@ pub struct GlobalId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StringId(pub u32);
 
+/// A compiled TKV template — OID + sorted fixed entries.
+/// The OID identifies which component this template belongs to.
+/// At load time, entries are written into the nursery arena and
+/// registered in `RpnVm::tkv_static_templates` keyed by OID.
+#[derive(Debug, Clone)]
+pub struct TkvTemplate {
+    pub oid: matterstream_vm::addressing::oid::Oid,
+    pub entries: Vec<matterstream_vm::addressing::TkvFixedEntry>,
+}
+
 // ── OR page sub-opcodes ────────────────────────────────────────────────
 
 /// MTUI OR page sub-opcodes (emitted as 0x80 + offset).
@@ -107,6 +117,8 @@ pub mod user_call {
     pub const SUBMIT_USER_SEMAPHORE: u64 = 0x21;
     pub const SHARED_STRING_GET: u64 = 0x22;
     pub const SHARED_STRING_SET: u64 = 0x23;
+    /// TKV arena coprocessor — sub-ops in data param.
+    pub const TKV: u64 = 0x30;
 }
 
 // ── SystemCall sub-op IDs ──────────────────────────────────────────────
@@ -182,6 +194,9 @@ impl fmt::Display for AsmError {
 pub struct AsmOutput {
     pub bytecode: Vec<u8>,
     pub string_table: Vec<String>,
+    /// Pre-built TKV templates (OID + sorted entries).
+    /// Loaded into nursery arena at VM init.
+    pub tkv_static_table: Vec<TkvTemplate>,
     pub global_count: u32,
 }
 
@@ -779,6 +794,7 @@ impl Asm {
         Ok(AsmOutput {
             bytecode,
             string_table: self.string_table,
+            tkv_static_table: Vec::new(), // populated by compiler when external components have props
             global_count: self.global_count,
         })
     }
