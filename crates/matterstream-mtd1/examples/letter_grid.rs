@@ -71,7 +71,7 @@ fn main() {
     ];
 
     let mut doc = Mtd1Document::new();
-    doc.styles.push(BankedStyle::with_font(0x111111FF, 0, 0, 0, 1));
+    doc.styles.push(BankedStyle::with_font(0x000000FF, 0, 0, 0, 1));
 
     doc.instructions.push(Command32::set_style(0));
 

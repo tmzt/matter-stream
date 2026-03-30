@@ -372,10 +372,10 @@ impl FontAtlasBuilder {
 /// `inv_range` = 0.5 / px_range.
 /// Map raw MSDF distance to u8 [0,255].
 /// msdfgen with TrueType: positive = outside, negative = inside.
-/// We map raw distance so that inside is < 0.5 (Dark) and outside is > 0.5 (Light).
+/// We map raw distance so that inside (positive) is < 0.5 (Dark) and outside (negative) is > 0.5 (Light).
 /// This matches the black-text-on-white-background requirement.
 fn msdf_to_u8(value: f32, inv_range: f32) -> u8 {
-    let normalized = (value * inv_range + 0.5).clamp(0.0, 1.0);
+    let normalized = (0.5 - value * inv_range).clamp(0.0, 1.0);
     (normalized * 255.0) as u8
 }
 
