@@ -1,6 +1,6 @@
 //! Tests for OID import opcodes (Push128, UserCall+OidImport, UserCall+OidCall).
 
-use matterstream_vm::rpn::{NativeHookFn, RpnError, RpnOp, RpnValue, RpnVm, UserCallOp};
+use matterstream_vm::rpn::{NativeHookFn, RpnError, RpnOp, RpnValue, RpnVm, UserCallOp, VmHandleNative};
 use matterstream_vm_addressing::fqa::Fqa;
 use matterstream_vm_addressing::oid::{ImportKind, Oid};
 use matterstream_vm_addressing::oid_index::OidIndexBuilder;
@@ -95,7 +95,7 @@ fn oid_import_not_found_errors() {
 fn oid_call_native_hook_dispatches() {
     static HOOK_CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-    fn test_hook(_vm: &mut RpnVm, _arenas: &mut TripleArena) -> Result<(), RpnError> {
+    fn test_hook(_vm: &mut VmHandleNative, _arenas: &mut TripleArena) -> Result<(), RpnError> {
         HOOK_CALLED.store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
@@ -128,7 +128,7 @@ fn oid_call_sandboxed_rejects_native_hook() {
     builder.add_native_hook(Oid::from_segments(&[1, 1, 1, 1, 1]), 0);
     vm.oid_indices.push(builder.build());
 
-    fn dummy(_vm: &mut RpnVm, _arenas: &mut TripleArena) -> Result<(), RpnError> {
+    fn dummy(_vm: &mut VmHandleNative, _arenas: &mut TripleArena) -> Result<(), RpnError> {
         Ok(())
     }
     vm.native_hooks.push(dummy as NativeHookFn);
@@ -146,7 +146,7 @@ fn oid_call_sandboxed_rejects_native_hook() {
 }
 
 #[test]
-fn oid_call_fqa_pushes_value() {
+fn component_ops_oid_import_pushes_fqa() {
     let mut vm = RpnVm::new();
     let mut arenas = TripleArena::new();
     vm.oid_indices.push(make_test_osym());
@@ -155,8 +155,8 @@ fn oid_call_fqa_pushes_value() {
     let oid = Oid::from_segments(&[1, 1, 1, 1, 2]);
     let mut bc = encode_oid_push(oid);
     bc.push(RpnOp::UserCall as u8);
-    bc.extend_from_slice(&(UserCallOp::OidCall as u64).to_le_bytes());
-    bc.extend_from_slice(&0u64.to_le_bytes());
+    bc.extend_from_slice(&(UserCallOp::ComponentOps as u64).to_le_bytes());
+    bc.extend_from_slice(&0x00u64.to_le_bytes()); // sub-op 0 = OID_IMPORT
     bc.push(RpnOp::Halt as u8);
 
     vm.execute(&bc, &mut arenas).unwrap();

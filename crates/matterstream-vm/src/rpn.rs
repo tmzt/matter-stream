@@ -22,7 +22,7 @@ use matterstream_vm_arena::TripleArena;
 use crate::shared::VmSharedState;
 
 /// Native hook function signature for VM-escape dispatch.
-pub type NativeHookFn = fn(vm: &mut RpnVm, arenas: &mut TripleArena) -> Result<(), RpnError>;
+pub type NativeHookFn = fn(vm: &mut VmHandleNative, arenas: &mut TripleArena) -> Result<(), RpnError>;
 
 /// Descriptor for a loaded component (from a package archive).
 #[derive(Clone, Debug)]
@@ -397,9 +397,14 @@ pub enum UserCallOp {
     EvHasEvent     = 0x01,
     FrameCount     = 0x02,
     Rand           = 0x03,
+    #[deprecated(note = "use ComponentOps")]
     OidImport      = 0x10,
+    #[deprecated(note = "use ComponentOps")]
     OidCall        = 0x11,
+    #[deprecated(note = "use ComponentOps")]
     OidCosineMatch = 0x12,
+    /// Grouped component operations — sub-op in data param.
+    ComponentOps   = 0x13,
     /// Read from UserAtomicReadable[slot] → pushes u32.
     ReadUserAtomic       = 0x20,
     /// Write value to UserAtomicSubmitSemaphore[slot] (fire-and-forget).
@@ -968,7 +973,9 @@ impl RpnVm {
         vm
     }
 
-    fn push(&mut self, val: RpnValue) -> Result<(), RpnError> {
+    // TODO: move VmHandle into this module (like VmSetupHandle/VmHandleNative),
+    // then make this private again.
+    pub(crate) fn push(&mut self, val: RpnValue) -> Result<(), RpnError> {
         if self.stack.len() >= self.max_stack_depth {
             return Err(RpnError::StackOverflow);
         }
@@ -979,8 +986,13 @@ impl RpnVm {
         Ok(())
     }
 
-    /// Register an external OR page handler by FourCC.
-    pub fn register_or_page(&mut self, fourcc: u32, handler: Box<dyn OrPageHandler>) {
+    /// Get a setup handle for registering handlers before execution.
+    pub fn setup(&mut self) -> VmSetupHandle<'_> {
+        VmSetupHandle { vm: self }
+    }
+
+
+    fn register_or_page_inner(&mut self, fourcc: u32, handler: Box<dyn OrPageHandler>) {
         if let Some(entry) = self.or_pages.iter_mut().find(|(f, _)| *f == fourcc) {
             entry.1 = handler;
         } else {
@@ -988,37 +1000,10 @@ impl RpnVm {
         }
     }
 
-    /// Remove and return an external OR page handler by FourCC, downcasting to a concrete type.
-    pub fn take_or_page<T: 'static>(&mut self, fourcc: u32) -> Option<Box<T>> {
-        let idx = self.or_pages.iter().position(|(f, _)| *f == fourcc)?;
-        let (_, handler) = self.or_pages.swap_remove(idx);
-        handler.as_any().downcast::<T>().ok()
-    }
-
-    /// Find the index of an OR page handler by FourCC.
-    pub fn or_pages_position(&self, fourcc: u32) -> Option<usize> {
-        self.or_pages.iter().position(|(f, _)| *f == fourcc)
-    }
-
-    /// Remove an OR page handler by index (swap_remove). Returns (fourcc, handler).
-    pub fn or_pages_swap_remove(&mut self, idx: usize) -> (u32, Box<dyn OrPageHandler>) {
-        self.or_pages.swap_remove(idx)
-    }
-
-    /// Register an external UserCall handler for a given action_op.
-    pub fn register_user_call(&mut self, action_op: u64, handler: Box<dyn UserCallHandler>) {
+    fn register_user_call_inner(&mut self, action_op: u64, handler: Box<dyn UserCallHandler>) {
         self.user_call_handlers.insert(action_op, handler);
     }
 
-    /// Unregister a UserCall handler.
-    pub fn unregister_user_call(&mut self, action_op: u64) {
-        self.user_call_handlers.remove(&action_op);
-    }
-
-    /// Public push for native hooks (VM-escape).
-    pub fn push_value(&mut self, val: RpnValue) -> Result<(), RpnError> {
-        self.push(val)
-    }
 
     fn pop(&mut self) -> Result<RpnValue, RpnError> {
         self.stack.pop().ok_or(RpnError::StackUnderflow)
@@ -1390,6 +1375,137 @@ impl RpnVm {
         }
 
         Ok(())
+    }
+
+    // ── Component ops (0x13 sub-ops) ─────────────────────────────────────
+
+    /// OID import: pop OID, resolve via .osym, push FQA.
+    fn component_op_oid_import(&mut self) -> Result<(), RpnError> {
+        let val = self.pop()?;
+        let (oid, hi, lo) = match val {
+            RpnValue::Fqa(fqa) => {
+                let v = fqa.value();
+                let hi = (v >> 64) as u64;
+                let lo = v as u64;
+                (Oid::new(hi, lo), hi, lo)
+            }
+            RpnValue::U64(lo_val) => {
+                let hi = self.pop_u64()?;
+                (Oid::new(hi, lo_val), hi, lo_val)
+            }
+            _ => return Err(RpnError::TypeMismatch),
+        };
+        let entry = self.resolve_oid(oid)?;
+
+        let mode = oid.security_mode();
+        if entry.kind == ImportKind::NativeHook && mode == SecurityMode::Sandboxed {
+            return Err(RpnError::OidSecurityViolation {
+                hi, lo,
+                required: "System or Internal",
+                actual: "Sandboxed",
+            });
+        }
+
+        let fqa = entry.fqa();
+        self.push(RpnValue::Fqa(fqa))
+    }
+
+    /// Resolve OID and fully execute: NativeHook dispatches directly,
+    /// Component resolves to FQA and executes via ExecComponent.
+    fn component_op_exec_or_native(&mut self, arenas: &mut TripleArena) -> Result<(), RpnError> {
+        let val = self.pop()?;
+        let (oid, hi, lo) = match val {
+            RpnValue::Fqa(fqa) => {
+                let v = fqa.value();
+                let hi = (v >> 64) as u64;
+                let lo = v as u64;
+                (Oid::new(hi, lo), hi, lo)
+            }
+            RpnValue::U64(lo_val) => {
+                let hi = self.pop_u64()?;
+                (Oid::new(hi, lo_val), hi, lo_val)
+            }
+            _ => return Err(RpnError::TypeMismatch),
+        };
+        let entry = self.resolve_oid(oid)?;
+
+        let mode = oid.security_mode();
+        match entry.kind {
+            ImportKind::NativeHook => {
+                if mode == SecurityMode::Sandboxed {
+                    return Err(RpnError::OidSecurityViolation {
+                        hi, lo,
+                        required: "System or Internal",
+                        actual: "Sandboxed",
+                    });
+                }
+                let dispatch_id = entry.dispatch_id();
+                if dispatch_id as usize >= self.native_hooks.len() {
+                    return Err(RpnError::OidInvalidNativeHook(dispatch_id));
+                }
+                let hook = self.native_hooks[dispatch_id as usize];
+                let mut handle = VmHandleNative { vm: self };
+                hook(&mut handle, arenas)?;
+            }
+            _ => {
+                let fqa = entry.fqa();
+                self.push(RpnValue::Fqa(fqa))?;
+                self.exec_component_inner(arenas)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Pop FQA from stack, look up component, execute with state isolation.
+    fn exec_component_inner(&mut self, arenas: &mut TripleArena) -> Result<(), RpnError> {
+        let fqa_val = self.stack.pop().ok_or(RpnError::StackUnderflow)?;
+        let fqa_key = match fqa_val {
+            RpnValue::Fqa(f) => f.0,
+            RpnValue::U64(v) => v as u128,
+            RpnValue::U32(v) => v as u128,
+            _ => return Err(RpnError::TypeMismatch),
+        };
+        let entry = self.component_table.get(&fqa_key)
+            .ok_or(RpnError::ComponentNotFound(fqa_key))?
+            .clone();
+        if self.component_depth >= 16 {
+            return Err(RpnError::ComponentDepthExceeded);
+        }
+
+        // Save context
+        let saved_pc = self.pc;
+        let saved_string_base = self.string_base_offset;
+        let saved_depth = self.component_depth;
+
+        // UI state isolation
+        #[cfg(feature = "ui")]
+        {
+            self.ui_state_stack.push(self.ui_state);
+            self.transform_stack.push(MAT4_IDENTITY);
+        }
+
+        // Enter component
+        self.string_base_offset = entry.string_base;
+        self.component_depth += 1;
+
+        let bc = self.loaded_bytecodes[entry.bytecode_id as usize].clone();
+        let component_bc = &bc[entry.offset as usize..(entry.offset + entry.length) as usize];
+        let result = self.execute_inner(component_bc, arenas);
+
+        // Restore context (pc restored to saved value; caller advances)
+        self.pc = saved_pc;
+        self.string_base_offset = saved_string_base;
+        self.component_depth = saved_depth;
+
+        #[cfg(feature = "ui")]
+        {
+            self.transform_stack.pop();
+            if let Some(state) = self.ui_state_stack.pop() {
+                self.ui_state = state;
+            }
+        }
+
+        result
     }
 
     /// Execute bytecode without resetting VM state.
@@ -1897,56 +2013,8 @@ impl RpnVm {
                 self.pc += 1;
             }
             RpnOp::ExecComponent => {
-                // Pop FQA, look up component, execute with state isolation
-                let fqa_val = self.stack.pop().ok_or(RpnError::StackUnderflow)?;
-                let fqa_key = match fqa_val {
-                    RpnValue::Fqa(f) => f.0,
-                    RpnValue::U64(v) => v as u128,
-                    RpnValue::U32(v) => v as u128,
-                    _ => return Err(RpnError::TypeMismatch),
-                };
-                let entry = self.component_table.get(&fqa_key)
-                    .ok_or(RpnError::ComponentNotFound(fqa_key))?
-                    .clone();
-                if self.component_depth >= 16 {
-                    return Err(RpnError::ComponentDepthExceeded);
-                }
-
-                // Save context
-                let saved_pc = self.pc;
-                let saved_string_base = self.string_base_offset;
-                let saved_depth = self.component_depth;
-
-                // UI state isolation
-                #[cfg(feature = "ui")]
-                {
-                    self.ui_state_stack.push(self.ui_state);
-                    self.transform_stack.push(MAT4_IDENTITY);
-                }
-
-                // Enter component
-                self.string_base_offset = entry.string_base;
-                self.component_depth += 1;
-
-                let bc = self.loaded_bytecodes[entry.bytecode_id as usize].clone();
-                let component_bc = &bc[entry.offset as usize..(entry.offset + entry.length) as usize];
-                let result = self.execute_inner(component_bc, arenas);
-
-                // Restore context
-                self.pc = saved_pc + 1;
-                self.string_base_offset = saved_string_base;
-                self.component_depth = saved_depth;
-
-                #[cfg(feature = "ui")]
-                {
-                    self.transform_stack.pop();
-                    if let Some(state) = self.ui_state_stack.pop() {
-                        self.ui_state = state;
-                    }
-                }
-
-                result?;
-                return Ok(()); // pc already advanced
+                self.exec_component_inner(arenas)?;
+                self.pc += 1;
             }
             // ── UserCall (0x60): unprivileged escape ──
             RpnOp::UserCall => {
@@ -2023,81 +2091,26 @@ impl RpnVm {
                 let value = self.rng.next_bounded(max);
                 self.push(RpnValue::U32(value))?;
             }
-            // 0x10 OidImport — pops a u128 (Push128/Fqa) or two u64s (hi, lo)
+            // 0x10 OidImport (deprecated — use 0x13 COMPONENT_OPS)
             0x10 => {
-                let val = self.pop()?;
-                let (oid, hi, lo) = match val {
-                    RpnValue::Fqa(fqa) => {
-                        let v = fqa.value();
-                        let hi = (v >> 64) as u64;
-                        let lo = v as u64;
-                        (Oid::new(hi, lo), hi, lo)
-                    }
-                    RpnValue::U64(lo_val) => {
-                        let hi = self.pop_u64()?;
-                        (Oid::new(hi, lo_val), hi, lo_val)
-                    }
-                    _ => return Err(RpnError::TypeMismatch),
-                };
-                let entry = self.resolve_oid(oid)?;
-
-                let mode = oid.security_mode();
-                if entry.kind == ImportKind::NativeHook && mode == SecurityMode::Sandboxed {
-                    return Err(RpnError::OidSecurityViolation {
-                        hi, lo,
-                        required: "System or Internal",
-                        actual: "Sandboxed",
-                    });
-                }
-
-                let fqa = entry.fqa();
-                self.push(RpnValue::Fqa(fqa))?;
+                self.component_op_oid_import()?;
             }
-            // 0x11 OidCall — pops a u128 (Push128/Fqa) or two u64s (hi, lo)
+            // 0x11 OidCall (deprecated — use 0x13 COMPONENT_OPS)
             0x11 => {
-                let val = self.pop()?;
-                let (oid, hi, lo) = match val {
-                    RpnValue::Fqa(fqa) => {
-                        let v = fqa.value();
-                        let hi = (v >> 64) as u64;
-                        let lo = v as u64;
-                        (Oid::new(hi, lo), hi, lo)
-                    }
-                    RpnValue::U64(lo_val) => {
-                        let hi = self.pop_u64()?;
-                        (Oid::new(hi, lo_val), hi, lo_val)
-                    }
-                    _ => return Err(RpnError::TypeMismatch),
-                };
-                let entry = self.resolve_oid(oid)?;
-
-                let mode = oid.security_mode();
-                match entry.kind {
-                    ImportKind::NativeHook => {
-                        if mode == SecurityMode::Sandboxed {
-                            return Err(RpnError::OidSecurityViolation {
-                                hi, lo,
-                                required: "System or Internal",
-                                actual: "Sandboxed",
-                            });
-                        }
-                        let dispatch_id = entry.dispatch_id();
-                        if dispatch_id as usize >= self.native_hooks.len() {
-                            return Err(RpnError::OidInvalidNativeHook(dispatch_id));
-                        }
-                        let hook = self.native_hooks[dispatch_id as usize];
-                        hook(self, arenas)?;
-                    }
-                    _ => {
-                        let fqa = entry.fqa();
-                        self.push(RpnValue::Fqa(fqa))?;
-                    }
-                }
+                self.component_op_exec_or_native(arenas)?;
             }
-            // 0x12 OidCosineMatch (stub)
+            // 0x12 OidCosineMatch (deprecated — use 0x13 COMPONENT_OPS)
             0x12 => {
-                // Stub: push 0 as match score
                 self.push(RpnValue::U64(0))?;
+            }
+            // 0x13 ComponentOps — grouped component operations, sub-op in data
+            0x13 => {
+                match data {
+                    0x00 => self.component_op_oid_import()?,
+                    0x01 => self.component_op_exec_or_native(arenas)?,
+                    0x02 => self.push(RpnValue::U64(0))?,
+                    _ => return Err(RpnError::InvalidUserCallAction(action_op)),
+                }
             }
             // 0x20 ReadUserAtomic — read from shared_state or local fallback
             0x20 => {
@@ -2194,7 +2207,8 @@ impl RpnVm {
                     return Err(RpnError::OidInvalidNativeHook(dispatch_id));
                 }
                 let hook = self.native_hooks[dispatch_id as usize];
-                hook(self, arenas)?;
+                let mut handle = VmHandleNative { vm: self };
+                hook(&mut handle, arenas)?;
             }
             // 0x04 CopyList (stub)
             0x04 => {}
@@ -2733,5 +2747,82 @@ impl fmt::Debug for RpnVm {
             self.trace.gas_consumed,
             self.gas.gas_budget
         )
+    }
+}
+
+// ── VmSetupHandle ─────────────────────────────────────────────────────
+
+/// Setup-time API surface for registering handlers before execution.
+pub struct VmSetupHandle<'a> {
+    vm: &'a mut RpnVm,
+}
+
+impl<'a> VmSetupHandle<'a> {
+    /// Register an external OR page handler by FourCC.
+    pub fn register_or_page(&mut self, fourcc: u32, handler: Box<dyn OrPageHandler>) {
+        self.vm.register_or_page_inner(fourcc, handler);
+    }
+
+    /// Register an external UserCall handler for a given action_op.
+    pub fn register_user_call(&mut self, action_op: u64, handler: Box<dyn UserCallHandler>) {
+        self.vm.register_user_call_inner(action_op, handler);
+    }
+
+    /// Transition to the runtime handle (no more registration).
+    pub fn to_vm_handle(self) -> crate::vm_handle::VmHandle<'a> {
+        crate::vm_handle::VmHandle { vm: self.vm }
+    }
+}
+
+// ── VmHandleNative ────────────────────────────────────────────────────
+
+/// API surface for native hook dispatch. Exposes stack and string
+/// operations but not registration, PC, gas, or handler tables.
+pub struct VmHandleNative<'a> {
+    vm: &'a mut RpnVm,
+}
+
+impl<'a> VmHandleNative<'a> {
+    /// Push a value onto the VM stack.
+    pub fn push(&mut self, val: RpnValue) -> Result<(), RpnError> {
+        self.vm.push(val)
+    }
+
+    /// Pop a value from the VM stack.
+    pub fn pop(&mut self) -> Result<RpnValue, RpnError> {
+        self.vm.stack.pop().ok_or(RpnError::StackUnderflow)
+    }
+
+    /// Pop a u32 from the VM stack (coerces u64 → u32).
+    pub fn pop_u32(&mut self) -> Result<u32, RpnError> {
+        match self.pop()? {
+            RpnValue::U32(x) => Ok(x),
+            RpnValue::U64(x) => Ok(x as u32),
+            _ => Err(RpnError::TypeMismatch),
+        }
+    }
+
+    /// Pop a u64 from the VM stack.
+    pub fn pop_u64(&mut self) -> Result<u64, RpnError> {
+        match self.pop()? {
+            RpnValue::U64(x) => Ok(x),
+            RpnValue::U32(x) => Ok(x as u64),
+            _ => Err(RpnError::TypeMismatch),
+        }
+    }
+
+    /// Resolve a string table index to a string.
+    pub fn resolve_str(&self, idx: u32) -> Result<String, RpnError> {
+        let effective_idx = idx + self.vm.string_base_offset;
+        self.vm
+            .string_table
+            .get(effective_idx as usize)
+            .cloned()
+            .ok_or(RpnError::InvalidStringIndex(effective_idx))
+    }
+
+    /// Read a control register.
+    pub fn cr(&self, idx: usize) -> u32 {
+        self.vm.cr_bank[idx]
     }
 }

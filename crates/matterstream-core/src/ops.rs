@@ -76,6 +76,14 @@ pub enum Op {
     },
     /// Bind a resource handle.
     BindResource(ResourceHandle),
+    /// Set size (vec2) — width and height.
+    SetSize([f32; 2]),
+    /// Set label text for the next draw call.
+    SetLabel(String),
+    /// Set pixel padding [top, right, bottom, left].
+    SetPadding([f32; 4]),
+    /// Set text color (RGBA) for nested text within a slab.
+    SetTextColor([f32; 4]),
     /// Push a raw byte payload onto the stream.
     Push(Vec<u8>),
 
@@ -96,12 +104,26 @@ pub enum Op {
 /// Result of a Draw execution — captures how position was resolved.
 #[derive(Debug, Clone)]
 pub struct Draw {
-    /// Position resolved from registers.
+    pub primitive: Primitive,
     pub position: [f32; 3],
-    /// Color resolved from registers.
     pub color: [f32; 4],
-    /// Whether the translation fast-path was used.
+    pub size: [f32; 2],
+    pub label: Option<String>,
+    pub padding: [f32; 4],
+    pub text_color: Option<[f32; 4]>,
     pub used_fast_path: bool,
-    /// Byte cost of the transform operation.
     pub transform_bytes: usize,
+}
+
+/// A compiled op sequence with header metadata.
+#[derive(Debug, Clone)]
+pub struct CompiledOps {
+    pub header: OpsHeader,
+    pub ops: Vec<Op>,
+}
+
+impl CompiledOps {
+    pub fn new(header: OpsHeader, ops: Vec<Op>) -> Self {
+        Self { header, ops }
+    }
 }

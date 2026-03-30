@@ -14,7 +14,7 @@ pub struct VmHandle<'a> {
 impl<'a> VmHandle<'a> {
     /// Push a value onto the VM stack.
     pub fn push(&mut self, val: RpnValue) -> Result<(), RpnError> {
-        self.vm.push_value(val)
+        self.vm.push(val)
     }
 
     /// Pop a value from the VM stack.
@@ -88,4 +88,5 @@ impl<'a> VmHandle<'a> {
     pub fn tkv_static_templates(&self) -> &[matterstream_vm_addressing::ova::Ova] {
         &self.vm.tkv_static_templates
     }
+
 }

@@ -1480,7 +1480,7 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                     }
                     // Push OID and dispatch — NativeHook or Component
                     asm.push128(oid_val);
-                    asm.oid_call();
+                    asm.exec_component_or_native();
                     return;
                 }
             }

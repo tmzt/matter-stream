@@ -1,0 +1,17 @@
+[package]
+name = "matterstream-renderer"
+version = "0.1.0"
+edition = "2021"
+description = "MatterStream softbuffer/winit rendering"
+license = "Apache-2.0"
+
+[dependencies]
+matterstream-core = { workspace = true }
+winit = { workspace = true }
+softbuffer = { workspace = true }
+anyhow = "1.0"
+matterstream-processor = { path = "../matterstream-processor" }
+
+[dev-dependencies]
+matterstream-compiler = { workspace = true }
+smol = { workspace = true }

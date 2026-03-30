@@ -1,0 +1,14 @@
+[package]
+name = "matterstream-processor"
+version = "0.1.0"
+edition = "2021"
+description = "MatterStream TSX import processing and AST expansion"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1.0"
+matterstream-core = { path = "../matterstream-core" }
+matterstream-compiler = { path = "../matterstream-compiler" }
+matterstream-loader = { path = "../matterstream-loader" }
+matterstream-packages = { path = "../matterstream-packages" }
+dashmap = "5.5"
