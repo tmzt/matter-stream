@@ -998,6 +998,12 @@ impl RpnVm {
         handler.as_any_ref().downcast_ref::<T>()
     }
 
+    /// Register an OR page handler directly (convenience for callers
+    /// that don't go through VmSetupHandle).
+    pub fn register_or_page(&mut self, fourcc: u32, handler: Box<dyn OrPageHandler>) {
+        self.register_or_page_inner(fourcc, handler);
+    }
+
     fn register_or_page_inner(&mut self, fourcc: u32, handler: Box<dyn OrPageHandler>) {
         if let Some(entry) = self.or_pages.iter_mut().find(|(f, _)| *f == fourcc) {
             entry.1 = handler;
