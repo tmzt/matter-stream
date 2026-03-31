@@ -92,9 +92,9 @@ impl Mtd1State {
 
         let mut offset = 12;
 
-        // Glyph table: 4 u32s per glyph
+        // Glyph table: 8 u32s per glyph (2 × vec4<u32> for GPU)
         for _ in 0..glyph_count {
-            for _ in 0..4 {
+            for _ in 0..8 {
                 if offset + 4 > metrics_data.len() { break; }
                 let v = u32::from_le_bytes([metrics_data[offset], metrics_data[offset+1], metrics_data[offset+2], metrics_data[offset+3]]);
                 s.glyph_table_u32s.push(v);
