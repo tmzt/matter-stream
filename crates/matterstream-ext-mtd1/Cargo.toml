@@ -9,6 +9,8 @@ matterstream-core = { path = "../matterstream-core" }
 matterstream-vm-addressing = { path = "../matterstream-vm-addressing" }
 matterstream-common = { path = "../matterstream-common" }
 matterstream-mtd1-format = { path = "../matterstream-mtd1-format" }
+matterstream-vm = { path = "../matterstream-vm" }
+matterstream-vm-arena = { path = "../matterstream-vm-arena" }
 pretext_rs = { path = "../../deps/pretext_rs" }
 bytemuck = { version = "1", features = ["derive"] }
 
