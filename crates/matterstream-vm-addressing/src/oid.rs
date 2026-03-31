@@ -223,6 +223,7 @@ impl Oid {
     pub const PKG_ROOT_CHT_SYSTEM: Oid = Oid::from_segments(&[1, 1, 1, 3]);
     pub const PKG_ROOT_PUBLIC: Oid = Oid::from_segments(&[1, 1, 2]);
     pub const PKG_SKILLS: Oid = Oid::from_segments(&[1, 1, 1, 2, 1]);
+    pub const PKG_UI: Oid = Oid::from_segments(&[1, 1, 1, 2, 2]);
 
     // ── Third-party OIDs (6-bit encoded reverse-DNS) ──────────────────
 

@@ -5,4 +5,4 @@ edition = "2021"
 description = "mtd1 binary format types: Command32, BankedStyle, Mtd1Document"
 
 [dependencies]
-bytemuck = { workspace = true }
+bytemuck = { version = "1", features = ["derive"] }

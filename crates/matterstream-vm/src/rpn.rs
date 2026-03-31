@@ -44,6 +44,11 @@ use crate::ui_vm::{
     FOURCC_MTUI, FOURCC_VQL0,
 };
 use crate::or_page::OrPageHandler;
+
+/// Trait for VM packages that register OIDs, native hooks, and handlers.
+pub trait VmPackage: Send + Sync {
+    fn register(&self, handle: &mut VmHandleUiNative);
+}
 use crate::user_call_handler::UserCallHandler;
 use crate::vm_handle::VmHandle;
 #[cfg(feature = "ui")]
@@ -2812,6 +2817,19 @@ impl<'a> VmSetupHandle<'a> {
         self.vm.register_user_call_inner(action_op, handler);
     }
 
+    /// Register packages via the `VmPackage` trait.
+    pub fn with_packages(self, packages: &[&dyn VmPackage]) -> Self {
+        for pkg in packages {
+            pkg.register(&mut VmHandleUiNative { vm: self.vm });
+        }
+        self
+    }
+
+    /// Get a native handle for direct VM manipulation during setup.
+    pub fn vm_handle_native(&mut self) -> VmHandleNative<'_> {
+        VmHandleNative { vm: self.vm }
+    }
+
     /// Transition to the runtime handle (registration complete).
     pub fn to_vm_handle(self) -> crate::vm_handle::VmHandle<'a> {
         crate::vm_handle::VmHandle { vm: self.vm }
@@ -2873,5 +2891,52 @@ impl<'a> VmHandleNative<'a> {
     /// Read-only access to an OR page handler by FourCC.
     pub fn or_page_handle<T: 'static>(&self, fourcc: u32) -> Option<&T> {
         self.vm.or_page_handle::<T>(fourcc)
+    }
+
+    /// Push an SDF draw command (for native hooks that emit geometry).
+    pub fn push_sdf_draw(&mut self, cmd: matterstream_common::SdfDrawCmd) {
+        if self.vm.sdf_draws.len() < matterstream_common::MAX_DRAW_CMDS {
+            self.vm.sdf_draws.push(cmd);
+        }
+    }
+
+    /// Add a string to the string table, returning its index.
+    pub fn push_string(&mut self, s: String) -> u32 {
+        let idx = self.vm.string_table.len() as u32;
+        self.vm.string_table.push(s);
+        idx
+    }
+}
+
+// ── VmHandleUiNative ─────────────────────────────────────────────────
+
+/// Handle for UI package registration and native hook dispatch.
+/// Exposes OID index, native hook, and user call registration
+/// alongside the runtime methods from VmHandleNative.
+pub struct VmHandleUiNative<'a> {
+    vm: &'a mut RpnVm,
+}
+
+impl<'a> VmHandleUiNative<'a> {
+    // ── Registration (setup-time) ──────────────────────────────────
+
+    /// Add an OID index (serialized bytes from OidIndexBuilder::build()).
+    pub fn add_oid_index(&mut self, index: Vec<u8>) {
+        self.vm.oid_indices.push(index);
+    }
+
+    /// Register a native hook function.
+    pub fn add_native_hook(&mut self, hook: fn(&mut VmHandleNative, &mut TripleArena) -> Result<(), RpnError>) {
+        self.vm.native_hooks.push(hook);
+    }
+
+    /// Register a user call handler.
+    pub fn register_user_call(&mut self, action_op: u64, handler: Box<dyn UserCallHandler>) {
+        self.vm.register_user_call_inner(action_op, handler);
+    }
+
+    /// Register an OR page handler.
+    pub fn register_or_page(&mut self, fourcc: u32, handler: Box<dyn OrPageHandler>) {
+        self.vm.register_or_page_inner(fourcc, handler);
     }
 }

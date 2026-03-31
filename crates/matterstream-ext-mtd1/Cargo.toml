@@ -10,15 +10,15 @@ matterstream-vm-addressing = { path = "../matterstream-vm-addressing" }
 matterstream-common = { path = "../matterstream-common" }
 matterstream-mtd1-format = { path = "../matterstream-mtd1-format" }
 pretext_rs = { path = "../../deps/pretext_rs" }
-bytemuck = { workspace = true }
+bytemuck = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-tempfile = { workspace = true }
+tempfile = "3"
 matterstream-ui-gpu = { path = "../matterstream-ui-gpu" }
 matterstream-font = { path = "../matterstream-font" }
 ttf-parser = "0.25"
 rustybuzz = "0.20"
 wgpu = "29"
-winit = { workspace = true }
+winit = "0.30.12"
 pollster = "0.4"
 png = "0.17"
