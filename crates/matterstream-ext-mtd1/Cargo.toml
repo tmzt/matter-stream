@@ -1,0 +1,9 @@
+[package]
+name = "matterstream-ext-mtd1"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+matterstream-vm = { path = "../matterstream-vm" }
+matterstream-vm-arena = { path = "../matterstream-vm-arena" }
+matterstream-common = { path = "../matterstream-common" }

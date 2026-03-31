@@ -42,6 +42,50 @@ pub struct StringOffset {
     pub len: u32,
 }
 
+// ── Text layout helpers ────────────────────────────────────────────────
+
+/// Truncate a string to max_chars, appending "..." if truncated.
+pub fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.len() <= max_chars {
+        s.to_string()
+    } else if max_chars > 3 {
+        format!("{}...", &s[..max_chars - 3])
+    } else {
+        s[..max_chars].to_string()
+    }
+}
+
+/// Word-wrap text to fit within max_chars per line, breaking at word boundaries.
+pub fn wordwrap(text: &str, max_chars: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            if word.len() > max_chars {
+                let mut remaining = word;
+                while remaining.len() > max_chars {
+                    lines.push(remaining[..max_chars].to_string());
+                    remaining = &remaining[max_chars..];
+                }
+                current = remaining.to_string();
+            } else {
+                current = word.to_string();
+            }
+        } else if current.len() + 1 + word.len() <= max_chars {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(current);
+            current = word.to_string();
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 /// Pack a string table into GPU buffers.
 /// Returns (char_buffer as u32 codepoints, string_offsets).
 pub fn pack_strings(strings: &[String]) -> (Vec<u32>, Vec<StringOffset>) {
