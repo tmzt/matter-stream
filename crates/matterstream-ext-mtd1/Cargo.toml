@@ -12,7 +12,7 @@ matterstream-mtd1-format = { path = "../matterstream-mtd1-format" }
 matterstream-vm = { path = "../matterstream-vm" }
 matterstream-vm-arena = { path = "../matterstream-vm-arena" }
 pretext_rs = { path = "../../deps/pretext_rs" }
-matterstream-font = { path = "../matterstream-font" }
+matterstream-font = { path = "../matterstream-font", optional = true }
 bytemuck = { version = "1", features = ["derive"] }
 log = "0.4"
 

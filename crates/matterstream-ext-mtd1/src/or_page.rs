@@ -39,7 +39,8 @@ pub struct Mtd1State {
     pub atlas_width: u32,
     pub atlas_height: u32,
     pub initialized: bool,
-    /// Char buffer from last emit — caller reads this for GPU upload.
+    pub codepoint_to_gid: HashMap<u16, u16>,
+    pub units_per_em: u16,
     pub char_buffer: Vec<u32>,
 }
 
@@ -57,11 +58,81 @@ impl Mtd1State {
             atlas_width: 0,
             atlas_height: 0,
             initialized: false,
+            codepoint_to_gid: HashMap::new(),
+            units_per_em: 1000,
             char_buffer: Vec::new(),
         }
     }
 
-    /// Initialize font pipeline from raw font data bytes.
+    /// Create from pre-baked atlas (mcs1) and metrics (mfm1) blobs.
+    pub fn with_baked_atlas(atlas_data: &[u8], metrics_data: &[u8]) -> Self {
+        let mut s = Self::new();
+
+        // Parse atlas: mcs1 + width + height + RGBA pixels
+        if atlas_data.len() < 12 || &atlas_data[0..4] != b"mcs1" {
+            log::warn!("mtd1: invalid atlas (bad magic)");
+            return s;
+        }
+        let width = u32::from_le_bytes([atlas_data[4], atlas_data[5], atlas_data[6], atlas_data[7]]);
+        let height = u32::from_le_bytes([atlas_data[8], atlas_data[9], atlas_data[10], atlas_data[11]]);
+        s.atlas_width = width;
+        s.atlas_height = height;
+        s.atlas_rgba = atlas_data[12..].to_vec();
+
+        // Parse metrics: mfm1 + upem + glyph_count + cmap_count + baseline_frac
+        //   + glyph_table + gid→idx+advance + codepoint→gid
+        if metrics_data.len() < 12 || &metrics_data[0..4] != b"mfm1" {
+            log::warn!("mtd1: invalid metrics (bad magic)");
+            return s;
+        }
+        s.units_per_em = u16::from_le_bytes([metrics_data[4], metrics_data[5]]);
+        let glyph_count = u16::from_le_bytes([metrics_data[6], metrics_data[7]]) as usize;
+        let cmap_count = u16::from_le_bytes([metrics_data[8], metrics_data[9]]) as usize;
+        let _baseline_frac_u16 = u16::from_le_bytes([metrics_data[10], metrics_data[11]]);
+
+        let mut offset = 12;
+
+        // Glyph table: 4 u32s per glyph
+        for _ in 0..glyph_count {
+            for _ in 0..4 {
+                if offset + 4 > metrics_data.len() { break; }
+                let v = u32::from_le_bytes([metrics_data[offset], metrics_data[offset+1], metrics_data[offset+2], metrics_data[offset+3]]);
+                s.glyph_table_u32s.push(v);
+                offset += 4;
+            }
+        }
+
+        // gid → idx + advance
+        for _ in 0..glyph_count {
+            if offset + 8 > metrics_data.len() { break; }
+            let gid = u16::from_le_bytes([metrics_data[offset], metrics_data[offset+1]]);
+            let idx = u16::from_le_bytes([metrics_data[offset+2], metrics_data[offset+3]]);
+            let adv = f32::from_le_bytes([metrics_data[offset+4], metrics_data[offset+5], metrics_data[offset+6], metrics_data[offset+7]]);
+            s.gid_to_idx.insert(gid, idx);
+            s.std_advances.insert(gid, adv);
+            offset += 8;
+        }
+
+        // codepoint → gid
+        for _ in 0..cmap_count {
+            if offset + 4 > metrics_data.len() { break; }
+            let cp = u16::from_le_bytes([metrics_data[offset], metrics_data[offset+1]]);
+            let gid = u16::from_le_bytes([metrics_data[offset+2], metrics_data[offset+3]]);
+            s.codepoint_to_gid.insert(cp, gid);
+            offset += 4;
+        }
+
+        s.styles.push(BankedStyle::with_font(0xC0C0D0FF, 0, 0, 0, 1));
+        s.styles.push(BankedStyle::with_font(0xFFFFFFFF, 0, 0, 0, 1));
+        s.initialized = true;
+
+        log::info!("mtd1: loaded baked atlas {}x{}, {} glyphs, {} cmap, upem={}",
+            width, height, glyph_count, cmap_count, s.units_per_em);
+        s
+    }
+
+    /// Initialize font pipeline from raw font data bytes (requires `matterstream-font` feature).
+    #[cfg(feature = "matterstream-font")]
     pub fn init_font(&mut self, font_data: &[u8]) {
         use matterstream_font::atlas::FontAtlasBuilder;
 
@@ -117,10 +188,22 @@ impl Mtd1State {
     }
 }
 
-/// Create paired handlers sharing the same state.
+/// Create paired handlers sharing the same state (with runtime font init).
+#[cfg(feature = "matterstream-font")]
 pub fn create_mtd1_handlers(font_data: &[u8]) -> (Mtd1OrPage, MtmdUserCall, Arc<Mutex<Mtd1State>>) {
     let mut state = Mtd1State::new();
     state.init_font(font_data);
+    let shared = Arc::new(Mutex::new(state));
+    (
+        Mtd1OrPage { state: shared.clone() },
+        MtmdUserCall { state: shared.clone() },
+        shared,
+    )
+}
+
+/// Create paired handlers from pre-baked atlas + metrics (no msdfgen needed).
+pub fn create_mtd1_handlers_baked(atlas_data: &[u8], metrics_data: &[u8]) -> (Mtd1OrPage, MtmdUserCall, Arc<Mutex<Mtd1State>>) {
+    let state = Mtd1State::with_baked_atlas(atlas_data, metrics_data);
     let shared = Arc::new(Mutex::new(state));
     (
         Mtd1OrPage { state: shared.clone() },
