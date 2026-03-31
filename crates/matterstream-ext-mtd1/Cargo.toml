@@ -12,12 +12,13 @@ matterstream-mtd1-format = { path = "../matterstream-mtd1-format" }
 matterstream-vm = { path = "../matterstream-vm" }
 matterstream-vm-arena = { path = "../matterstream-vm-arena" }
 pretext_rs = { path = "../../deps/pretext_rs" }
+matterstream-font = { path = "../matterstream-font" }
 bytemuck = { version = "1", features = ["derive"] }
+log = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
 matterstream-ui-gpu = { path = "../matterstream-ui-gpu" }
-matterstream-font = { path = "../matterstream-font" }
 ttf-parser = "0.25"
 rustybuzz = "0.20"
 wgpu = "29"

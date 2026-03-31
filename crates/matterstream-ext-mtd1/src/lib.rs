@@ -22,3 +22,4 @@ pub use mtd1_format::{BankedStyle, Command32, Mtd1Document, Mtd1Header, MTD1_MAG
 pub use pretext_rs::{FontMetrics, LayoutConfig};
 pub use tsx_to_mtd1::{TsxNode, compile_tsx};
 pub use mtd1_to_sdf::{mtd1_to_sdf, SdfFrame, FONT_INDEX_PICTOGRAPHIC};
+pub use or_page::{create_mtd1_handlers, Mtd1OrPage, MtmdUserCall, Mtd1State, MTMD_ACTION_OP};

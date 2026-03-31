@@ -94,6 +94,27 @@ impl<'a> VmHandle<'a> {
         self.vm.or_page_handle::<T>(fourcc)
     }
 
+    /// Push an SDF draw command.
+    pub fn push_sdf_draw(&mut self, cmd: matterstream_common::SdfDrawCmd) {
+        if self.vm.sdf_draws.len() < matterstream_common::MAX_DRAW_CMDS {
+            self.vm.sdf_draws.push(cmd);
+        }
+    }
+
+    /// Extend SDF draws from a slice.
+    pub fn extend_sdf_draws(&mut self, draws: &[matterstream_common::SdfDrawCmd]) {
+        for d in draws {
+            self.push_sdf_draw(*d);
+        }
+    }
+
+    /// Add a string to the string table, returning its index.
+    pub fn push_string(&mut self, s: String) -> u32 {
+        let idx = self.vm.string_table.len() as u32;
+        self.vm.string_table.push(s);
+        idx
+    }
+
     /// Execute bytecode against arenas.
     pub fn execute(
         &mut self,

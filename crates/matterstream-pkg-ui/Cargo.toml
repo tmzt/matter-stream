@@ -10,4 +10,6 @@ matterstream-vm-arena = { path = "../matterstream-vm-arena" }
 matterstream-vm-asm = { path = "../matterstream-vm-asm" }
 matterstream-vm-addressing = { path = "../matterstream-vm-addressing" }
 matterstream-common = { path = "../matterstream-common" }
+matterstream-ext-mtd1 = { path = "../matterstream-ext-mtd1" }
+matterstream-font = { path = "../matterstream-font" }
 log = "0.4"

@@ -22,6 +22,11 @@ pub const PACKAGE_NAME: &str = "@chitin/ui";
 /// OID for MarkdownReadView component.
 pub const OID_MARKDOWN_READ_VIEW: Oid = Oid::PKG_UI.child_const(1);
 
+/// Temporary fixed OVA for passing markdown content via tkv_bank.
+/// FourCC 'MKDN' (0x4D4B444E). By convention, host writes content
+/// here before VM execution; MarkdownReadView reads it as fallback.
+pub const OVA_MARKDOWN_DATA_TEMP: Ova = Ova(0x4D4B444E); // 'MKDN'
+
 const HOOK_MARKDOWN_READ_VIEW: u32 = 0;
 
 /// Font metrics for text layout (monospace 5x8 bitmap font).
@@ -51,7 +56,8 @@ impl VmPackage for UiPackage {
 }
 
 /// Native hook for MarkdownReadView.
-/// Reads TKV props (x, y, w, h, content) and emits SdfDrawCmd entries.
+/// Reads layout props (x, y, w, h) from TKV arena (component props).
+/// Reads markdown content from `tkv_bank[OVA_MARKDOWN_DATA_TEMP]` by convention.
 fn markdown_read_view_hook(
     vm: &mut VmHandleNative,
     arenas: &mut TripleArena,
@@ -63,10 +69,37 @@ fn markdown_read_view_hook(
     let y: f32 = props.get("y").and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let w: f32 = props.get("w").and_then(|v| v.parse().ok()).unwrap_or(400.0);
     let h: f32 = props.get("h").and_then(|v| v.parse().ok()).unwrap_or(300.0);
-    let content = props.get("content").cloned().unwrap_or_default();
+
+    // Read content from tkv_bank (set by host before VM execution)
+    let content = props.get("content").cloned().unwrap_or_else(|| {
+        // Fallback: read from tkv_bank at OVA_MARKDOWN_DATA_TEMP
+        read_tkv_bank_string(vm, OVA_MARKDOWN_DATA_TEMP, "content")
+            .unwrap_or_default()
+    });
 
     render_markdown(vm, x, y, w, h, &content);
     Ok(())
+}
+
+/// Read a string value from tkv_bank by OVA and key name.
+fn read_tkv_bank_string(vm: &VmHandleNative, ova: Ova, key: &str) -> Option<String> {
+    let entries = vm.tkv_bank_get(ova)?;
+    for entry in entries {
+        let key_name = if entry.key_str_disc == StrRefDisc::StringTable as u8 {
+            vm.resolve_str(entry.key_str_idx as u32).ok()
+        } else {
+            None
+        };
+        if key_name.as_deref() != Some(key) { continue; }
+        if entry.value_type == TkvType::String as u8 {
+            let disc = entry.value[0];
+            let idx = u32::from_le_bytes([entry.value[1], entry.value[2], entry.value[3], entry.value[4]]);
+            if disc == StrRefDisc::StringTable as u8 {
+                return vm.resolve_str(idx).ok();
+            }
+        }
+    }
+    None
 }
 
 /// Render markdown content as SDF draw commands.
