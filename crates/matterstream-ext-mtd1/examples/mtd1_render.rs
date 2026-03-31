@@ -1,8 +1,8 @@
 //! mtd1_render — Compile a Tufte-style TSX document into mtd1 bytecode,
 //! write the binary, and print a debug disassembly.
 
-use matterstream_mtd1::pretext_rs::FontMetrics;
-use matterstream_mtd1::tsx_to_mtd1::{TsxNode, compile_tsx};
+use matterstream_ext_mtd1::pretext_rs::FontMetrics;
+use matterstream_ext_mtd1::tsx_to_mtd1::{TsxNode, compile_tsx};
 
 fn build_tufte_demo() -> Vec<TsxNode> {
     vec![TsxNode::TufteCard {
@@ -84,7 +84,7 @@ fn main() {
     // Read back and verify
     let read_back = std::fs::read(out_path).expect("failed to read .mtd1 file");
     let parsed =
-        matterstream_mtd1::Mtd1Document::from_bytes(&read_back).expect("failed to parse .mtd1");
+        matterstream_ext_mtd1::Mtd1Document::from_bytes(&read_back).expect("failed to parse .mtd1");
 
     // Print debug dump
     println!("{}", parsed.debug_dump());

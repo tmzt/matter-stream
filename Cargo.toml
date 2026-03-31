@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "deps/pretext_rs"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -37,5 +37,7 @@ matterstream-loader = { path = "crates/matterstream-loader" }
 font-atlas-gen = { path = "crates/font-atlas-gen" }
 matterstream-packages = { path = "crates/matterstream-packages" }
 matterstream = { path = "crates/matterstream" }
-matterstream-mtd1 = { path = "crates/matterstream-mtd1" }
+matterstream-ext-mtd1 = { path = "crates/matterstream-ext-mtd1" }
+matterstream-mtd1-format = { path = "crates/matterstream-mtd1-format" }
+pretext_rs = { path = "deps/pretext_rs" }
 matterstream-font = { path = "crates/matterstream-font" }

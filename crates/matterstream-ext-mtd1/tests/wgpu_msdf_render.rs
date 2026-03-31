@@ -6,8 +6,8 @@ use matterstream_common::font::GpuFont;
 use matterstream_common::pipeline::RenderFrame;
 use matterstream_font::atlas::FontAtlasBuilder;
 use matterstream_font::shaper::TextShaper;
-use matterstream_mtd1::mtd1_format::{BankedStyle, Command32, Mtd1Document};
-use matterstream_mtd1::mtd1_to_sdf::mtd1_to_sdf;
+use matterstream_ext_mtd1::mtd1_format::{BankedStyle, Command32, Mtd1Document};
+use matterstream_ext_mtd1::mtd1_to_sdf::mtd1_to_sdf;
 
 fn load_system_font() -> Option<Vec<u8>> {
     let paths = [

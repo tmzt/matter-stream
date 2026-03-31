@@ -1,8 +1,8 @@
 //! mtd1_window — Render the Tufte demo with system fonts via MSDF + wgpu.
 //!
 //! Usage:
-//!   cargo run -p matterstream-mtd1 --example mtd1_window           # open window
-//!   cargo run -p matterstream-mtd1 --example mtd1_window -- --png-out out.png  # render to PNG
+//!   cargo run -p matterstream-ext-mtd1 --example mtd1_window           # open window
+//!   cargo run -p matterstream-ext-mtd1 --example mtd1_window -- --png-out out.png  # render to PNG
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,8 +12,8 @@ use matterstream_common::pipeline::RenderFrame;
 use matterstream_common::sdf::{SdfDrawCmd, DRAW_TYPE_MSDF_TEXT};
 use matterstream_font::atlas::FontAtlasBuilder;
 use matterstream_font::shaper::TextShaper;
-use matterstream_mtd1::mtd1_format::{BankedStyle, Command32, Mtd1Document};
-use matterstream_mtd1::mtd1_to_sdf::mtd1_to_sdf;
+use matterstream_ext_mtd1::mtd1_format::{BankedStyle, Command32, Mtd1Document};
+use matterstream_ext_mtd1::mtd1_to_sdf::mtd1_to_sdf;
 use matterstream_ui_gpu::GpuSdfRenderer;
 
 /// Load a system font suitable for Tufte-style data display.

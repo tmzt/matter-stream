@@ -2,8 +2,23 @@
 name = "matterstream-ext-mtd1"
 version = "0.2.0"
 edition = "2021"
+description = "mtd1 binary document format: 32-bit GPU-ready ISA for 120fps rendering"
 
 [dependencies]
-matterstream-vm = { path = "../matterstream-vm" }
-matterstream-vm-arena = { path = "../matterstream-vm-arena" }
+matterstream-core = { path = "../matterstream-core" }
+matterstream-vm-addressing = { path = "../matterstream-vm-addressing" }
 matterstream-common = { path = "../matterstream-common" }
+matterstream-mtd1-format = { path = "../matterstream-mtd1-format" }
+pretext_rs = { path = "../../deps/pretext_rs" }
+bytemuck = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+matterstream-ui-gpu = { path = "../matterstream-ui-gpu" }
+matterstream-font = { path = "../matterstream-font" }
+ttf-parser = "0.25"
+rustybuzz = "0.20"
+wgpu = "29"
+winit = { workspace = true }
+pollster = "0.4"
+png = "0.17"

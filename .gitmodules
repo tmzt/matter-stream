@@ -1,3 +1,6 @@
 [submodule "crates/matterstream-mtd1/src/pretext_rs"]
-	path = crates/matterstream-mtd1/src/pretext_rs
+	path = crates/matterstream-ext-mtd1/src/pretext_rs
+	url = git@github.com:tmzt/pretext_rs.git
+[submodule "deps/pretext_rs"]
+	path = deps/pretext_rs
 	url = git@github.com:tmzt/pretext_rs.git

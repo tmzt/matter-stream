@@ -1,0 +1,8 @@
+[package]
+name = "matterstream-mtd1-format"
+version = "0.2.0"
+edition = "2021"
+description = "mtd1 binary format types: Command32, BankedStyle, Mtd1Document"
+
+[dependencies]
+bytemuck = { workspace = true }

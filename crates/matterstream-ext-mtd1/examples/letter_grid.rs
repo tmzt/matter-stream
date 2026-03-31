@@ -1,7 +1,7 @@
 //! letter_grid — Render Latin characters in a simple grid to debug MSDF rendering.
 //!
 //! Usage:
-//!   cargo run -p matterstream-mtd1 --example letter_grid -- --png-out out.png
+//!   cargo run -p matterstream-ext-mtd1 --example letter_grid -- --png-out out.png
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,8 +10,8 @@ use matterstream_common::font::GpuFont;
 use matterstream_common::pipeline::RenderFrame;
 use matterstream_font::atlas::FontAtlasBuilder;
 use matterstream_font::shaper::TextShaper;
-use matterstream_mtd1::mtd1_format::{BankedStyle, Command32, Mtd1Document};
-use matterstream_mtd1::mtd1_to_sdf::mtd1_to_sdf;
+use matterstream_ext_mtd1::mtd1_format::{BankedStyle, Command32, Mtd1Document};
+use matterstream_ext_mtd1::mtd1_to_sdf::mtd1_to_sdf;
 use matterstream_ui_gpu::GpuSdfRenderer;
 
 fn load_system_font() -> Vec<u8> {
