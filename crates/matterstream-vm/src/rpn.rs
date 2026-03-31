@@ -2863,4 +2863,9 @@ impl<'a> VmHandleNative<'a> {
     pub fn cr(&self, idx: usize) -> u32 {
         self.vm.cr_bank[idx]
     }
+
+    /// Read-only access to an OR page handler by FourCC.
+    pub fn or_page_handle<T: 'static>(&self, fourcc: u32) -> Option<&T> {
+        self.vm.or_page_handle::<T>(fourcc)
+    }
 }

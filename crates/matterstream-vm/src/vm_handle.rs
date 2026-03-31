@@ -89,6 +89,11 @@ impl<'a> VmHandle<'a> {
         &self.vm.tkv_static_templates
     }
 
+    /// Read-only access to an OR page handler by FourCC.
+    pub fn or_page_handle<T: 'static>(&self, fourcc: u32) -> Option<&T> {
+        self.vm.or_page_handle::<T>(fourcc)
+    }
+
     /// Execute bytecode against arenas.
     pub fn execute(
         &mut self,
