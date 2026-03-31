@@ -12,6 +12,7 @@ pub const DRAW_TYPE_TEXT: f32 = 4.0;
 pub const DRAW_TYPE_TEXTURE: f32 = 5.0;
 pub const DRAW_TYPE_RIBBON_BEGIN: f32 = 6.0;
 pub const DRAW_TYPE_RIBBON_END: f32 = 7.0;
+pub const DRAW_TYPE_MSDF_TEXT: f32 = 8.0;
 
 /// Maximum draw commands per frame.
 pub const MAX_DRAW_CMDS: usize = 4096;

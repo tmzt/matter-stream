@@ -37,3 +37,5 @@ matterstream-loader = { path = "crates/matterstream-loader" }
 font-atlas-gen = { path = "crates/font-atlas-gen" }
 matterstream-packages = { path = "crates/matterstream-packages" }
 matterstream = { path = "crates/matterstream" }
+matterstream-mtd1 = { path = "crates/matterstream-mtd1" }
+matterstream-font = { path = "crates/matterstream-font" }

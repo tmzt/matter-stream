@@ -1,0 +1,16 @@
+[package]
+name = "matterstream-font"
+version = "0.2.0"
+edition = "2021"
+description = "Font shaping (rustybuzz/HarfBuzz), MSDF atlas generation, and glyph table management"
+
+[dependencies]
+rustybuzz = "0.20"
+ttf-parser = "0.25"
+# msdfgen uses ttf-parser 0.18 internally; we re-use that for MSDF generation
+msdfgen = { version = "0.2", default-features = false, features = ["ttf-parser"] }
+ttf-parser-018 = { package = "ttf-parser", version = "0.18" }
+unicode-segmentation = "1.13"
+
+[dev-dependencies]
+tempfile = { workspace = true }
