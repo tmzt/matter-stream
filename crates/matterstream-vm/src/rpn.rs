@@ -837,6 +837,8 @@ pub struct RpnVm {
     /// contiguous block of TkvFixedEntry (16 bytes each) in the nursery arena.
     /// Populated at load time from compiled AsmOutput::tkv_static_table.
     pub tkv_static_templates: Vec<Ova>,
+    /// TKV bank — runtime key-value store keyed by OVA.
+    pub tkv_bank: std::collections::HashMap<Ova, Vec<matterstream_vm_addressing::TkvFixedEntry>>,
     /// Mutable string bank (runtime-writable, 256 nullable slots).
     pub string_bank: Vec<Option<String>>,
 
@@ -925,6 +927,7 @@ impl RpnVm {
             zero_page: [0; 256],
             string_table: Vec::new(),
             tkv_static_templates: Vec::new(),
+            tkv_bank: std::collections::HashMap::new(),
             string_bank: vec![None; 256],
             shared_state: None,
             user_atomics_readable: (0..256).map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
@@ -2905,6 +2908,11 @@ impl<'a> VmHandleNative<'a> {
         let idx = self.vm.string_table.len() as u32;
         self.vm.string_table.push(s);
         idx
+    }
+
+    /// Read a TKV bank entry by OVA.
+    pub fn tkv_bank_get(&self, ova: Ova) -> Option<&Vec<matterstream_vm_addressing::TkvFixedEntry>> {
+        self.vm.tkv_bank.get(&ova)
     }
 }
 

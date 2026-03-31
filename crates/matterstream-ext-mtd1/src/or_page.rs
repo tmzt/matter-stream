@@ -105,7 +105,7 @@ impl Mtd1State {
     }
 
     /// Convert collected instructions to SDF draws. Clears instruction buffer.
-    fn emit(&mut self) -> (Vec<SdfDrawCmd>, Vec<u32>) {
+    pub fn emit(&mut self) -> (Vec<SdfDrawCmd>, Vec<u32>) {
         if !self.initialized || self.instructions.is_empty() {
             return (Vec::new(), Vec::new());
         }
