@@ -47,7 +47,7 @@ use crate::or_page::OrPageHandler;
 
 /// Trait for VM packages that register OIDs, native hooks, and handlers.
 pub trait VmPackage: Send + Sync {
-    fn register(&self, handle: &mut VmHandleUiNative);
+    fn register(&self, handle: &mut VmHandleUiRegistrationNative);
 }
 use crate::user_call_handler::UserCallHandler;
 use crate::vm_handle::VmHandle;
@@ -2820,7 +2820,7 @@ impl<'a> VmSetupHandle<'a> {
     /// Register packages via the `VmPackage` trait.
     pub fn with_packages(self, packages: &[&dyn VmPackage]) -> Self {
         for pkg in packages {
-            pkg.register(&mut VmHandleUiNative { vm: self.vm });
+            pkg.register(&mut VmHandleUiRegistrationNative { vm: self.vm });
         }
         self
     }
@@ -2908,16 +2908,16 @@ impl<'a> VmHandleNative<'a> {
     }
 }
 
-// ── VmHandleUiNative ─────────────────────────────────────────────────
+// ── VmHandleUiRegistrationNative ─────────────────────────────────────────────────
 
 /// Handle for UI package registration and native hook dispatch.
 /// Exposes OID index, native hook, and user call registration
 /// alongside the runtime methods from VmHandleNative.
-pub struct VmHandleUiNative<'a> {
+pub struct VmHandleUiRegistrationNative<'a> {
     vm: &'a mut RpnVm,
 }
 
-impl<'a> VmHandleUiNative<'a> {
+impl<'a> VmHandleUiRegistrationNative<'a> {
     // ── Registration (setup-time) ──────────────────────────────────
 
     /// Add an OID index (serialized bytes from OidIndexBuilder::build()).

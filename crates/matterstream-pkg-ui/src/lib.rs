@@ -6,7 +6,7 @@
 //! Register via `register(vm)` or use `RpnVm::with_packages()` helper.
 
 use std::collections::HashMap;
-use matterstream_vm::rpn::{RpnError, RpnValue, VmHandleNative, VmHandleUiNative, VmPackage};
+use matterstream_vm::rpn::{RpnError, RpnValue, VmHandleNative, VmHandleUiRegistrationNative, VmPackage};
 use matterstream_vm_addressing::oid::Oid;
 use matterstream_vm_addressing::oid_index::OidIndexBuilder;
 use matterstream_vm_addressing::{TkvFixedEntry, TkvType, StrRefDisc};
@@ -42,7 +42,7 @@ pub fn oid_map() -> HashMap<String, Oid> {
 pub struct UiPackage;
 
 impl VmPackage for UiPackage {
-    fn register(&self, handle: &mut VmHandleUiNative) {
+    fn register(&self, handle: &mut VmHandleUiRegistrationNative) {
         let mut builder = OidIndexBuilder::new();
         builder.add_native_hook(OID_MARKDOWN_READ_VIEW, HOOK_MARKDOWN_READ_VIEW);
         handle.add_oid_index(builder.build());
