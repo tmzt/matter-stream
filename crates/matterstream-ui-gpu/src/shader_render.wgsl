@@ -141,9 +141,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var bg: vec3<f32>;
     if is_dark > 0.5 {
-        bg = vec3<f32>(1.0, 0.0, 1.0); // magenta
+        bg = vec3<f32>(0.055, 0.055, 0.086); // dark theme (#0E0E16)
     } else {
-        bg = vec3<f32>(1.0, 0.0, 1.0); // magenta
+        bg = vec3<f32>(0.95, 0.95, 0.96); // light theme
     }
     var result = vec4<f32>(bg, 1.0);
 
