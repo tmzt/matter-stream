@@ -215,12 +215,15 @@ fn rasterize_sdf_cmd(
     let anim_alpha = eval_anim(cmd.params[2] as u32, anim_bank, int_bank, time_ms);
     if anim_alpha < 0.01 { return; }
 
-    // Bounding box with margin for shadows + antialiasing
+    // Bounding box with margin for shadows + antialiasing.
+    // If inside a ribbon, shift bbox by scroll offset to get screen coords.
     let margin = 6.0;
-    let x0 = (cmd.pos[0] - margin).max(0.0) as u32;
-    let y0 = (cmd.pos[1] - margin).max(0.0) as u32;
-    let x1 = ((cmd.pos[0] + cmd.size[0] + margin).ceil() as u32).min(fb.width);
-    let y1 = ((cmd.pos[1] + cmd.size[1] + margin).ceil() as u32).min(fb.height);
+    let scroll_x = if ribbon_clip.is_some() { ribbon_scroll[0] } else { 0.0 };
+    let scroll_y = if ribbon_clip.is_some() { ribbon_scroll[1] } else { 0.0 };
+    let x0 = (cmd.pos[0] + scroll_x - margin).max(0.0) as u32;
+    let y0 = (cmd.pos[1] + scroll_y - margin).max(0.0) as u32;
+    let x1 = ((cmd.pos[0] + scroll_x + cmd.size[0] + margin).ceil() as u32).min(fb.width);
+    let y1 = ((cmd.pos[1] + scroll_y + cmd.size[1] + margin).ceil() as u32).min(fb.height);
 
     let center_x = cmd.pos[0] + cmd.size[0] * 0.5;
     let center_y = cmd.pos[1] + cmd.size[1] * 0.5;
@@ -230,20 +233,19 @@ fn rasterize_sdf_cmd(
 
     for y in y0..y1 {
         for x in x0..x1 {
-            let mut px = x as f32 + 0.5;
-            let mut py = y as f32 + 0.5;
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
 
-            // Ribbon clipping
+            // Ribbon clipping (screen coords)
             if let Some((clip_min, clip_max)) = ribbon_clip {
                 if px < clip_min[0] || px >= clip_max[0] || py < clip_min[1] || py >= clip_max[1] {
                     continue;
                 }
-                px -= ribbon_scroll[0];
-                py -= ribbon_scroll[1];
             }
 
-            let lx = px - center_x;
-            let ly = py - center_y;
+            // SDF evaluation in design coords (undo scroll)
+            let lx = (px - scroll_x) - center_x;
+            let ly = (py - scroll_y) - center_y;
 
             let d = match ty {
                 0 => sd_box(lx, ly, half_w, half_h),
@@ -295,6 +297,8 @@ fn rasterize_text_cmd(
     let char_offset = (packed >> 16) as usize;
     let char_count = (packed & 0xFFFF) as usize;
 
+    let scroll_x = if ribbon_clip.is_some() { ribbon_scroll[0] } else { 0.0 };
+    let scroll_y = if ribbon_clip.is_some() { ribbon_scroll[1] } else { 0.0 };
     let text_x = cmd.pos[0];
     let text_y = cmd.pos[1];
     let text_size = cmd.size[1];
@@ -310,8 +314,11 @@ fn rasterize_text_cmd(
         let gw = (glyph_w as f32 * scale_f).ceil() as u32;
         let gh = (glyph_h as f32 * scale_f).ceil() as u32;
 
-        let x0 = char_x.max(0.0) as u32;
-        let y0 = text_y.max(0.0) as u32;
+        // Screen coords (with scroll)
+        let sx = char_x + scroll_x;
+        let sy = text_y + scroll_y;
+        let x0 = sx.max(0.0) as u32;
+        let y0 = sy.max(0.0) as u32;
         let x1 = (x0 + gw).min(fb.width);
         let y1 = (y0 + gh).min(fb.height);
 
@@ -324,12 +331,11 @@ fn rasterize_text_cmd(
                     if px < clip_min[0] || px >= clip_max[0] || py < clip_min[1] || py >= clip_max[1] {
                         continue;
                     }
-                    px -= ribbon_scroll[0];
-                    py -= ribbon_scroll[1];
                 }
 
-                let local_x = px - char_x;
-                let local_y = py - text_y;
+                // Design-space local coords (undo scroll)
+                let local_x = (px - scroll_x) - char_x;
+                let local_y = (py - scroll_y) - text_y;
                 if local_x < 0.0 || local_y < 0.0 { continue; }
 
                 let gx = (local_x / scale_f) as u32;
@@ -356,6 +362,8 @@ fn rasterize_msdf_text_cmd(
     ribbon_clip: &Option<([f32; 2], [f32; 2])>,
     ribbon_scroll: &[f32; 2],
 ) {
+    let scroll_x = if ribbon_clip.is_some() { ribbon_scroll[0] } else { 0.0 };
+    let scroll_y = if ribbon_clip.is_some() { ribbon_scroll[1] } else { 0.0 };
     let px_range = cmd.params[1].max(2.0);
     let x_margin_frac = cmd.params[2];
     let packed = f32::to_bits(cmd.params[3]);
@@ -399,30 +407,28 @@ fn rasterize_msdf_text_cmd(
         let gx = line_x + cursor_x;
         let gy = line_y;
 
-        // Bounding box on screen
+        // Bounding box on screen (with scroll offset)
         let screen_w = if scale > 0.0 { atlas_gw / scale } else { 0.0 };
         let screen_h = line_h;
-        let x0 = (gx - x_margin / scale).max(0.0) as u32;
-        let y0 = gy.max(0.0) as u32;
-        let x1 = ((gx + screen_w).ceil() as u32).min(fb.width);
-        let y1 = ((gy + screen_h).ceil() as u32).min(fb.height);
+        let x0 = (gx + scroll_x - x_margin / scale).max(0.0) as u32;
+        let y0 = (gy + scroll_y).max(0.0) as u32;
+        let x1 = ((gx + scroll_x + screen_w).ceil() as u32).min(fb.width);
+        let y1 = ((gy + scroll_y + screen_h).ceil() as u32).min(fb.height);
 
         for y in y0..y1 {
             for x in x0..x1 {
-                let mut px = x as f32 + 0.5;
-                let mut py = y as f32 + 0.5;
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
 
                 if let Some((clip_min, clip_max)) = ribbon_clip {
                     if px < clip_min[0] || px >= clip_max[0] || py < clip_min[1] || py >= clip_max[1] {
                         continue;
                     }
-                    px -= ribbon_scroll[0];
-                    py -= ribbon_scroll[1];
                 }
 
-                // Screen pixel → atlas cell pixel
-                let acx = (px - gx) * scale + x_margin;
-                let acy = (py - gy) * scale;
+                // Screen pixel → design coords → atlas cell pixel
+                let acx = ((px - scroll_x) - gx) * scale + x_margin;
+                let acy = ((py - scroll_y) - gy) * scale;
 
                 if acx >= 0.0 && acx < atlas_gw && acy >= 0.0 && acy < atlas_gh {
                     let alpha = atlas.sample(atlas_gx + acx + 0.5, atlas_gy + acy + 0.5) * cmd.color[3];
