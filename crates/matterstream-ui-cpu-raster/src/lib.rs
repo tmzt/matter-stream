@@ -31,6 +31,17 @@ pub struct BitmapAtlas {
 }
 
 impl BitmapAtlas {
+    /// Load a pre-baked bitmap atlas (mca1 format: magic + width + height + alpha bytes).
+    /// Glyph table comes from the metrics file (same as MSDF).
+    pub fn from_baked(data: &[u8], glyph_table: &[u32]) -> Option<Self> {
+        if data.len() < 12 || &data[0..4] != b"mca1" { return None; }
+        let width = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let height = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+        let alpha = data[12..].to_vec();
+        if alpha.len() != (width * height) as usize { return None; }
+        Some(Self { width, height, alpha, glyph_table: glyph_table.to_vec() })
+    }
+
     /// Convert an MSDF RGBA atlas to a bitmap alpha atlas.
     ///
     /// Takes the MSDF atlas pixels (RGBA8, row-major) and evaluates
