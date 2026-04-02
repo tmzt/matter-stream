@@ -40,7 +40,9 @@ impl BitmapAtlas {
     pub fn from_msdf(rgba: &[u8], width: u32, height: u32, glyph_table: &[u32], px_range: f32) -> Self {
         let n = (width * height) as usize;
         let mut alpha = vec![0u8; n];
-        let range = px_range.max(1.0);
+        // Use a wider range for softer edges — preserves thin strokes
+        // at small font sizes where each screen pixel spans multiple atlas texels.
+        let range = (px_range * 0.5).max(1.0);
 
         for i in 0..n {
             let base = i * 4;
@@ -50,7 +52,7 @@ impl BitmapAtlas {
             let b = rgba[base + 2] as f32 / 255.0;
             // MSDF median
             let sd = f32::max(f32::min(r, g), f32::min(f32::max(r, g), b));
-            // Smooth threshold with px_range antialiasing
+            // Smooth threshold — gentler curve keeps thin strokes visible
             let a = (range * (sd - 0.5) + 0.5).clamp(0.0, 1.0);
             alpha[i] = (a * 255.0) as u8;
         }
@@ -58,10 +60,26 @@ impl BitmapAtlas {
         Self { width, height, alpha, glyph_table: glyph_table.to_vec() }
     }
 
-    /// Sample alpha at atlas coordinates.
-    fn sample(&self, ax: u32, ay: u32) -> f32 {
-        if ax >= self.width || ay >= self.height { return 0.0; }
-        self.alpha[(ay * self.width + ax) as usize] as f32 / 255.0
+    /// Sample alpha with bilinear interpolation at fractional atlas coordinates.
+    fn sample(&self, ax: f32, ay: f32) -> f32 {
+        let x0 = ax.floor() as i32;
+        let y0 = ay.floor() as i32;
+        let fx = ax - x0 as f32;
+        let fy = ay - y0 as f32;
+
+        let s00 = self.texel(x0, y0);
+        let s10 = self.texel(x0 + 1, y0);
+        let s01 = self.texel(x0, y0 + 1);
+        let s11 = self.texel(x0 + 1, y0 + 1);
+
+        let top = s00 + (s10 - s00) * fx;
+        let bot = s01 + (s11 - s01) * fx;
+        top + (bot - top) * fy
+    }
+
+    fn texel(&self, x: i32, y: i32) -> f32 {
+        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 { return 0.0; }
+        self.alpha[(y as u32 * self.width + x as u32) as usize] as f32 / 255.0
     }
 }
 
@@ -396,9 +414,7 @@ fn rasterize_msdf_text_cmd(
                 let acy = (py - gy) * scale;
 
                 if acx >= 0.0 && acx < atlas_gw && acy >= 0.0 && acy < atlas_gh {
-                    let ax = (atlas_gx + acx) as u32;
-                    let ay = (atlas_gy + acy) as u32;
-                    let alpha = atlas.sample(ax, ay) * cmd.color[3];
+                    let alpha = atlas.sample(atlas_gx + acx + 0.5, atlas_gy + acy + 0.5) * cmd.color[3];
                     if alpha > 0.01 {
                         fb.blend_pixel(x, y, cmd.color[0], cmd.color[1], cmd.color[2], alpha);
                     }
