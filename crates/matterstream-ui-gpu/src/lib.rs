@@ -35,12 +35,9 @@ struct GpuTextureDesc {
 pub struct GpuSdfRenderer {
     pipeline: wgpu::RenderPipeline,
     draw_cmd_buffer: wgpu::Buffer,
-    header_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
-    anim_buffer: wgpu::Buffer,
     glyph_bitmap_buffer: wgpu::Buffer,
     char_buffer_gpu: wgpu::Buffer,
-    texture_bank_buffer: wgpu::Buffer,
     glyph_table_buffer: wgpu::Buffer,
     // Held for ownership — referenced via bind_group, not read through self
     #[allow(dead_code)]
@@ -59,15 +56,18 @@ pub struct GpuSdfRenderer {
     max_cmds: u32,
 }
 
-/// Header matching the WGSL RenderHeader struct.
+/// GPU anim struct (matches WGSL Anim).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct RenderHeader {
-    cmd_count: u32,
-    _pad: [u32; 3],
+struct GpuAnimEntry {
+    freq: f32,
+    duty: f32,
+    enable_ref: u32,
+    _pad: u32,
 }
 
-/// Minimal uniforms for the shader.
+/// Minimal uniforms for the shader — includes inlined header, anim_bank,
+/// and texture_bank to stay within GLES 4 storage buffer limit.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MinimalUniforms {
@@ -81,22 +81,16 @@ struct MinimalUniforms {
     int_bank: [[i32; 4]; 4],
     zero_page: [[u32; 4]; 16],
     font: [u32; 4],
+    // Merged from former storage buffers:
+    header: [u32; 4],           // .x = cmd_count
+    anim_bank: [GpuAnimEntry; 32],
+    texture_bank: [GpuTextureDesc; 8],
 }
 
 impl Default for MinimalUniforms {
     fn default() -> Self {
-        Self {
-            time_delta: [0.0; 4],
-            resolution: [400.0, 300.0, 1.0, 0.0],
-            mouse: [0.0; 4],
-            theme: [0.0, 0.0, 0.0, 0.0], // light theme
-            vec4_bank: [[0.0; 4]; 16],
-            vec3_bank: [[0.0; 4]; 16],
-            scalar_bank: [[0.0; 4]; 4],
-            int_bank: [[0; 4]; 4],
-            zero_page: [[0; 4]; 16],
-            font: [0; 4],
-        }
+        // Safety: all-zero is valid for every field
+        unsafe { std::mem::zeroed() }
     }
 }
 
@@ -155,23 +149,14 @@ impl GpuSdfRenderer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let header_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("render_header"), size: 16,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // header merged into uniform buffer
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniforms"),
             size: std::mem::size_of::<MinimalUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let anim_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("anim_bank"),
-            size: (matterstream_common::MAX_ANIMS as u64) * std::mem::size_of::<GpuAnim>() as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // anim_bank merged into uniform buffer
         let glyph_bitmap_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("glyph_bitmap"), size: 8192,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
@@ -182,12 +167,7 @@ impl GpuSdfRenderer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let texture_bank_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("texture_bank"),
-            size: (MAX_TEXTURE_LAYERS as u64) * std::mem::size_of::<GpuTextureDesc>() as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // texture_bank merged into uniform buffer
         let glyph_table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("glyph_table"),
             size: (MAX_GLYPH_TABLE_ENTRIES as u64) * 32,
@@ -243,8 +223,7 @@ impl GpuSdfRenderer {
                     count: None,
                 },
                 make_storage_layout(1),
-                make_storage_layout(2),
-                make_storage_layout(3),
+                // bindings 2,3 merged into uniform buffer (header, anim_bank)
                 make_storage_layout(4),
                 make_storage_layout(5),
                 // Binding 6: texture_2d_array for texture bank
@@ -265,8 +244,7 @@ impl GpuSdfRenderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // Binding 8: texture_bank descriptors
-                make_storage_layout(8),
+                // binding 8 merged into uniform buffer (texture_bank)
                 // Binding 9: MSDF atlas texture
                 wgpu::BindGroupLayoutEntry {
                     binding: 9,
@@ -296,13 +274,10 @@ impl GpuSdfRenderer {
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: draw_cmd_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: header_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: anim_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: glyph_bitmap_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 5, resource: char_buffer_gpu.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&tex_array_view) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&tex_sampler) },
-                wgpu::BindGroupEntry { binding: 8, resource: texture_bank_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&msdf_atlas_view) },
                 wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(&msdf_sampler) },
                 wgpu::BindGroupEntry { binding: 11, resource: glyph_table_buffer.as_entire_binding() },
@@ -347,12 +322,9 @@ impl GpuSdfRenderer {
         Self {
             pipeline,
             draw_cmd_buffer,
-            header_buffer,
             uniform_buffer,
-            anim_buffer,
             glyph_bitmap_buffer,
             char_buffer_gpu,
-            texture_bank_buffer,
             glyph_table_buffer,
             tex_array,
             tex_array_view,
@@ -475,12 +447,10 @@ impl GpuSdfRenderer {
             queue.write_buffer(&self.draw_cmd_buffer, 0, bytemuck::cast_slice(&gpu_cmds));
         }
 
-        let header = RenderHeader { cmd_count: count as u32, _pad: [0; 3] };
-        queue.write_buffer(&self.header_buffer, 0, bytemuck::bytes_of(&header));
-
         let mut uniforms = MinimalUniforms::default();
         uniforms.time_delta = [time_ms, 0.0, 0.0, 0.0];
         uniforms.resolution = [width as f32, height as f32, scale, 0.0];
+        uniforms.header = [count as u32, 0, 0, 0];
         for (i, val) in scalar_bank.iter().take(16).enumerate() {
             uniforms.scalar_bank[i / 4][i % 4] = *val;
         }
@@ -490,14 +460,12 @@ impl GpuSdfRenderer {
         if let Some(f) = font {
             uniforms.font = [f.glyph_w, f.glyph_h, f.first_cp, f.last_cp];
         }
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-
-        if !anim_bank.is_empty() {
-            let gpu_anims: Vec<GpuAnim> = anim_bank.iter().map(|a| GpuAnim {
+        for (i, a) in anim_bank.iter().take(32).enumerate() {
+            uniforms.anim_bank[i] = GpuAnimEntry {
                 freq: a.freq, duty: a.duty, enable_ref: a.enable_ref, _pad: 0,
-            }).collect();
-            queue.write_buffer(&self.anim_buffer, 0, bytemuck::cast_slice(&gpu_anims));
+            };
         }
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("sdf_render_encoder"),
@@ -544,12 +512,15 @@ impl GpuSdfRenderer {
             queue.write_buffer(&self.glyph_bitmap_buffer, 0, bytemuck::cast_slice(&frame.glyph_bitmap));
         }
 
-        // Upload texture_bank descriptors
+        // Write texture_bank into the uniform buffer's texture_bank region.
+        // The offset is: sizeof(MinimalUniforms) minus sizeof(texture_bank) at the end.
         if !frame.texture_bank.is_empty() {
-            let gpu_descs: Vec<GpuTextureDesc> = frame.texture_bank.iter().map(|t| GpuTextureDesc {
+            let gpu_descs: Vec<GpuTextureDesc> = frame.texture_bank.iter().take(8).map(|t| GpuTextureDesc {
                 width: t.width, height: t.height, layer: t.layer, flags: t.flags,
             }).collect();
-            queue.write_buffer(&self.texture_bank_buffer, 0, bytemuck::cast_slice(&gpu_descs));
+            let tex_offset = std::mem::size_of::<MinimalUniforms>()
+                - std::mem::size_of::<[GpuTextureDesc; 8]>();
+            queue.write_buffer(&self.uniform_buffer, tex_offset as u64, bytemuck::cast_slice(&gpu_descs));
         }
 
         self.render_full_scaled(

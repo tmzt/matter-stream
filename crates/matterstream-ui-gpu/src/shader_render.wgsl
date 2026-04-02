@@ -17,13 +17,6 @@ struct DrawCmd {
     params: vec4<f32>,   // [ty, radius, anim_idx, slot]
 };
 
-struct RenderHeader {
-    cmd_count: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
-};
-
 struct GpuUniforms {
     time_delta: vec4<f32>,
     resolution: vec4<f32>,
@@ -36,6 +29,10 @@ struct GpuUniforms {
     zero_page: array<vec4<u32>, 16>,
     // Font descriptor: [glyph_w, glyph_h, first_cp, last_cp]
     font: vec4<u32>,
+    // Inlined from former separate storage buffers (GLES compat: max 4 storage)
+    header: vec4<u32>,    // .x = cmd_count
+    anim_bank: array<Anim, 32>,
+    texture_bank: array<GpuTexture, 8>,
 };
 
 struct Anim {
@@ -56,13 +53,12 @@ struct GpuTexture {
 
 @group(0) @binding(0) var<uniform> uniforms: GpuUniforms;
 @group(0) @binding(1) var<storage, read> draw_cmds: array<DrawCmd>;
-@group(0) @binding(2) var<storage, read> header: RenderHeader;
-@group(0) @binding(3) var<storage, read> anim_bank: array<Anim>;
+// bindings 2,3 merged into uniforms (header, anim_bank)
 @group(0) @binding(4) var<storage, read> glyph_bitmap: array<u32>;
 @group(0) @binding(5) var<storage, read> char_buffer: array<u32>;
 @group(0) @binding(6) var tex_array: texture_2d_array<f32>;
 @group(0) @binding(7) var tex_sampler: sampler;
-@group(0) @binding(8) var<storage, read> texture_bank: array<GpuTexture>;
+// binding 8 merged into uniforms (texture_bank)
 
 // MSDF atlas for high-quality text rendering
 @group(0) @binding(9)  var msdf_atlas: texture_2d<f32>;
@@ -147,7 +143,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     var result = vec4<f32>(bg, 1.0);
 
-    let count = header.cmd_count;
+    let count = uniforms.header.x;
 
     var in_ribbon: bool = false;
     var ribbon_clip_min: vec2<f32> = vec2<f32>(0.0);
@@ -264,7 +260,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let half = cmd.size * 0.5;
                 if abs(p.x) < half.x && abs(p.y) < half.y {
                     let uv = (p + half) / cmd.size;
-                    let tex = texture_bank[tex_idx];
+                    let tex = uniforms.texture_bank[tex_idx];
                     let color_sample = textureSample(tex_array, tex_sampler, uv, i32(tex.layer));
                     let blend_alpha = color_sample.a * cmd.color.a;
                     if blend_alpha > 0.001 {
@@ -367,7 +363,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let anim_idx = u32(cmd.params.z);
         let has_anim = step(0.5, f32(anim_idx));
         if has_anim > 0.0 {
-            let a = anim_bank[max(anim_idx, 1u) - 1u];
+            let a = uniforms.anim_bank[max(anim_idx, 1u) - 1u];
             let has_enable = step(0.5, f32(a.enable_ref));
             let slot = a.enable_ref & 0xFFFFu;
             let pack = slot / 4u;
