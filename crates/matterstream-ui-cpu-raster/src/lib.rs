@@ -5,8 +5,7 @@
 //! fullscreen quad with a texture sample. No storage buffers,
 //! no complex shaders, works on any GPU including Mali-G31.
 //!
-//! Supports: Box, Slab (rounded rect), Circle, Line, bitmap Text.
-//! MSDF text falls back to bitmap rendering.
+//! Supports: Box, Slab, Circle, Line, bitmap Text, MSDF Text (via BitmapAtlas).
 
 use matterstream_common::{
     SdfDrawCmd, Anim, GpuFont, RenderFrame,
@@ -14,6 +13,57 @@ use matterstream_common::{
     DRAW_TYPE_TEXT, DRAW_TYPE_RIBBON_BEGIN, DRAW_TYPE_RIBBON_END,
     sd_rounded_box, sd_box, sd_circle, sd_segment,
 };
+
+// ── Bitmap atlas (pre-rasterized from MSDF) ─────────────────────────────
+
+/// Pre-rasterized alpha atlas for CPU text rendering.
+/// Same glyph layout and glyph_table as the MSDF atlas, but each pixel
+/// is a single alpha byte instead of RGB distance channels.
+pub struct BitmapAtlas {
+    pub width: u32,
+    pub height: u32,
+    /// Row-major alpha pixels, length = width * height.
+    pub alpha: Vec<u8>,
+    /// Glyph table: pairs of vec4<u32> per entry, same format as GPU.
+    /// g0 = [glyph_id, atlas_xy_packed, atlas_wh_packed, advance_x_bits]
+    /// g1 = [proj_sx_bits, proj_sy_bits, proj_tx_bits, proj_ty_bits]
+    pub glyph_table: Vec<u32>,
+}
+
+impl BitmapAtlas {
+    /// Convert an MSDF RGBA atlas to a bitmap alpha atlas.
+    ///
+    /// Takes the MSDF atlas pixels (RGBA8, row-major) and evaluates
+    /// `median(R,G,B)` → threshold at 0.5 → alpha byte.
+    /// The result uses the same pixel coordinates, so glyph_table
+    /// atlas_xy/atlas_wh references remain valid.
+    pub fn from_msdf(rgba: &[u8], width: u32, height: u32, glyph_table: &[u32], px_range: f32) -> Self {
+        let n = (width * height) as usize;
+        let mut alpha = vec![0u8; n];
+        let range = px_range.max(1.0);
+
+        for i in 0..n {
+            let base = i * 4;
+            if base + 2 >= rgba.len() { break; }
+            let r = rgba[base] as f32 / 255.0;
+            let g = rgba[base + 1] as f32 / 255.0;
+            let b = rgba[base + 2] as f32 / 255.0;
+            // MSDF median
+            let sd = f32::max(f32::min(r, g), f32::min(f32::max(r, g), b));
+            // Smooth threshold with px_range antialiasing
+            let a = (range * (sd - 0.5) + 0.5).clamp(0.0, 1.0);
+            alpha[i] = (a * 255.0) as u8;
+        }
+
+        Self { width, height, alpha, glyph_table: glyph_table.to_vec() }
+    }
+
+    /// Sample alpha at atlas coordinates.
+    fn sample(&self, ax: u32, ay: u32) -> f32 {
+        if ax >= self.width || ay >= self.height { return 0.0; }
+        self.alpha[(ay * self.width + ax) as usize] as f32 / 255.0
+    }
+}
 
 /// RGBA framebuffer produced by the CPU rasterizer.
 pub struct Framebuffer {
@@ -59,11 +109,17 @@ impl Framebuffer {
     }
 }
 
-/// Rasterize a RenderFrame into a framebuffer.
-///
-/// Unlike the GPU shader which evaluates all commands per pixel,
-/// this iterates commands and rasterizes each into its bounding box.
+/// Rasterize a RenderFrame with an optional bitmap atlas for MSDF text.
+pub fn rasterize_frame_with_atlas(frame: &RenderFrame, dark_theme: bool, atlas: Option<&BitmapAtlas>) -> Framebuffer {
+    rasterize_impl(frame, dark_theme, atlas)
+}
+
+/// Rasterize a RenderFrame into a framebuffer (no MSDF text support).
 pub fn rasterize_frame(frame: &RenderFrame, dark_theme: bool) -> Framebuffer {
+    rasterize_impl(frame, dark_theme, None)
+}
+
+fn rasterize_impl(frame: &RenderFrame, dark_theme: bool, atlas: Option<&BitmapAtlas>) -> Framebuffer {
     let w = (frame.width as f32 / frame.scale).ceil() as u32;
     let h = (frame.height as f32 / frame.scale).ceil() as u32;
     let mut fb = Framebuffer::new(w, h);
@@ -101,7 +157,13 @@ pub fn rasterize_frame(frame: &RenderFrame, dark_theme: bool) -> Framebuffer {
         match ty {
             0 | 1 | 2 | 3 => rasterize_sdf_cmd(&mut fb, cmd, &ribbon_clip, &ribbon_scroll, &frame.anim_bank, &frame.int_bank, frame.time_ms),
             4 => rasterize_text_cmd(&mut fb, cmd, &frame.char_buffer, &frame.glyph_bitmap, &frame.font, &ribbon_clip, &ribbon_scroll),
-            8 => rasterize_text_cmd(&mut fb, cmd, &frame.char_buffer, &frame.glyph_bitmap, &frame.font, &ribbon_clip, &ribbon_scroll), // MSDF fallback to bitmap
+            8 => {
+                if let Some(atlas) = atlas {
+                    rasterize_msdf_text_cmd(&mut fb, cmd, &frame.char_buffer, atlas, &ribbon_clip, &ribbon_scroll);
+                } else {
+                    rasterize_text_cmd(&mut fb, cmd, &frame.char_buffer, &frame.glyph_bitmap, &frame.font, &ribbon_clip, &ribbon_scroll);
+                }
+            }
             _ => {} // textures, etc. — skip for now
         }
     }
@@ -254,6 +316,97 @@ fn rasterize_text_cmd(
                 }
             }
         }
+    }
+}
+
+fn rasterize_msdf_text_cmd(
+    fb: &mut Framebuffer,
+    cmd: &SdfDrawCmd,
+    char_buffer: &[u32],
+    atlas: &BitmapAtlas,
+    ribbon_clip: &Option<([f32; 2], [f32; 2])>,
+    ribbon_scroll: &[f32; 2],
+) {
+    let px_range = cmd.params[1].max(2.0);
+    let x_margin_frac = cmd.params[2];
+    let packed = f32::to_bits(cmd.params[3]);
+    let char_offset = (packed >> 16) as usize;
+    let char_count = (packed & 0xFFFF) as usize;
+
+    let line_h = cmd.size[1];
+    let line_x = cmd.pos[0] + x_margin_frac * line_h;
+    let line_y = cmd.pos[1];
+
+    let mut cursor_x: f32 = 0.0;
+
+    for ci in 0..char_count {
+        if char_offset + ci >= char_buffer.len() { break; }
+        let entry = char_buffer[char_offset + ci];
+        let gt_idx = (entry >> 16) as usize;
+        let delta_biased = (entry & 0xFFFF) as f32;
+        let delta_px = (delta_biased - 2048.0) / 16.0;
+
+        // Read glyph table entry (2 × vec4<u32>)
+        let g0_base = gt_idx * 8; // 2 vec4s = 8 u32s
+        if g0_base + 7 >= atlas.glyph_table.len() { break; }
+        let g0 = &atlas.glyph_table[g0_base..g0_base + 4];
+        let g1 = &atlas.glyph_table[g0_base + 4..g0_base + 8];
+
+        let atlas_gx = (g0[1] & 0xFFFF) as f32;
+        let atlas_gy = (g0[1] >> 16) as f32;
+        let atlas_gw = (g0[2] & 0xFFFF) as f32;
+        let atlas_gh = (g0[2] >> 16) as f32;
+
+        let x_margin = f32::from_bits(g1[2]);
+        let px_per_em_atlas = f32::from_bits(g1[1]);
+
+        // Scale: atlas pixels per screen pixel
+        let scale = if atlas_gh > 0.0 { atlas_gh / line_h } else { 1.0 };
+        let font_size = if scale > 0.0 { px_per_em_atlas / scale } else { line_h };
+
+        let advance_x_norm = f32::from_bits(g0[3]);
+        let advance_px = advance_x_norm * font_size + delta_px;
+
+        let gx = line_x + cursor_x;
+        let gy = line_y;
+
+        // Bounding box on screen
+        let screen_w = if scale > 0.0 { atlas_gw / scale } else { 0.0 };
+        let screen_h = line_h;
+        let x0 = (gx - x_margin / scale).max(0.0) as u32;
+        let y0 = gy.max(0.0) as u32;
+        let x1 = ((gx + screen_w).ceil() as u32).min(fb.width);
+        let y1 = ((gy + screen_h).ceil() as u32).min(fb.height);
+
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let mut px = x as f32 + 0.5;
+                let mut py = y as f32 + 0.5;
+
+                if let Some((clip_min, clip_max)) = ribbon_clip {
+                    if px < clip_min[0] || px >= clip_max[0] || py < clip_min[1] || py >= clip_max[1] {
+                        continue;
+                    }
+                    px -= ribbon_scroll[0];
+                    py -= ribbon_scroll[1];
+                }
+
+                // Screen pixel → atlas cell pixel
+                let acx = (px - gx) * scale + x_margin;
+                let acy = (py - gy) * scale;
+
+                if acx >= 0.0 && acx < atlas_gw && acy >= 0.0 && acy < atlas_gh {
+                    let ax = (atlas_gx + acx) as u32;
+                    let ay = (atlas_gy + acy) as u32;
+                    let alpha = atlas.sample(ax, ay) * cmd.color[3];
+                    if alpha > 0.01 {
+                        fb.blend_pixel(x, y, cmd.color[0], cmd.color[1], cmd.color[2], alpha);
+                    }
+                }
+            }
+        }
+
+        cursor_x += advance_px;
     }
 }
 
