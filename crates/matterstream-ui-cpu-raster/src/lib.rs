@@ -252,6 +252,11 @@ fn rasterize_sdf_cmd(
                 1 => sd_rounded_box(lx, ly, half_w, half_h, radius),
                 2 => sd_circle(lx, ly, radius),
                 3 => sd_segment(lx, ly, -half_w, 0.0, half_w, 0.0, half_h),
+                9 => { // Outline — rounded rect stroke
+                    let thickness = cmd.params[2];
+                    let box_d = sd_rounded_box(lx, ly, half_w, half_h, radius);
+                    box_d.abs() - thickness * 0.5
+                }
                 _ => 1e6,
             };
 

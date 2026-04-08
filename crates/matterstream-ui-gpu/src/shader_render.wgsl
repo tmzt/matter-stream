@@ -347,11 +347,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     cursor_x += advance_px;
                 }
             }
+            case 9u: { // Outline — rounded rect stroke, no fill
+                let half = cmd.size * 0.5;
+                let radius = cmd.params.y;
+                let thickness = cmd.params.z;
+                let box_d = sd_rounded_box(p, half, radius);
+                d = abs(box_d) - thickness * 0.5;
+            }
             default: {
             }
         }
 
-        // Shadow
+        // Shadow (skip for outline)
         if ty <= 2u {
             let shadow_alpha = 0.15 * (1.0 - smoothstep(-1.0, 4.0, shadow_d));
             let shadow_color = vec4<f32>(0.0, 0.0, 0.0, shadow_alpha);
