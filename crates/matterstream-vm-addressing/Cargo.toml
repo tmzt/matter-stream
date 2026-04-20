@@ -4,3 +4,10 @@ version = "0.2.0"
 edition = "2021"
 description = "FQA/OVA addressing, ASLR token tables, address resolution"
 license = "Apache-2.0"
+
+[features]
+default = []
+json = ["dep:serde_json"]
+
+[dependencies]
+serde_json = { version = "1", optional = true }

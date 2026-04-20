@@ -14,3 +14,8 @@ pub use ova::{Ova, ArenaId};
 pub use oid::{Oid, SecurityMode, ImportKind, InstanceRef};
 pub use oid_index::{OidIndex, OidIndexBuilder, OidEntry, OidIndexError};
 pub use tkv_key::{TkvKey, TkvType, TkvFixedEntry, StrRefDisc};
+
+#[cfg(feature = "json")]
+pub mod json_to_tkv;
+#[cfg(feature = "json")]
+pub use json_to_tkv::json_to_tkv_entries;

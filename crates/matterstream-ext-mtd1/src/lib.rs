@@ -14,6 +14,7 @@
 
 pub use matterstream_mtd1_format as mtd1_format;
 pub use pretext_rs;
+pub mod links;
 pub mod tsx_to_mtd1;
 pub mod mtd1_to_sdf;
 pub mod or_page;

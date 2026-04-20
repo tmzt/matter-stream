@@ -276,6 +276,17 @@ impl std::fmt::Display for Mtd1Error {
 
 impl std::error::Error for Mtd1Error {}
 
+/// An interactive action region overlaid on the document.
+#[derive(Debug, Clone)]
+pub struct ActionRegion {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    /// Index into the document's string table — the action URL.
+    pub str_idx: u32,
+}
+
 /// Complete mtd1 document in memory.
 #[derive(Debug, Clone)]
 pub struct Mtd1Document {
@@ -284,6 +295,10 @@ pub struct Mtd1Document {
     /// Optional serialized glyph atlas data (MSDF). When present, styles with
     /// `font_index > 0` reference glyphs from this atlas.
     pub glyph_atlas: Option<Vec<u8>>,
+    /// Interactive action regions (clickable rows, links, etc.).
+    pub actions: Vec<ActionRegion>,
+    /// String table for action URLs and dynamic text.
+    pub strings: Vec<String>,
 }
 
 impl Mtd1Document {
@@ -292,7 +307,19 @@ impl Mtd1Document {
             styles: Vec::new(),
             instructions: Vec::new(),
             glyph_atlas: None,
+            actions: Vec::new(),
+            strings: Vec::new(),
         }
+    }
+
+    /// Add a string to the document string table, returning its index.
+    pub fn add_string(&mut self, s: &str) -> usize {
+        if let Some(idx) = self.strings.iter().position(|existing| existing == s) {
+            return idx;
+        }
+        let idx = self.strings.len();
+        self.strings.push(s.to_string());
+        idx
     }
 
     /// Serialize to binary `.mtd1` format.
@@ -381,6 +408,8 @@ impl Mtd1Document {
             styles,
             instructions,
             glyph_atlas,
+            actions: Vec::new(),
+            strings: Vec::new(),
         })
     }
 
