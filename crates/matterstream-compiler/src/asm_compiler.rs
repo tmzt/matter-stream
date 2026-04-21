@@ -41,14 +41,33 @@ pub enum PropValue {
 struct JsxNode {
     tag: String,
     props: Vec<(String, PropValue)>,
-    children: Vec<JsxNode>,
+    children: Vec<LoweredNode>,
+}
+
+/// IR node produced by the lowering phase.
+#[derive(Debug, Clone)]
+enum LoweredNode {
+    /// Plain JSX element (Slab, Text, Circle, Box, RibbonView, etc.)
+    Element(JsxNode),
+    /// `array.map((item, i) => <body/>)` — iteration over a data array
+    Map {
+        array: String,
+        item_param: String,
+        index_param: Option<String>,
+        body: Vec<LoweredNode>,
+    },
+    /// `(param) => <body/>` — an arrow function block (callback, event handler)
+    ArrowBlock {
+        params: Vec<String>,
+        body: Vec<LoweredNode>,
+    },
 }
 
 /// An arrow-function component definition.
 #[derive(Debug, Clone)]
 struct ComponentDef {
     _params: Vec<String>,
-    body: Vec<JsxNode>,
+    body: Vec<LoweredNode>,
 }
 
 // ── OXC → JsxNode lowering ──────────────────────────────────────────────
@@ -288,7 +307,7 @@ impl AsmCompiler {
     fn extract_arrow_body<'a>(
         &self,
         arrow: &ArrowFunctionExpression<'a>,
-    ) -> Result<Vec<JsxNode>, String> {
+    ) -> Result<Vec<LoweredNode>, String> {
         {
             let body = &*arrow.body;
             let statements = &body.statements;
@@ -315,7 +334,7 @@ impl AsmCompiler {
     }
 
     /// Second pass: lower top-level JSX expressions into JsxNodes.
-    fn lower_program<'a>(&self, program: &Program<'a>) -> Result<Vec<JsxNode>, String> {
+    fn lower_program<'a>(&self, program: &Program<'a>) -> Result<Vec<LoweredNode>, String> {
         let empty_ctx = HashMap::new();
         let mut nodes = Vec::new();
         for stmt in &program.body {
@@ -337,22 +356,89 @@ impl AsmCompiler {
         &self,
         expr: &Expression<'a>,
         ctx: &HashMap<String, PropValue>,
-    ) -> Result<Vec<JsxNode>, String> {
+    ) -> Result<Vec<LoweredNode>, String> {
         match expr {
             Expression::JSXElement(el) => self.lower_jsx_element(el, ctx),
             Expression::JSXFragment(frag) => self.lower_jsx_fragment(frag, ctx),
             Expression::ParenthesizedExpression(paren) => {
                 self.lower_expression(&paren.expression, ctx)
             }
+            Expression::CallExpression(call) => {
+                self.lower_map_call(call, ctx)
+            }
             _ => Ok(Vec::new()),
         }
+    }
+
+    /// Handle `array.map((item, i) => <JSX/>)` calls.
+    /// Lowers to a MapNode that the code generator emits as DefineBlock + MapOver.
+    fn lower_map_call<'a>(
+        &self,
+        call: &oxc_ast::ast::CallExpression<'a>,
+        ctx: &HashMap<String, PropValue>,
+    ) -> Result<Vec<LoweredNode>, String> {
+        // Check if callee is `something.map`
+        let member = match &call.callee {
+            Expression::StaticMemberExpression(m) if m.property.name == "map" => m,
+            _ => return Ok(Vec::new()), // not a .map() call
+        };
+
+        // Get the array name from the object
+        let array_name = match &member.object {
+            Expression::Identifier(id) => id.name.to_string(),
+            _ => return Ok(Vec::new()),
+        };
+
+        // Get the callback (first argument, should be arrow function)
+        let callback = match call.arguments.first() {
+            Some(oxc_ast::ast::Argument::ArrowFunctionExpression(arrow)) => arrow,
+            _ => return Err(format!(".map() requires arrow function callback")),
+        };
+
+        // Extract callback parameters: (item) or (item, index)
+        let params = self.extract_arrow_params(callback);
+        let item_param = params.first().cloned().unwrap_or_else(|| "_item".to_string());
+        let index_param = params.get(1).cloned();
+
+        // Lower the callback body
+        let body_nodes = self.lower_arrow_body(callback, ctx)?;
+
+        Ok(vec![LoweredNode::Map {
+            array: array_name,
+            item_param,
+            index_param,
+            body: body_nodes,
+        }])
+    }
+
+    /// Lower the body of an arrow function expression to LoweredNodes.
+    fn lower_arrow_body<'a>(
+        &self,
+        arrow: &oxc_ast::ast::ArrowFunctionExpression<'a>,
+        ctx: &HashMap<String, PropValue>,
+    ) -> Result<Vec<LoweredNode>, String> {
+        let body = &arrow.body;
+        // Check for expression body (single expression return)
+        if body.statements.len() == 1 {
+            if let oxc_ast::ast::Statement::ExpressionStatement(expr_stmt) = &body.statements[0] {
+                return self.lower_expression(&expr_stmt.expression, ctx);
+            }
+        }
+        // Multi-statement: try to lower each as expression
+        let mut nodes = Vec::new();
+        for stmt in body.statements.iter() {
+            if let oxc_ast::ast::Statement::ExpressionStatement(expr_stmt) = stmt {
+                nodes.extend(self.lower_expression(&expr_stmt.expression, ctx)?);
+            }
+        }
+        Ok(nodes)
     }
 
     fn lower_jsx_element<'a>(
         &self,
         element: &JSXElement<'a>,
         ctx: &HashMap<String, PropValue>,
-    ) -> Result<Vec<JsxNode>, String> {
+    ) -> Result<Vec<LoweredNode>, String> {
         let tag = match &element.opening_element.name {
             JSXElementName::Identifier(id) => id.name.to_string(),
             _ => return Ok(Vec::new()),
@@ -369,24 +455,24 @@ impl AsmCompiler {
         // Check if this is an external (imported) component
         if let Some(oid) = self.external_components.get(&tag) {
             let oid_u128 = oid.to_u128();
-            return Ok(vec![JsxNode {
+            return Ok(vec![LoweredNode::Element(JsxNode {
                 tag: format!("__ext:{}", oid_u128),
                 props,
                 children: Vec::new(),
-            }]);
+            })]);
         }
 
         // Lower children
         let children = self.lower_jsx_children(&element.children, ctx)?;
 
-        Ok(vec![JsxNode { tag, props, children }])
+        Ok(vec![LoweredNode::Element(JsxNode { tag, props, children })])
     }
 
     fn lower_jsx_fragment<'a>(
         &self,
         fragment: &JSXFragment<'a>,
         ctx: &HashMap<String, PropValue>,
-    ) -> Result<Vec<JsxNode>, String> {
+    ) -> Result<Vec<LoweredNode>, String> {
         self.lower_jsx_children(&fragment.children, ctx)
     }
 
@@ -394,7 +480,7 @@ impl AsmCompiler {
         &self,
         children: &[JSXChild<'a>],
         ctx: &HashMap<String, PropValue>,
-    ) -> Result<Vec<JsxNode>, String> {
+    ) -> Result<Vec<LoweredNode>, String> {
         let mut nodes = Vec::new();
         for child in children {
             match child {
@@ -421,7 +507,7 @@ impl AsmCompiler {
         comp: &ComponentDef,
         call_props: &[(String, PropValue)],
         parent_ctx: &HashMap<String, PropValue>,
-    ) -> Result<Vec<JsxNode>, String> {
+    ) -> Result<Vec<LoweredNode>, String> {
         let mut sub_ctx = parent_ctx.clone();
         for (key, val) in call_props {
             sub_ctx.insert(key.clone(), val.clone());
@@ -437,35 +523,59 @@ impl AsmCompiler {
     /// Recursively substitute prop values in a pre-lowered node.
     fn substitute_node(
         &self,
-        node: &JsxNode,
+        node: &LoweredNode,
         ctx: &HashMap<String, PropValue>,
-    ) -> Result<Vec<JsxNode>, String> {
-        // If this node is itself a composite component, expand it
-        if let Some(comp) = self.components.get(&node.tag) {
-            let resolved_props: Vec<(String, PropValue)> = node
-                .props
-                .iter()
-                .map(|(k, v)| (k.clone(), resolve_prop(v, ctx)))
-                .collect();
-            return self.expand_component(comp, &resolved_props, ctx);
+    ) -> Result<Vec<LoweredNode>, String> {
+        match node {
+            LoweredNode::Element(jsx) => {
+                // If this node is itself a composite component, expand it
+                if let Some(comp) = self.components.get(&jsx.tag) {
+                    let resolved_props: Vec<(String, PropValue)> = jsx
+                        .props
+                        .iter()
+                        .map(|(k, v)| (k.clone(), resolve_prop(v, ctx)))
+                        .collect();
+                    return self.expand_component(comp, &resolved_props, ctx);
+                }
+
+                let new_props: Vec<(String, PropValue)> = jsx
+                    .props
+                    .iter()
+                    .map(|(k, v)| (k.clone(), resolve_prop(v, ctx)))
+                    .collect();
+
+                let mut new_children = Vec::new();
+                for child in &jsx.children {
+                    new_children.extend(self.substitute_node(child, ctx)?);
+                }
+
+                Ok(vec![LoweredNode::Element(JsxNode {
+                    tag: jsx.tag.clone(),
+                    props: new_props,
+                    children: new_children,
+                })])
+            }
+            LoweredNode::Map { array, item_param, index_param, body } => {
+                let new_body: Vec<LoweredNode> = body.iter()
+                    .flat_map(|n| self.substitute_node(n, ctx).unwrap_or_default())
+                    .collect();
+                Ok(vec![LoweredNode::Map {
+                    array: resolve_prop_str(array, ctx),
+                    item_param: item_param.clone(),
+                    index_param: index_param.clone(),
+                    body: new_body,
+                }])
+            }
+            LoweredNode::ArrowBlock { params, body } => {
+                let new_body: Vec<LoweredNode> = body.iter()
+                    .flat_map(|n| self.substitute_node(n, ctx).unwrap_or_default())
+                    .collect();
+                Ok(vec![LoweredNode::ArrowBlock {
+                    params: params.clone(),
+                    body: new_body,
+                }])
+            }
         }
-
-        let new_props: Vec<(String, PropValue)> = node
-            .props
-            .iter()
-            .map(|(k, v)| (k.clone(), resolve_prop(v, ctx)))
-            .collect();
-
-        let mut new_children = Vec::new();
-        for child in &node.children {
-            new_children.extend(self.substitute_node(child, ctx)?);
-        }
-
-        Ok(vec![JsxNode {
-            tag: node.tag.clone(),
-            props: new_props,
-            children: new_children,
-        }])
     }
 
     /// Extract props from JSX attributes, evaluating expressions against the context.
@@ -614,6 +724,14 @@ fn resolve_prop(val: &PropValue, ctx: &HashMap<String, PropValue>) -> PropValue 
             }
         }
         PropValue::Num(n) => PropValue::Num(*n),
+    }
+}
+
+fn resolve_prop_str(s: &str, ctx: &HashMap<String, PropValue>) -> String {
+    if let Some(PropValue::Str(resolved)) = ctx.get(s) {
+        resolved.clone()
+    } else {
+        s.to_string()
     }
 }
 
@@ -966,6 +1084,27 @@ fn is_boolean_prop(name: &str) -> bool {
     )
 }
 
+fn emit_lowered_nodes(asm: &mut Asm, nodes: &[LoweredNode]) {
+    for node in nodes {
+        emit_lowered_node(asm, node);
+    }
+}
+
+fn emit_lowered_node(asm: &mut Asm, node: &LoweredNode) {
+    match node {
+        LoweredNode::Element(jsx) => emit_node(asm, jsx),
+        LoweredNode::Map { array: _, item_param: _, index_param: _, body } => {
+            // TODO: emit DefineBlock + MapOver bytecode
+            // For now, emit body once (no iteration) as a fallback
+            emit_lowered_nodes(asm, body);
+        }
+        LoweredNode::ArrowBlock { params: _, body } => {
+            // TODO: emit DefineBlock bytecode
+            emit_lowered_nodes(asm, body);
+        }
+    }
+}
+
 fn emit_nodes(asm: &mut Asm, nodes: &[JsxNode]) {
     for node in nodes {
         emit_node(asm, node);
@@ -979,12 +1118,12 @@ fn text_width(label: &str, size: u32) -> i32 {
 
 /// Measure the child block size for a given layout mode.
 /// Returns (block_w, block_h).
-fn measure_children_block(children: &[JsxNode], layout: &str, gap: i32) -> (i32, i32) {
+fn measure_children_block(children: &[LoweredNode], layout: &str, gap: i32) -> (i32, i32) {
     let mut block_w: i32 = 0;
     let mut block_h: i32 = 0;
 
     for (i, child) in children.iter().enumerate() {
-        let (cw, ch) = measure_node(child);
+        let (cw, ch) = measure_lowered_node(child);
         let gap_val = if i > 0 { gap } else { 0 };
         match layout {
             "vstack" => {
@@ -1003,6 +1142,13 @@ fn measure_children_block(children: &[JsxNode], layout: &str, gap: i32) -> (i32,
         }
     }
     (block_w, block_h)
+}
+
+fn measure_lowered_node(node: &LoweredNode) -> (i32, i32) {
+    match node {
+        LoweredNode::Element(jsx) => measure_node(jsx),
+        LoweredNode::Map { .. } | LoweredNode::ArrowBlock { .. } => (0, 0),
+    }
 }
 
 /// Measure a single node's (w, h) from its props. For Text, infer from label/size.
@@ -1069,10 +1215,10 @@ fn emit_container_children(asm: &mut Asm, node: &JsxNode, parent_x: i32, parent_
         "vstack" => {
             let mut cursor_y: i32 = 0;
             for child in &node.children {
-                let (_, ch) = measure_node(child);
+                let (_, ch) = measure_lowered_node(child);
                 asm.ui_push_state();
                 asm.ui_apply_offset(0, cursor_y);
-                emit_node(asm, child);
+                emit_lowered_node(asm, child);
                 asm.ui_pop_state();
                 cursor_y += ch + gap;
             }
@@ -1080,21 +1226,21 @@ fn emit_container_children(asm: &mut Asm, node: &JsxNode, parent_x: i32, parent_
         "hstack" => {
             let mut cursor_x: i32 = 0;
             for child in &node.children {
-                let (cw, _) = measure_node(child);
+                let (cw, _) = measure_lowered_node(child);
                 asm.ui_push_state();
                 asm.ui_apply_offset(cursor_x, 0);
-                emit_node(asm, child);
+                emit_lowered_node(asm, child);
                 asm.ui_pop_state();
                 cursor_x += cw + gap;
             }
         }
         "flat" => {
             // All children at (0,0) — overlay
-            emit_nodes(asm, &node.children);
+            emit_lowered_nodes(asm, &node.children);
         }
         _ => {
             // "absolute" — children use own x,y
-            emit_nodes(asm, &node.children);
+            emit_lowered_nodes(asm, &node.children);
         }
     }
 
@@ -1254,7 +1400,7 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
             asm.ui_push_state();
             asm.ui_apply_offset(x, y);
             for child in &node.children {
-                emit_node(asm, child);
+                emit_lowered_node(asm, child);
             }
             asm.ui_pop_state();
             asm.ui_ribbon_end();
@@ -1274,7 +1420,7 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                 let id = asm.def_string(&filter);
                 asm.vql_filter(id);
             }
-            emit_nodes(asm, &node.children);
+            emit_lowered_nodes(asm, &node.children);
             asm.vql_end_query();
             asm.set_output_mode(FOURCC_MTUI);
             return;
@@ -1318,7 +1464,7 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                 let id = asm.def_string(&long);
                 asm.skill_set_long_desc(id);
             }
-            emit_nodes(asm, &node.children);
+            emit_lowered_nodes(asm, &node.children);
             asm.skill_end();
             asm.set_output_mode(FOURCC_MTUI);
             return;
@@ -1346,7 +1492,7 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                 }
             }
             // Emit children (Replaceable elements)
-            emit_nodes(asm, &node.children);
+            emit_lowered_nodes(asm, &node.children);
             return;
         }
         "Replaceable" => {
@@ -1369,7 +1515,7 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                 asm.card_set_long_desc(id);
             }
             // Children are UI elements (Box, Slab, Text, etc.) captured into the card
-            emit_nodes(asm, &node.children);
+            emit_lowered_nodes(asm, &node.children);
             asm.card_end();
             return;
         }
@@ -1385,7 +1531,7 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
                 let id = asm.def_string(&long);
                 asm.objtype_set_long_desc(id);
             }
-            emit_nodes(asm, &node.children);
+            emit_lowered_nodes(asm, &node.children);
             asm.objtype_end();
             return;
         }
@@ -1457,7 +1603,7 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
             let direction = get_num_prop(&node.props, "direction").unwrap_or(0) as u32;
             let card_width = get_num_prop(&node.props, "cardWidth").unwrap_or(360) as u32;
             asm.ui_ribbon_begin(x, y, w, h, scroll_slot, direction, card_width);
-            emit_nodes(asm, &node.children);
+            emit_lowered_nodes(asm, &node.children);
             asm.ui_ribbon_end();
             return;
         }
@@ -1489,7 +1635,7 @@ fn emit_node(asm: &mut Asm, node: &JsxNode) {
     }
 
     // Emit children (except VStack which returns early)
-    emit_nodes(asm, &node.children);
+    emit_lowered_nodes(asm, &node.children);
 }
 
 // ── Public API ───────────────────────────────────────────────────────────
@@ -1545,7 +1691,7 @@ pub fn compile_to_asm_with_imports(tsx_source: &str, imports: &ImportMap) -> Res
         }
     }
 
-    emit_nodes(&mut asm, &nodes);
+    emit_lowered_nodes(&mut asm, &nodes);
     asm.halt();
 
     asm.finish().map_err(|e| format!("asm error: {:?}", e))
@@ -1600,7 +1746,7 @@ pub fn compile_to_asm(tsx_source: &str) -> Result<AsmOutput, String> {
         }
     }
 
-    emit_nodes(&mut asm, &nodes);
+    emit_lowered_nodes(&mut asm, &nodes);
     asm.halt();
 
     asm.finish().map_err(|e| format!("asm error: {:?}", e))
