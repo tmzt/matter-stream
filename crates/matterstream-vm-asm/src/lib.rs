@@ -346,6 +346,10 @@ impl Asm {
     pub fn shl(&mut self) -> &mut Self { self.op(RpnOp::Shl) }
     pub fn shr(&mut self) -> &mut Self { self.op(RpnOp::Shr) }
     pub fn not(&mut self) -> &mut Self { self.op(RpnOp::Not) }
+    pub fn define_block(&mut self) -> &mut Self { self.op(RpnOp::DefineBlock) }
+    pub fn call_block(&mut self) -> &mut Self { self.op(RpnOp::CallBlock) }
+    pub fn loop_over(&mut self) -> &mut Self { self.op(RpnOp::LoopOver) }
+    pub fn map_over(&mut self) -> &mut Self { self.op(RpnOp::MapOver) }
     pub fn halt(&mut self) -> &mut Self { self.op(RpnOp::Halt) }
     pub fn nop(&mut self) -> &mut Self { self.op(RpnOp::Nop) }
     pub fn ret(&mut self) -> &mut Self { self.op(RpnOp::Ret) }

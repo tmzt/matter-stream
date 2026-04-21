@@ -887,6 +887,14 @@ pub struct RpnVm {
     /// Component nesting depth guard (max 16).
     pub component_depth: u8,
 
+    /// Block table: block_id → (bytecode_id, offset, length).
+    /// Blocks are inline bytecode ranges defined by DefineBlock.
+    pub block_table: Vec<(u8, u32, u32)>,
+    /// Iteration index — set by MapOver/LoopOver for the current iteration.
+    pub iter_index: u32,
+    /// Iteration count — total items in current map/loop.
+    pub iter_count: u32,
+
     /// External OR page handlers — (fourcc, handler) pairs, linear scanned.
     or_pages: Vec<(u32, Box<dyn OrPageHandler>)>,
     /// External UserCall handlers — action_op → handler.
@@ -948,6 +956,9 @@ impl RpnVm {
             loaded_bytecodes: Vec::new(),
             string_base_offset: 0,
             component_depth: 0,
+            block_table: Vec::new(),
+            iter_index: 0,
+            iter_count: 0,
             or_pages: Vec::new(),
             user_call_handlers: std::collections::HashMap::new(),
             #[cfg(feature = "ui")]
@@ -2013,20 +2024,85 @@ impl RpnVm {
             }
             // ── Blocks + components (stubs) ──
             RpnOp::DefineBlock => {
-                // Stub: register callable block at PC offset
-                self.pc += 1;
+                // Stack: [length:u32] — register block at current PC+1, skip over body.
+                // The block body follows immediately. After DefineBlock, PC jumps past the body.
+                // Pushes block_id (index into block_table) onto stack.
+                let length = self.stack.pop().ok_or(RpnError::StackUnderflow)?
+                    .as_u32().ok_or(RpnError::TypeMismatch)?;
+                let block_start = (self.pc + 1) as u32;
+                let block_id = self.block_table.len() as u32;
+                // bytecode_id 0 = current (main) bytecode
+                self.block_table.push((0, block_start, length));
+                self.stack.push(RpnValue::U32(block_id));
+                // Skip over the block body
+                self.pc += 1 + length as usize;
             }
             RpnOp::CallBlock => {
-                // Stub: call a defined block
-                self.pc += 1;
+                // Stack: [block_id:u32] — execute block once
+                let block_id = self.stack.pop().ok_or(RpnError::StackUnderflow)?
+                    .as_u32().ok_or(RpnError::TypeMismatch)? as usize;
+                if block_id >= self.block_table.len() {
+                    return Err(RpnError::TypeMismatch);
+                }
+                let (_bc_id, offset, length) = self.block_table[block_id];
+                let saved_pc = self.pc;
+                let block_bc = &bytecode[offset as usize..(offset + length) as usize];
+                self.pc = 0;
+                let result = self.execute_inner(block_bc, arenas);
+                self.pc = saved_pc + 1;
+                result?;
             }
             RpnOp::LoopOver => {
-                // Stub: [n, block_idx] — call block for each
-                self.pc += 1;
+                // Stack: [count:u32, block_id:u32] — execute block count times
+                let block_id = self.stack.pop().ok_or(RpnError::StackUnderflow)?
+                    .as_u32().ok_or(RpnError::TypeMismatch)? as usize;
+                let count = self.stack.pop().ok_or(RpnError::StackUnderflow)?
+                    .as_u32().ok_or(RpnError::TypeMismatch)?;
+                if block_id >= self.block_table.len() {
+                    return Err(RpnError::TypeMismatch);
+                }
+                let (_bc_id, offset, length) = self.block_table[block_id];
+                let saved_pc = self.pc;
+                let saved_iter_index = self.iter_index;
+                let saved_iter_count = self.iter_count;
+                self.iter_count = count;
+                for i in 0..count {
+                    self.iter_index = i;
+                    let block_bc = &bytecode[offset as usize..(offset + length) as usize];
+                    self.pc = 0;
+                    self.execute_inner(block_bc, arenas)?;
+                }
+                self.iter_index = saved_iter_index;
+                self.iter_count = saved_iter_count;
+                self.pc = saved_pc + 1;
             }
             RpnOp::MapOver => {
-                // Stub: [n, block_idx] — call block for each, push results
-                self.pc += 1;
+                // Stack: [count:u32, block_id:u32] — execute block count times
+                // Same as LoopOver but the block can read iter_index to position items.
+                // iter_index is available via LoadIterIndex (to be added) or zero_page[0..3].
+                let block_id = self.stack.pop().ok_or(RpnError::StackUnderflow)?
+                    .as_u32().ok_or(RpnError::TypeMismatch)? as usize;
+                let count = self.stack.pop().ok_or(RpnError::StackUnderflow)?
+                    .as_u32().ok_or(RpnError::TypeMismatch)?;
+                if block_id >= self.block_table.len() {
+                    return Err(RpnError::TypeMismatch);
+                }
+                let (_bc_id, offset, length) = self.block_table[block_id];
+                let saved_pc = self.pc;
+                let saved_iter_index = self.iter_index;
+                let saved_iter_count = self.iter_count;
+                self.iter_count = count;
+                for i in 0..count {
+                    self.iter_index = i;
+                    // Write iter_index to zero_page[0..3] for block to read
+                    self.zero_page[0..4].copy_from_slice(&i.to_le_bytes());
+                    let block_bc = &bytecode[offset as usize..(offset + length) as usize];
+                    self.pc = 0;
+                    self.execute_inner(block_bc, arenas)?;
+                }
+                self.iter_index = saved_iter_index;
+                self.iter_count = saved_iter_count;
+                self.pc = saved_pc + 1;
             }
             RpnOp::DefineComponent => {
                 // Stub: creates subpackage

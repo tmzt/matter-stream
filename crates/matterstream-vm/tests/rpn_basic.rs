@@ -348,3 +348,53 @@ fn test_banks_persist_between_executions() {
     vm.execute(&bc2, &mut arenas).unwrap();
     assert_eq!(vm.int_bank[0], 42);
 }
+
+#[test]
+fn test_define_block_and_call() {
+    // DefineBlock: push length, block body (Push32 42), then DefineBlock
+    // Then CallBlock to execute it
+    let mut bc = Vec::new();
+    // Push block length (5 = Push32 opcode + 4 bytes for value 42)
+    bc.extend_from_slice(&RpnVm::encode(&[(RpnOp::Push32, Some(&42u32.to_le_bytes()))]));
+    let block_body_len = RpnVm::encode(&[(RpnOp::Push32, Some(&42u32.to_le_bytes()))]).len() as u32;
+    // Full sequence: push length → DefineBlock (skips body) → body → CallBlock
+    let body = RpnVm::encode(&[(RpnOp::Push32, Some(&42u32.to_le_bytes()))]);
+    let mut bytecode = Vec::new();
+    bytecode.extend_from_slice(&RpnVm::encode(&[(RpnOp::Push32, Some(&(body.len() as u32).to_le_bytes()))]));
+    bytecode.push(RpnOp::DefineBlock as u8);
+    bytecode.extend_from_slice(&body);
+    bytecode.push(RpnOp::CallBlock as u8);
+    let vm = run(&bytecode);
+    assert_eq!(vm.stack.len(), 1);
+    assert_eq!(vm.stack[0].as_u32(), Some(42));
+}
+
+#[test]
+fn test_map_over() {
+    // MapOver with count=3, block reads iter_index from zero_page[0..4]
+    // Block body: Push32(0) → LoadZpI32 (reads zero_page[0..3])
+    let mut body = Vec::new();
+    body.push(RpnOp::Push32 as u8);
+    body.extend_from_slice(&0u32.to_le_bytes()); // address 0
+    body.push(RpnOp::LoadZpI32 as u8);
+    let body_len = body.len() as u32;
+
+    let mut bytecode = Vec::new();
+    // Push block length, DefineBlock (skips body, pushes block_id)
+    bytecode.push(RpnOp::Push32 as u8);
+    bytecode.extend_from_slice(&body_len.to_le_bytes());
+    bytecode.push(RpnOp::DefineBlock as u8);
+    bytecode.extend_from_slice(&body);
+    // Stack: [block_id]. Push count=3, swap → [count, block_id]
+    bytecode.push(RpnOp::Push32 as u8);
+    bytecode.extend_from_slice(&3u32.to_le_bytes());
+    bytecode.push(RpnOp::Swap as u8);
+    bytecode.push(RpnOp::MapOver as u8);
+
+    let vm = run(&bytecode);
+    // Stack should have 3 values: 0, 1, 2 (iter indices)
+    assert_eq!(vm.stack.len(), 3, "stack: {:?}", vm.stack);
+    assert_eq!(vm.stack[0].as_u64(), Some(0));
+    assert_eq!(vm.stack[1].as_u64(), Some(1));
+    assert_eq!(vm.stack[2].as_u64(), Some(2));
+}
