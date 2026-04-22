@@ -91,3 +91,36 @@ fn test_map_in_fragment() {
         }
     }
 }
+
+#[test]
+fn test_email_list_card_with_map() {
+    let tsx = r##"
+        const EmailListCard = ({ title, emails }) => (
+            <>
+                <Slab x={0} y={0} w={400} h={640} radius={20} color="#1A1A28FF" />
+                <Text x={16} y={20} size={20} label={title} color="#FFFFFFFF" />
+                {emails.map((email, i) => (
+                    <>
+                        <Slab x={10} y={56} w={380} h={58} radius={10} color="#222236FF" />
+                        <Text x={22} y={64} size={13} label={email.subject} color="#EEEEEEFF" />
+                        <Text x={22} y={82} size={10} label={email.snippet} color="#777788FF" />
+                    </>
+                ))}
+            </>
+        );
+        <EmailListCard title="Emails from Alice" />
+    "##;
+    let output = compile_to_asm(tsx).expect("EmailListCard compile failed");
+    eprintln!("EmailListCard: {} bytes, {} strings", output.bytecode.len(), output.string_table.len());
+
+    let mut vm = RpnVm::new();
+    vm.string_table = output.string_table.clone();
+    // Set email count = 3 in zero_page[4..7]
+    vm.zero_page[4..8].copy_from_slice(&3u32.to_le_bytes());
+    let mut arenas = TripleArena::new();
+    vm.execute(&output.bytecode, &mut arenas).expect("execute failed");
+
+    // Should have: 1 bg slab + 1 title text + 3 * (slab + 2 texts) = 2 + 9 = 11 draws
+    eprintln!("EmailListCard: {} draws", vm.sdf_draws.len());
+    assert!(vm.sdf_draws.len() >= 11, "expected at least 11 draws, got {}", vm.sdf_draws.len());
+}

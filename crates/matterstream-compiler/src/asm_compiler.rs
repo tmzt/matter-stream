@@ -400,8 +400,17 @@ impl AsmCompiler {
         let item_param = params.first().cloned().unwrap_or_else(|| "_item".to_string());
         let index_param = params.get(1).cloned();
 
-        // Lower the callback body
-        let body_nodes = self.lower_arrow_body(callback, ctx)?;
+        // Add map params to context so prop expressions can resolve them
+        let mut map_ctx = ctx.clone();
+        // item param resolves to its own name (for dotted path building: item.subject → "item.subject")
+        map_ctx.insert(item_param.clone(), PropValue::Str(item_param.clone()));
+        if let Some(ref idx) = index_param {
+            // index param is a special marker — at runtime it reads from zero_page[0..3]
+            map_ctx.insert(idx.clone(), PropValue::Str("__iter_index".to_string()));
+        }
+
+        // Lower the callback body with map context
+        let body_nodes = self.lower_arrow_body(callback, &map_ctx)?;
 
         Ok(vec![LoweredNode::Map {
             array: array_name,
@@ -685,6 +694,16 @@ impl AsmCompiler {
                 } else {
                     Ok(PropValue::Num(0))
                 }
+            }
+            Expression::StaticMemberExpression(member) => {
+                // e.g., email.subject → "email.subject" (dotted path for TKV lookup)
+                let obj = self.eval_any_expression(&member.object, ctx)?;
+                let field = member.property.name.to_string();
+                let path = match obj {
+                    PropValue::Str(s) => format!("{}.{}", s, field),
+                    PropValue::Num(_) => field,
+                };
+                Ok(PropValue::Str(path))
             }
             _ => Ok(PropValue::Num(0)),
         }
