@@ -1093,14 +1093,30 @@ fn emit_lowered_nodes(asm: &mut Asm, nodes: &[LoweredNode]) {
 fn emit_lowered_node(asm: &mut Asm, node: &LoweredNode) {
     match node {
         LoweredNode::Element(jsx) => emit_node(asm, jsx),
-        LoweredNode::Map { array: _, item_param: _, index_param: _, body } => {
-            // TODO: emit DefineBlock + MapOver bytecode
-            // For now, emit body once (no iteration) as a fallback
+        LoweredNode::Map { array, item_param: _, index_param: _, body } => {
+            // Emit: BlockDef → [body] → end_label
+            // Then: Push32(count) Swap MapOver
+            //
+            // The block body can read iter_index from zero_page[0..3] via LoadZpI32.
+            // The array count comes from TKV ArrayLen (TODO: runtime lookup).
+            // For now, use a placeholder count from int_bank[15].
+            let (_start, end) = asm.begin_block_def();
             emit_lowered_nodes(asm, body);
+            asm.end_block_def(end);
+
+            // Stack now has block_id from DefineBlock.
+            // Push count — for now read from int_bank[15] as the array element count.
+            // The caller sets int_bank[15] = array.length before rendering.
+            let _ = array; // TODO: emit TKV ArrayLen(array_name) to get count
+            asm.push32(0).op(matterstream_vm::rpn::RpnOp::LoadZpI32); // read count from zero_page[4..7]
+            asm.swap();
+            asm.map_over();
         }
         LoweredNode::ArrowBlock { params: _, body } => {
-            // TODO: emit DefineBlock bytecode
+            let (_start, end) = asm.begin_block_def();
             emit_lowered_nodes(asm, body);
+            asm.end_block_def(end);
+            // block_id left on stack for caller to use
         }
     }
 }

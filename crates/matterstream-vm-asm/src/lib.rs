@@ -169,6 +169,10 @@ enum AsmToken {
     UserCall(u64, u64),
     /// SystemCall: [opcode][u64 action_op][u64 data] — 17 bytes total.
     SystemCall(u64, u64),
+    /// DefineBlock: push32(end_label - start_label) + DefineBlock opcode.
+    /// Body bytes are emitted between start_label and end_label.
+    /// Resolves to: Push32(<body_length>) + DefineBlock (6 bytes total).
+    BlockDef(LabelId, LabelId),
 }
 
 impl AsmToken {
@@ -188,6 +192,7 @@ impl AsmToken {
             AsmToken::SetCR(_, _) => 10,  // opcode + u8 + u64
             AsmToken::UserCall(_, _) => 17,   // opcode + u64 + u64
             AsmToken::SystemCall(_, _) => 17,
+            AsmToken::BlockDef(_, _) => 6,    // Push32(len) + DefineBlock
         }
     }
 }
@@ -346,10 +351,26 @@ impl Asm {
     pub fn shl(&mut self) -> &mut Self { self.op(RpnOp::Shl) }
     pub fn shr(&mut self) -> &mut Self { self.op(RpnOp::Shr) }
     pub fn not(&mut self) -> &mut Self { self.op(RpnOp::Not) }
-    pub fn define_block(&mut self) -> &mut Self { self.op(RpnOp::DefineBlock) }
     pub fn call_block(&mut self) -> &mut Self { self.op(RpnOp::CallBlock) }
     pub fn loop_over(&mut self) -> &mut Self { self.op(RpnOp::LoopOver) }
     pub fn map_over(&mut self) -> &mut Self { self.op(RpnOp::MapOver) }
+
+    /// Emit a block definition header. Call this before emitting the block body.
+    /// Returns (start_label, end_label) — mark start_label before body, end_label after.
+    /// The BlockDef token will compute body length from label positions.
+    pub fn begin_block_def(&mut self) -> (LabelId, LabelId) {
+        let start = self.def_label();
+        let end = self.def_label();
+        self.tokens.push(AsmToken::BlockDef(start, end));
+        self.mark(start);
+        (start, end)
+    }
+
+    /// Mark the end of a block body. Call after emitting all block body tokens.
+    pub fn end_block_def(&mut self, end: LabelId) -> &mut Self {
+        self.mark(end);
+        self
+    }
     pub fn halt(&mut self) -> &mut Self { self.op(RpnOp::Halt) }
     pub fn nop(&mut self) -> &mut Self { self.op(RpnOp::Nop) }
     pub fn ret(&mut self) -> &mut Self { self.op(RpnOp::Ret) }
@@ -834,6 +855,14 @@ impl Asm {
                     bytecode.push(RpnOp::SystemCall as u8);
                     bytecode.extend_from_slice(&action_op.to_le_bytes());
                     bytecode.extend_from_slice(&data.to_le_bytes());
+                }
+                AsmToken::BlockDef(start, end) => {
+                    let start_offset = *label_offsets.get(start).ok_or(AsmError::UnresolvedLabel(*start))?;
+                    let end_offset = *label_offsets.get(end).ok_or(AsmError::UnresolvedLabel(*end))?;
+                    let body_length = (end_offset - start_offset) as u32;
+                    bytecode.push(RpnOp::Push32 as u8);
+                    bytecode.extend_from_slice(&body_length.to_le_bytes());
+                    bytecode.push(RpnOp::DefineBlock as u8);
                 }
             }
         }
