@@ -661,6 +661,7 @@ impl RpnValue {
     pub fn as_u32(&self) -> Option<u32> {
         match self {
             RpnValue::U32(v) => Some(*v),
+            RpnValue::U64(v) => Some(*v as u32),
             _ => None,
         }
     }

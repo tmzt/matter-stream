@@ -14,3 +14,6 @@ oxc_parser = "0.13"
 oxc_allocator = "0.13"
 oxc_ast = "0.13"
 oxc_span = "0.13"
+
+[dev-dependencies]
+matterstream-vm-arena = { path = "../matterstream-vm-arena" }

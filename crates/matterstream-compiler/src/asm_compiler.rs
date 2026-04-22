@@ -1108,7 +1108,7 @@ fn emit_lowered_node(asm: &mut Asm, node: &LoweredNode) {
             // Push count — for now read from int_bank[15] as the array element count.
             // The caller sets int_bank[15] = array.length before rendering.
             let _ = array; // TODO: emit TKV ArrayLen(array_name) to get count
-            asm.push32(0).op(matterstream_vm::rpn::RpnOp::LoadZpI32); // read count from zero_page[4..7]
+            asm.push32(4).op(matterstream_vm::rpn::RpnOp::LoadZpI32); // read count from zero_page[4..7]
             asm.swap();
             asm.map_over();
         }
