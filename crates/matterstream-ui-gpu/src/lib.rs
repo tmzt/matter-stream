@@ -440,6 +440,53 @@ impl GpuSdfRenderer {
         anim_bank: &[matterstream_common::Anim],
         font: Option<&matterstream_common::GpuFont>,
     ) {
+        self.render_full_scaled_with_load(
+            device, queue, target, width, height, scale,
+            draws, time_ms, scalar_bank, int_bank, anim_bank, font,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+        );
+    }
+
+    /// Render SDF draws, preserving whatever is already on the target. Caller
+    /// must have initialised the target in an earlier pass.
+    pub fn render_full_scaled_load(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        scale: f32,
+        draws: &[SdfDrawCmd],
+        time_ms: f32,
+        scalar_bank: &[f32],
+        int_bank: &[i32],
+        anim_bank: &[matterstream_common::Anim],
+        font: Option<&matterstream_common::GpuFont>,
+    ) {
+        self.render_full_scaled_with_load(
+            device, queue, target, width, height, scale,
+            draws, time_ms, scalar_bank, int_bank, anim_bank, font,
+            wgpu::LoadOp::Load,
+        );
+    }
+
+    fn render_full_scaled_with_load(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        scale: f32,
+        draws: &[SdfDrawCmd],
+        time_ms: f32,
+        scalar_bank: &[f32],
+        int_bank: &[i32],
+        anim_bank: &[matterstream_common::Anim],
+        font: Option<&matterstream_common::GpuFont>,
+        load: wgpu::LoadOp<wgpu::Color>,
+    ) {
         let count = draws.len().min(self.max_cmds as usize);
 
         if count > 0 {
@@ -478,7 +525,7 @@ impl GpuSdfRenderer {
                     view: target,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 1.0, g: 0.0, b: 1.0, a: 1.0 }),
+                        load,
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
