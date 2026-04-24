@@ -163,7 +163,13 @@ impl GpuSdfRenderer {
             mapped_at_creation: false,
         });
         let char_buffer_gpu = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("char_buffer"), size: 16384,
+            // 65536 bytes = 16384 u32s. A full 40×120 PTY screen emits
+            // ~4800 char indices; 4096 (the previous cap) overflowed
+            // once terminal cards were added. 16384 leaves headroom
+            // for card titles, chevrons, overlay text, and future
+            // larger PTYs without blowing past typical mobile GPU
+            // storage-buffer limits (well under the 128MB Vulkan min).
+            label: Some("char_buffer"), size: 65536,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -388,11 +394,21 @@ impl GpuSdfRenderer {
         let _ = font;
     }
 
-    /// Upload character data for text rendering.
+    /// Upload character data for text rendering. Truncates to the
+    /// buffer capacity rather than panicking, so an unexpectedly
+    /// large frame (e.g. an oversized terminal) drops trailing
+    /// glyphs instead of crashing the app.
     pub fn upload_chars(&self, queue: &wgpu::Queue, chars: &[u32]) {
-        if !chars.is_empty() {
-            queue.write_buffer(&self.char_buffer_gpu, 0, bytemuck::cast_slice(chars));
-        }
+        if chars.is_empty() { return; }
+        let cap = (self.char_buffer_gpu.size() as usize) / std::mem::size_of::<u32>();
+        let clipped = if chars.len() > cap {
+            log::warn!("[sdf] upload_chars: truncating {} → {} u32 (buffer cap {}B)",
+                chars.len(), cap, self.char_buffer_gpu.size());
+            &chars[..cap]
+        } else {
+            chars
+        };
+        queue.write_buffer(&self.char_buffer_gpu, 0, bytemuck::cast_slice(clipped));
     }
 
     /// Upload MSDF glyph table (array of u32, 8 per entry = 2 × vec4<u32>).

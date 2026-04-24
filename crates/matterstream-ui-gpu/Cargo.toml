@@ -9,6 +9,7 @@ license = "Apache-2.0"
 matterstream-common = { path = "../matterstream-common" }
 wgpu = "29"
 bytemuck = { version = "1", features = ["derive"] }
+log = "0.4"
 
 [build-dependencies]
 naga = { version = "29", features = ["wgsl-in"] }
