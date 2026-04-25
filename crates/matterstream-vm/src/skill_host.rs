@@ -24,4 +24,31 @@ pub trait SkillHostCallbacks: Send {
     
     /// Execute a specific action by name and return the result.
     fn execute_action(&mut self, name: &str) -> Result<String, String>;
+
+    // ── Ref bindings ─────────────────────────────────────────────
+    //
+    // TSX skills can declare `<Ref name="…" />` slots and read/write
+    // them via `<SetValue ref="…">{…}</SetValue>` / `<GetValue ref>`.
+    // Per-run storage lives on the host side (the SkillsHost's
+    // RunningSkill keeps a `HashMap<String, String>`) so the VM
+    // layer stays ignorant of lifetime concerns.
+    //
+    // Default impls are no-ops so older `SkillHostCallbacks`
+    // implementations continue to compile — useful for embedded
+    // demos that don't care about ref bindings.
+
+    /// Declare a ref slot. Called when the VM hits a `<Ref>`
+    /// element; hosts typically seed the slot with its `default`
+    /// value if provided.
+    fn define_ref(&mut self, _name: &str, _default: Option<&str>) {}
+
+    /// Write a value into a ref. Called by `<SetValue ref="…">`.
+    /// The previous value (if any) is returned so the caller can
+    /// implement undo semantics if needed. Default impl drops.
+    fn set_ref(&mut self, _name: &str, _value: &str) -> Option<String> { None }
+
+    /// Read a ref. Returns `None` if the slot was never defined nor
+    /// set. Consumed by `<GetValue ref="…">` and by the `{{name}}`
+    /// template-substitution path inside `execute_prompt`.
+    fn get_ref(&self, _name: &str) -> Option<String> { None }
 }
