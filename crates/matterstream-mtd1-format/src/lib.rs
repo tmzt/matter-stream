@@ -127,7 +127,80 @@ pub mod opcode {
     pub const OP_DRAW_SHAPE: u32 = 0x1;
     pub const OP_SET_STYLE: u32 = 0x2;
     pub const OP_SET_CURSOR: u32 = 0x3;
+    pub const OP_SET_OUTPUT_MODE: u32 = 0x4;
     pub const OP_SET_TOKEN: u32 = 0x5;
+}
+
+/// Output-mode operand layout for `OP_SET_OUTPUT_MODE`. One opcode
+/// consolidates every stateful rendering toggle so we don't burn the
+/// remaining 4-bit opcode slots on one-off switches.
+///
+/// Operand bits:
+/// ```text
+/// bit 0        OUTPUT_MODE_XOR              — verb on the command itself
+///                                              0 = replace current state, 1 = XOR into current
+/// bits 1..3    OUTPUT_MODE_COLOR_MASK       — 3-bit region, values in [`ColorScheme`]
+/// bit 4        OUTPUT_MODE_CURSOR_VISIBLE
+/// bit 5        OUTPUT_MODE_ALT_SCREEN
+/// bits 6..27                                 — reserved, must be zero
+/// ```
+///
+/// `OUTPUT_MODE_XOR` is a property of the command, not of persisted
+/// mode state — [`apply_output_mode`] always clears it before storing.
+pub mod output_mode {
+    pub const OUTPUT_MODE_XOR: u32 = 1 << 0;
+
+    pub const OUTPUT_MODE_COLOR_SHIFT: u32 = 1;
+    pub const OUTPUT_MODE_COLOR_MASK:  u32 = 0b111 << OUTPUT_MODE_COLOR_SHIFT;
+
+    pub const OUTPUT_MODE_CURSOR_VISIBLE: u32 = 1 << 4;
+    pub const OUTPUT_MODE_ALT_SCREEN:     u32 = 1 << 5;
+
+    /// Mutually-exclusive color-scheme selector. Variants are
+    /// pre-shifted into `OUTPUT_MODE_COLOR_MASK`, so
+    /// `operand | ColorScheme::Bright as u32` sets the field directly.
+    /// Three bits = 8 slots; unnamed slots are reserved for future
+    /// schemes (256-indexed, truecolor RGB, grayscale, …).
+    #[repr(u32)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ColorScheme {
+        /// 7-bit palette; bit 7 of each cell color = reverse video.
+        /// Default — target: tmux status bars, ncurses apps.
+        /// Renderer today: emit a cell-sized bg rect under the glyph for
+        /// each reversed run. If we ever extend the MSDF atlas with
+        /// cell-edge padding, this can become a single `mix(bg, fg,
+        /// sdf_alpha)` draw per cell instead.
+        Reverse = 0 << OUTPUT_MODE_COLOR_SHIFT,
+        /// 8-bit (16-color ANSI) palette; bit 7 = bright.
+        /// Target: `ls --color`, syntax highlighting.
+        Bright  = 1 << OUTPUT_MODE_COLOR_SHIFT,
+    }
+
+    impl ColorScheme {
+        /// Pull a scheme out of a mode-state u32. Returns `None` for
+        /// reserved slots so renderers can fall back to a default
+        /// instead of silently mis-interpreting an unknown value.
+        pub fn from_mode(mode: u32) -> Option<Self> {
+            match mode & OUTPUT_MODE_COLOR_MASK {
+                x if x == Self::Reverse as u32 => Some(Self::Reverse),
+                x if x == Self::Bright  as u32 => Some(Self::Bright),
+                _ => None,
+            }
+        }
+    }
+}
+
+/// Fold a `SET_OUTPUT_MODE` operand into the current mode state.
+/// Replace-mode (bit 0 clear) overwrites wholesale; XOR-mode (bit 0 set)
+/// flips the bits from `current`. The verb bit is command-level and is
+/// always stripped from the returned state.
+pub fn apply_output_mode(current: u32, operand: u32) -> u32 {
+    let payload = operand & !output_mode::OUTPUT_MODE_XOR;
+    if operand & output_mode::OUTPUT_MODE_XOR != 0 {
+        current ^ payload
+    } else {
+        payload
+    }
 }
 
 /// A single 32-bit instruction in the mtd1 ISA.
@@ -177,6 +250,12 @@ impl Command32 {
         Self((opcode::OP_SET_CURSOR << 28) | (y14 << 14) | x14)
     }
 
+    /// `OP_SET_OUTPUT_MODE (0x4)`: `[4b Op][28b Mode Operand]`
+    /// Operand layout is described in [`crate::output_mode`].
+    pub fn set_output_mode(operand: u32) -> Self {
+        Self((opcode::OP_SET_OUTPUT_MODE << 28) | (operand & 0x0FFF_FFFF))
+    }
+
     /// `OP_SET_TOKEN (0x5)`: `[4b Op][28b Semantic Token ID]`
     pub fn set_token(token_id: u32) -> Self {
         Self((opcode::OP_SET_TOKEN << 28) | (token_id & 0x0FFF_FFFF))
@@ -221,6 +300,13 @@ impl Command32 {
         (y, x)
     }
 
+    /// Decode SET_OUTPUT_MODE operand (raw 28-bit bitfield). See
+    /// [`crate::output_mode`] for bit layout and
+    /// [`crate::apply_output_mode`] for folding into state.
+    pub fn decode_output_mode(self) -> u32 {
+        self.0 & 0x0FFF_FFFF
+    }
+
     /// Decode SET_TOKEN field: semantic token ID
     pub fn decode_token(self) -> u32 {
         self.0 & 0x0FFF_FFFF
@@ -245,6 +331,18 @@ impl Command32 {
             opcode::OP_SET_CURSOR => {
                 let (y, x) = self.decode_cursor();
                 format!("SET_CURSOR x:{}, y:{}", x, y)
+            }
+            opcode::OP_SET_OUTPUT_MODE => {
+                let operand = self.decode_output_mode();
+                let mut parts = Vec::<String>::new();
+                if operand & output_mode::OUTPUT_MODE_XOR != 0 { parts.push("xor".into()); }
+                match output_mode::ColorScheme::from_mode(operand) {
+                    Some(s) => parts.push(format!("color:{:?}", s)),
+                    None => parts.push(format!("color:?{:#x}", operand & output_mode::OUTPUT_MODE_COLOR_MASK)),
+                }
+                if operand & output_mode::OUTPUT_MODE_CURSOR_VISIBLE != 0 { parts.push("cursor_visible".into()); }
+                if operand & output_mode::OUTPUT_MODE_ALT_SCREEN != 0 { parts.push("alt_screen".into()); }
+                format!("SET_OUTPUT_MODE {}", parts.join(" "))
             }
             opcode::OP_SET_TOKEN => {
                 format!("SET_TOKEN id:{}", self.decode_token())
@@ -551,5 +649,65 @@ mod tests {
     fn disassembly_output() {
         let cmd = Command32::set_cursor(10, 20);
         assert_eq!(cmd.disassemble(), "SET_CURSOR x:20, y:10");
+    }
+
+    #[test]
+    fn set_output_mode_roundtrip() {
+        use output_mode::*;
+        let operand = OUTPUT_MODE_XOR | ColorScheme::Bright as u32 | OUTPUT_MODE_ALT_SCREEN;
+        let cmd = Command32::set_output_mode(operand);
+        assert_eq!(cmd.opcode(), opcode::OP_SET_OUTPUT_MODE);
+        assert_eq!(cmd.decode_output_mode(), operand & 0x0FFF_FFFF);
+    }
+
+    #[test]
+    fn apply_replace_clears_xor() {
+        use output_mode::*;
+        // Replace ignores `current` and strips the verb bit.
+        let new = apply_output_mode(0xAAAA, OUTPUT_MODE_CURSOR_VISIBLE);
+        assert_eq!(new, OUTPUT_MODE_CURSOR_VISIBLE);
+    }
+
+    #[test]
+    fn apply_xor_toggle() {
+        use output_mode::*;
+        let new = apply_output_mode(
+            OUTPUT_MODE_CURSOR_VISIBLE,
+            OUTPUT_MODE_XOR | OUTPUT_MODE_CURSOR_VISIBLE,
+        );
+        assert_eq!(new, 0);
+    }
+
+    #[test]
+    fn apply_xor_from_zero_is_set() {
+        use output_mode::*;
+        let new = apply_output_mode(0, OUTPUT_MODE_XOR | ColorScheme::Bright as u32);
+        assert_eq!(new, ColorScheme::Bright as u32);
+    }
+
+    #[test]
+    fn color_scheme_values_fit_mask() {
+        use output_mode::*;
+        assert_eq!((ColorScheme::Reverse as u32) & OUTPUT_MODE_COLOR_MASK, ColorScheme::Reverse as u32);
+        assert_eq!((ColorScheme::Bright  as u32) & OUTPUT_MODE_COLOR_MASK, ColorScheme::Bright  as u32);
+    }
+
+    #[test]
+    fn color_scheme_roundtrip() {
+        use output_mode::*;
+        assert_eq!(ColorScheme::from_mode(ColorScheme::Reverse as u32), Some(ColorScheme::Reverse));
+        assert_eq!(ColorScheme::from_mode(ColorScheme::Bright  as u32), Some(ColorScheme::Bright));
+        // Slot 4 (0b100 << shift) is reserved — should not decode.
+        assert_eq!(ColorScheme::from_mode(0b100 << OUTPUT_MODE_COLOR_SHIFT), None);
+    }
+
+    #[test]
+    fn set_output_mode_disassembly() {
+        use output_mode::*;
+        let cmd = Command32::set_output_mode(OUTPUT_MODE_XOR | ColorScheme::Bright as u32);
+        let disasm = cmd.disassemble();
+        assert!(disasm.contains("SET_OUTPUT_MODE"), "missing opcode name: {}", disasm);
+        assert!(disasm.contains("xor"),            "missing verb: {}", disasm);
+        assert!(disasm.contains("Bright"),         "missing scheme: {}", disasm);
     }
 }
