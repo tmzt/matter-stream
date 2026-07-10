@@ -134,10 +134,12 @@ fn blend_over(dst: vec4<f32>, src: vec4<f32>) -> vec4<f32> {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = in.uv;
 
-    // Base color under all draws. Rendered onto a pure-black surface — any
-    // non-black bleed here shows up through SDF edge AA when the blit samples
-    // past the ribbon extent.
-    var result = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    // Start transparent so we can be composited on top of prior passes
+    // (e.g. the ribbon blit) without obliterating them. Pass B clears
+    // to black separately, so cleared regions still read black; pixels
+    // that no SDF cmd covers get `discard`ed at the tail of the shader
+    // and the destination content passes through unchanged.
+    var result = vec4<f32>(0.0, 0.0, 0.0, 0.0);
 
     let count = uniforms.header.x;
 
@@ -389,6 +391,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 result = blend_over(result, shape_color);
             }
         }
+    }
+
+    // If no draw covered this pixel, discard so the destination content
+    // (from a prior pass on the same target) shows through. Required for
+    // Pass D overlays like the TalkButton to composite over the ribbon
+    // blit without erasing the un-covered region.
+    if result.a < 0.001 {
+        discard;
     }
 
     return result;
