@@ -231,8 +231,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let scale_f = max(text_size / f32(glyph_h), 1.0);
                     let advance = f32(glyph_w + 1u) * scale_f;
 
+                    let cb_len = arrayLength(&char_buffer);
+                    let gb_len = arrayLength(&glyph_bitmap);
                     for (var ci: u32 = 0u; ci < char_count; ci = ci + 1u) {
-                        let cp = char_buffer[char_offset + ci];
+                        let cb_idx = char_offset + ci;
+                        if cb_idx >= cb_len { break; }
+                        let cp = char_buffer[cb_idx];
                         let glyph_idx = clamp(cp, first_cp, uniforms.font.w) - first_cp;
 
                         let char_x = text_x + f32(ci) * advance;
@@ -243,7 +247,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                            local_y >= 0.0 && local_y < f32(glyph_h) * scale_f {
                             let gx = u32(local_x / scale_f);
                             let gy = u32(local_y / scale_f);
-                            let row_byte = glyph_bitmap[glyph_idx * glyph_h + gy];
+                            let gbm_idx = glyph_idx * glyph_h + gy;
+                            if gbm_idx >= gb_len { continue; }
+                            let row_byte = glyph_bitmap[gbm_idx];
                             let bit = glyph_w - 1u - gx;
                             if (row_byte & (1u << bit)) != 0u {
                                 d = -1.0;
@@ -259,7 +265,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 if abs(p.x) < half.x && abs(p.y) < half.y {
                     let uv = (p + half) / cmd.size;
                     let tex = uniforms.texture_bank[tex_idx];
-                    let color_sample = textureSample(tex_array, tex_sampler, uv, i32(tex.layer));
+                    // textureSampleLevel: this sample is inside a
+                    // non-uniform `if` (per-fragment rect test) —
+                    // implicit derivatives there are UB and hang the
+                    // Adreno 740. Card textures are non-mipmapped, so
+                    // LOD 0 is exact.
+                    let color_sample = textureSampleLevel(tex_array, tex_sampler, uv, i32(tex.layer), 0.0);
                     let blend_alpha = color_sample.a * cmd.color.a;
                     if blend_alpha > 0.001 {
                         let tinted = vec4<f32>(color_sample.rgb * cmd.color.rgb, blend_alpha);
@@ -284,12 +295,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                 var cursor_x: f32 = 0.0;
 
+                let char_buf_len = arrayLength(&char_buffer);
+                let glyph_tbl_len = arrayLength(&glyph_table);
                 for (var ci: u32 = 0u; ci < char_count; ci = ci + 1u) {
-                    let entry = char_buffer[char_offset + ci];
+                    // Bounds-guard every storage read: an out-of-range
+                    // char_offset / gt_idx here is a GPU pagefault on
+                    // Adreno (device lost), not a benign garbage read.
+                    let ce_idx = char_offset + ci;
+                    if ce_idx >= char_buf_len { break; }
+                    let entry = char_buffer[ce_idx];
                     let gt_idx = entry >> 16u;
                     let delta_biased = f32(entry & 0xFFFFu);
                     let delta_px = (delta_biased - 2048.0) / 16.0;
 
+                    if gt_idx * 2u + 1u >= glyph_tbl_len { continue; }
                     let g0 = glyph_table[gt_idx * 2u];
                     let g1 = glyph_table[gt_idx * 2u + 1u];
 
@@ -330,7 +349,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         let u = (atlas_gx + acx + 0.5) / atlas_dim.x;
                         let v = (atlas_gy + acy + 0.5) / atlas_dim.y;
 
-                        let sample = textureSample(msdf_atlas, msdf_sampler, vec2<f32>(u, v));
+                        // textureSampleLevel (explicit LOD 0), NOT
+                        // textureSample: this call sits inside a
+                        // per-fragment char loop AND a non-uniform
+                        // if — implicit-derivative sampling there is
+                        // UB in WGSL and hangs the Adreno 740 GPU
+                        // (TDR → device lost). MSDF atlases are
+                        // single-level, so LOD 0 is exact and
+                        // derivative-free.
+                        let sample = textureSampleLevel(msdf_atlas, msdf_sampler, vec2<f32>(u, v), 0.0);
                         let sd = msdf_median(sample.r, sample.g, sample.b);
 
                         // Standard: sd > 0.5 is inside
