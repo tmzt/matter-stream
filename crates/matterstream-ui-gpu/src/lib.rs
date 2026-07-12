@@ -503,6 +503,97 @@ impl GpuSdfRenderer {
         font: Option<&matterstream_common::GpuFont>,
         load: wgpu::LoadOp<wgpu::Color>,
     ) {
+        // Kept as the "owns its own encoder + submits" wrapper for
+        // offscreen callers (ribbon tile bakes, terminal cell
+        // rakes) whose target isn't a swapchain image and who
+        // don't need to share an encoder across passes.
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("sdf_render_encoder"),
+        });
+        self.render_full_scaled_with_load_into(
+            &mut encoder, queue, target, width, height, scale,
+            draws, time_ms, scalar_bank, int_bank, anim_bank, font, load,
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Load-variant that appends to a caller-owned
+    /// [`wgpu::CommandEncoder`] instead of creating its own +
+    /// submitting. Callers must submit the encoder themselves.
+    ///
+    /// Purpose: consolidating a swapchain frame into a single
+    /// command buffer. wgpu's Vulkan backend on Adreno returns
+    /// `CurrentSurfaceTexture::Validation` from the next
+    /// `get_current_texture()` after ~N frames when a
+    /// swapchain-image view is written by multiple submits per
+    /// frame (chain length + 1 rolls the check). Threading a
+    /// shared encoder through the surface-write passes collapses
+    /// those into one submission.
+    pub fn render_full_scaled_load_into(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        scale: f32,
+        draws: &[SdfDrawCmd],
+        time_ms: f32,
+        scalar_bank: &[f32],
+        int_bank: &[i32],
+        anim_bank: &[matterstream_common::Anim],
+        font: Option<&matterstream_common::GpuFont>,
+    ) {
+        self.render_full_scaled_with_load_into(
+            encoder, queue, target, width, height, scale,
+            draws, time_ms, scalar_bank, int_bank, anim_bank, font,
+            wgpu::LoadOp::Load,
+        );
+    }
+
+    /// Clear+draw variant that appends to a caller-owned encoder.
+    /// See [`Self::render_full_scaled_load_into`] for rationale.
+    pub fn render_full_scaled_clear_into(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        scale: f32,
+        draws: &[SdfDrawCmd],
+        time_ms: f32,
+        scalar_bank: &[f32],
+        int_bank: &[i32],
+        anim_bank: &[matterstream_common::Anim],
+        font: Option<&matterstream_common::GpuFont>,
+    ) {
+        self.render_full_scaled_with_load_into(
+            encoder, queue, target, width, height, scale,
+            draws, time_ms, scalar_bank, int_bank, anim_bank, font,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+        );
+    }
+
+    /// Shared body for the "_into" family. Writes uniforms +
+    /// draws, records ONE render pass into `encoder`. Does NOT
+    /// finish or submit `encoder` — that's the caller's job.
+    fn render_full_scaled_with_load_into(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        scale: f32,
+        draws: &[SdfDrawCmd],
+        time_ms: f32,
+        scalar_bank: &[f32],
+        int_bank: &[i32],
+        anim_bank: &[matterstream_common::Anim],
+        font: Option<&matterstream_common::GpuFont>,
+        load: wgpu::LoadOp<wgpu::Color>,
+    ) {
         let count = draws.len().min(self.max_cmds as usize);
 
         if count > 0 {
@@ -530,34 +621,25 @@ impl GpuSdfRenderer {
         }
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("sdf_render_encoder"),
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("sdf_render_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
         });
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("sdf_render_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        queue.submit(std::iter::once(encoder.finish()));
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     /// Render a fully prepared `RenderFrame`.
