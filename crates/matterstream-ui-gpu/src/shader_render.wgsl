@@ -186,6 +186,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             effective_pixel = pixel - ribbon_scroll;
         }
 
+        // Cheap vertical-band reject for the TEXT commands (4u
+        // bitmap, 8u MSDF) — the only per-fragment loops in this
+        // shader and the ones that blow the GPU hang-check watchdog
+        // on tall card tiles. A text draw occupies the vertical span
+        // [pos.y, pos.y + size.y] (line height); a fragment outside
+        // it can't cover any glyph, so skip before entering the
+        // char loop. Without this every pixel runs every text
+        // draw's full char loop; a thousands-px-tall tile with
+        // hundreds of text draws is billions of iterations/frame →
+        // Adreno TDR. Shapes are single-eval and cheap, and their
+        // radius can exceed size.y, so they are NOT reject-gated
+        // here (avoids clipping circles / rounded boxes).
+        if ty == 4u || ty == 8u {
+            if effective_pixel.y < cmd.pos.y - 4.0 ||
+               effective_pixel.y > cmd.pos.y + cmd.size.y + 4.0 {
+                continue;
+            }
+        }
+
         let center = cmd.pos + cmd.size * 0.5;
         let p = effective_pixel - center;
 
