@@ -571,7 +571,7 @@ impl GpuSdfRenderer {
         self.render_full_scaled_with_load_into(
             encoder, queue, target, width, height, scale,
             draws, time_ms, scalar_bank, int_bank, anim_bank, font,
-            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
     }
 
